@@ -158,6 +158,16 @@ async def handle_text(plugin, event) -> str:
 
 
 async def run_message_flow(plugin, event) -> str | None:
+    _flow_log("flow_in", _ev_snap(event))
+    try:
+        r = await run_message_flow_orig(plugin, event)
+        _flow_log("flow_out", "reply=%r" % ((r or "")[:60]))
+        return r
+    except Exception as e:
+        _flow_log("flow_out", "EXC=" + str(e))
+        raise
+
+async def run_message_flow_orig(plugin, event) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
     返回要发送的文本；None 表示不回复。
@@ -176,6 +186,8 @@ async def run_message_flow(plugin, event) -> str | None:
     plugin._processed.add(msg_id)
     if len(plugin._processed) > 2000: plugin._processed.clear()
     if plugin._should_ignore(event): return None
+    if _stash_group_media(plugin, event, msgs):
+        return None
     state = RuntimeState()
     action, reason = plugin._social_decision(event)
     if action == SocialAction.IGNORE:
@@ -207,5 +219,65 @@ async def run_message_flow(plugin, event) -> str | None:
             event.stop_event()
             return reply
         return None
+    if not file_url:
+        paired = _take_paired_media(plugin, event)
+        if paired:
+            reply = await handle_media(plugin, event, paired[0], paired[1], paired[2])
+            if reply:
+                event.stop_event()
+                return reply
+            return None
     reply = await handle_text(plugin, event)
     return reply or None
+
+_IMAGE_ASK_KEYWORDS = ("图", "照片", "这张", "这个", "什么", "怎么样", "啥",
+                       "截图", "截屏", "画面", "内容", "文件", "文档")
+
+
+def _stash_group_media(plugin, event, msgs) -> bool:
+    """未@ 的群聊图片/文件：静默暂存 60s，返回 True 表示吞掉本消息。"""
+    if getattr(event, "is_at_or_wake_command", False):
+        return False
+    try:
+        gid = str(getattr(getattr(event, "message_obj", None), "group_id", "") or "")
+        if not gid:
+            return False
+        if not any("Image" in str(getattr(c, "type", "")) or "File" in str(getattr(c, "type", ""))
+                   for c in msgs):
+            return False
+        f_url, f_name, f_img = _detect_media(event)
+        if not f_url:
+            return False
+        slot = getattr(plugin, "_recent_media", None)
+        if slot is None:
+            slot = plugin._recent_media = {}
+        now = time.time()
+        for k in [k for k, v in slot.items() if now - v[0] > 60]:
+            slot.pop(k, None)
+        sender = str(event.get_sender_id())
+        slot[(gid, sender)] = (now, f_url, f_name, f_img)
+        return True
+    except Exception:
+        return False
+
+
+def _take_paired_media(plugin, event):
+    """@ 消息没带图时，配对同群同人 60s 内发的图；空文本或提到图才配对。"""
+    try:
+        gid = str(getattr(getattr(event, "message_obj", None), "group_id", "") or "")
+        if not gid:
+            return ()
+        slot = getattr(plugin, "_recent_media", None)
+        if not slot:
+            return ()
+        sender = str(event.get_sender_id())
+        st = slot.get((gid, sender))
+        if not st or time.time() - st[0] > 60:
+            return ()
+        text = str(getattr(event, "message_str", "") or "").strip()
+        if text and not any(kw in text for kw in _IMAGE_ASK_KEYWORDS):
+            return ()
+        slot.pop((gid, sender), None)
+        return (st[1], st[2], st[3])
+    except Exception:
+        return ()

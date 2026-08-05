@@ -83,6 +83,7 @@ class DududaCore:
     # ---- 身份与 Bot 隔离 ----
 
     def _is_self_message(self, event) -> bool:
+        _flow_log("self_msg", _ev_snap(event))
         try:
             bot_id = str(event.get_self_id())
         except Exception:
