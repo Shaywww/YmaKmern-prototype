@@ -16,7 +16,7 @@ from packages.application.dududa_utils import (
     _redact_text, _file_ext, _parse_document, _IMAGE_EXTS,
 )
 
-logger = logging.getLogger("dududa20")
+from loguru import logger
 
 _REACT_EMOJIS = ["(\u30b7\u00b0\u3002\u00b0)\uff83", "(\u3002>\u3002<\u3002)",
                  "(\u3002\u30fb\u03c9\u30fb\u3002)", "(\u2267\u2207\u2266)"]
@@ -229,6 +229,7 @@ async def run_message_flow(plugin, event) -> str | None:
         paired = _take_paired_media(plugin, event)
         if paired:
             reply = await handle_media(plugin, event, paired[0], paired[1], paired[2])
+            _drop_stash_file(paired[0])
             if reply:
                 event.stop_event()
                 return reply
@@ -275,6 +276,26 @@ def _drop_stash_file(path: str) -> None:
         pass
 
 
+def _remote_media_url(event) -> str:
+    """从原始 OneBot 消息里找图片/文件的远程 URL（本地文件缺失时的兜底）。"""
+    raw = getattr(event, "raw_message", None)
+    if raw is None:
+        raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+    if raw is None:
+        return ""
+    for attr in ("message", "json"):
+        msg = getattr(raw, attr, None)
+        if callable(msg):
+            msg = msg()
+        if isinstance(msg, list):
+            for item in msg:
+                if isinstance(item, dict) and item.get("type") in ("image", "file"):
+                    u = str(item.get("url", "") or "")
+                    if u.startswith("http"):
+                        return u
+    return ""
+
+
 _AT_ONLY_REPLIES = (
     "在呢在呢～叫我有什么事呀？(｡･ω･｡)",
     "来啦来啦～想聊什么都可以哦～(≧▽≦)",
@@ -284,16 +305,21 @@ _AT_ONLY_REPLIES = (
 
 def _is_at_only(event, msgs) -> bool:
     """@ 了机器人但没有任何文本/媒体（QQ 拆条：@ 和图片分开发）。"""
-    if not getattr(event, "is_at_or_wake_command", False):
-        return False
+    import re as _re
+    text = str(getattr(event, "message_str", "") or "")
+    cleaned = _re.sub(r"\[At:\d+\]", "", text).strip()
     for c in msgs:
         t = str(getattr(c, "type", ""))
         if "Image" in t or "File" in t or "Record" in t:
             return False
         if "At" not in t:
-            if str(getattr(c, "text", "") or "").strip():
-                return False
-    return True
+            cleaned += " " + str(getattr(c, "text", "") or "")
+    cleaned = cleaned.strip()
+    if cleaned:
+        return False
+    if "[At:" in text:
+        return True
+    return bool(getattr(event, "is_at_or_wake_command", False))
 
 
 def _stash_group_media(plugin, event, msgs) -> bool:
@@ -311,6 +337,10 @@ def _stash_group_media(plugin, event, msgs) -> bool:
         if not f_url:
             return False
         f_url = _preserve_media(f_url)
+        if not f_url.startswith("/"):
+            remote = _remote_media_url(event)
+            if remote:
+                f_url = remote
         slot = getattr(plugin, "_recent_media", None)
         if slot is None:
             slot = plugin._recent_media = {}
@@ -343,7 +373,6 @@ def _take_paired_media(plugin, event):
         if text and not any(kw in text for kw in _IMAGE_ASK_KEYWORDS):
             return ()
         slot.pop((gid, sender), None)
-        _drop_stash_file(st[1])
         return (st[1], st[2], st[3])
     except Exception:
         return ()
