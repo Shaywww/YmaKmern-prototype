@@ -75,3 +75,33 @@ def test_is_at_only_empty_msgs_wake():
 def test_is_at_only_empty_msgs_not_wake():
     ev = SimpleNamespace(is_at_or_wake_command=False)
     assert h._is_at_only(ev, []) is False
+
+
+def test_is_at_only_message_str_at():
+    ev = _FakeEvent()
+    ev.message_str = "[At:3823883634]"
+    assert h._is_at_only(ev, []) is True
+
+
+def test_is_at_only_message_str_at_with_text():
+    ev = _FakeEvent()
+    ev.message_str = "[At:3823883634] 帮我看看这张图"
+    assert h._is_at_only(ev, []) is False
+
+
+class _FakeRaw:
+    def __init__(self, message):
+        self.message = message
+
+
+def test_remote_media_url_from_raw():
+    ev = SimpleNamespace(raw_message=_FakeRaw([
+        {"type": "at", "qq": "123"},
+        {"type": "image", "url": "http://example.com/a.jpg", "file": "abc.jpg"},
+    ]))
+    assert h._remote_media_url(ev) == "http://example.com/a.jpg"
+
+
+def test_remote_media_url_empty():
+    ev = SimpleNamespace(raw_message=_FakeRaw([{"type": "text", "data": {"text": "hi"}}]))
+    assert h._remote_media_url(ev) == ""
