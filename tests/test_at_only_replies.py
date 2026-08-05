@@ -66,3 +66,12 @@ def test_drop_stash_file_only_inside_stash_dir(tmp_path, monkeypatch):
     h._drop_stash_file(str(outside))
     assert not inside.exists()
     assert outside.exists()
+
+
+def test_is_at_only_empty_msgs_wake():
+    assert h._is_at_only(_FakeEvent(), []) is True
+
+
+def test_is_at_only_empty_msgs_not_wake():
+    ev = SimpleNamespace(is_at_or_wake_command=False)
+    assert h._is_at_only(ev, []) is False
