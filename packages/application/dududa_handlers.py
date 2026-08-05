@@ -129,11 +129,15 @@ async def handle_text(plugin, event) -> str:
                     perception=perception,
                     event=event,
                 )
+                logger.info("Flow runtime: ok=%s reply=%r",
+                            bool(result and result.final_response and result.final_response.text),
+                            (result.final_response.text if result and result.final_response and result.final_response.text else "")[:60])
                 if result.final_response and result.final_response.text:
                     reply = result.final_response.text
             except Exception as e:
                 logger.warning("Runtime run failed: %s", e)
         if not reply:
+            logger.info("Flow fallback LLM")
             p = plugin.personas.active
             reply = await plugin._call_llm(
                 f"你是{p.display_name}，自称{p.first_person}。你就是嘟嘟哒。用颜表情风格，短回复。",
@@ -158,21 +162,18 @@ async def handle_text(plugin, event) -> str:
 
 
 async def run_message_flow(plugin, event) -> str | None:
-    _flow_log("flow_in", _ev_snap(event))
-    try:
-        r = await run_message_flow_orig(plugin, event)
-        _flow_log("flow_out", "reply=%r" % ((r or "")[:60]))
-        return r
-    except Exception as e:
-        _flow_log("flow_out", "EXC=" + str(e))
-        raise
-
-async def run_message_flow_orig(plugin, event) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
     返回要发送的文本；None 表示不回复。
     """
     if not plugin.enabled: return None
+    try:
+        logger.info("Flow in: mstr=%r at=%s gid=%s",
+                    (str(getattr(event, "message_str", "") or "")[:60]),
+                    str(getattr(event, "is_at_or_wake_command", "?")),
+                    str(getattr(getattr(event, "message_obj", None), "group_id", "")))
+    except Exception:
+        pass
     if plugin._is_self_message(event): return None
     msgs = event.get_messages()
     if not msgs:
@@ -190,6 +191,7 @@ async def run_message_flow_orig(plugin, event) -> str | None:
         return None
     state = RuntimeState()
     action, reason = plugin._social_decision(event)
+    logger.info("Flow decision: %s (%s)", action, reason)
     if action == SocialAction.IGNORE:
         state = state.transition(RuntimePhase.DECIDED,
                                  social_decision=SocialAction.IGNORE,
@@ -199,7 +201,9 @@ async def run_message_flow_orig(plugin, event) -> str | None:
     if action == SocialAction.REACT:
         state = state.transition(RuntimePhase.COMPLETED,
                                  outcome=RunOutcome.SUCCEEDED)
-        return random.choice(_REACT_EMOJIS)
+        _r = random.choice(_REACT_EMOJIS)
+        logger.info("Flow react: %r", _r)
+        return _r
     state = state.transition(RuntimePhase.DECIDED,
                              social_decision=SocialAction.ANSWER,
                              decision_reason=reason)
@@ -228,6 +232,7 @@ async def run_message_flow_orig(plugin, event) -> str | None:
                 return reply
             return None
     reply = await handle_text(plugin, event)
+    logger.info("Flow text reply: %r", (reply or "")[:80])
     return reply or None
 
 _IMAGE_ASK_KEYWORDS = ("图", "照片", "这张", "这个", "什么", "怎么样", "啥",
@@ -256,6 +261,7 @@ def _stash_group_media(plugin, event, msgs) -> bool:
             slot.pop(k, None)
         sender = str(event.get_sender_id())
         slot[(gid, sender)] = (now, f_url, f_name, f_img)
+        logger.info("Flow stash: gid=%s url=%s", gid, f_url[:50])
         return True
     except Exception:
         return False
