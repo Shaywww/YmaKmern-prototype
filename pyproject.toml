@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dududa20-prototype"
+name = "dududa-agent"
 version = "0.1.0"
 description = "dududa 2.0 Agent Runtime prototype"
 requires-python = ">=3.10"
