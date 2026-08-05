@@ -22,15 +22,6 @@ class DocumentAction(str, Enum):
     DEFER = "defer"
 
 
-_DOC_ACTION_MAP = {
-    SocialAction.IGNORE: DocumentAction.IGNORE,
-    SocialAction.REACT: DocumentAction.REACT,
-    SocialAction.ASK: DocumentAction.ASK_CLARIFICATION,
-    SocialAction.DEFER: DocumentAction.DEFER,
-    SocialAction.BLOCK: DocumentAction.IGNORE,  # BLOCK -> IGNORE，原 reason 保留
-}
-
-
 class DecisionReason(str, Enum):
     """决策原因码 —— 可审计、可追踪。"""
     # 参与原因
@@ -82,15 +73,12 @@ class SocialDecision:
     def document_action(self) -> DocumentAction:
         """对齐文档 2.5.4 六动作。
 
-        ANSWER 按 should_use_tools 分流为 USE_TOOLS / DIRECT_REPLY；
-        BLOCK 映射为 IGNORE（权限/安全原因保留在 reason_codes）。
+        SocialAction 规范值即文档动作，按值直映；
+        BLOCK 观察行为 = 不回复，映射为 IGNORE（原 reason 保留）。
         """
-        if self.action == SocialAction.ANSWER:
-            return (
-                DocumentAction.USE_TOOLS if self.should_use_tools
-                else DocumentAction.DIRECT_REPLY
-            )
-        return _DOC_ACTION_MAP[self.action]
+        if self.action == SocialAction.BLOCK:
+            return DocumentAction.IGNORE
+        return DocumentAction(self.action.value)
 
 
 class SocialDecisionEngine:
