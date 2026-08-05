@@ -186,6 +186,8 @@ async def run_message_flow(plugin, event) -> str | None:
     if msg_id in plugin._processed: return None
     plugin._processed.add(msg_id)
     if len(plugin._processed) > 2000: plugin._processed.clear()
+    if _is_at_only(event, msgs):
+        return random.choice(_AT_ONLY_REPLIES)
     if plugin._should_ignore(event): return None
     if _stash_group_media(plugin, event, msgs):
         return None
@@ -239,6 +241,61 @@ _IMAGE_ASK_KEYWORDS = ("图", "照片", "这张", "这个", "什么", "怎么样
                        "截图", "截屏", "画面", "内容", "文件", "文档")
 
 
+def _stash_dir() -> str:
+    import os as _os
+    return _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__)))), "data", "stash")
+
+
+def _preserve_media(url: str) -> str:
+    """本地路径的媒体复制到自管目录，防止 AstrBot 清理 temp 后配对失败。"""
+    import os as _os
+    import shutil as _shutil
+    if not url.startswith("/"):
+        return url
+    try:
+        if not _os.path.exists(url):
+            return url
+        d = _stash_dir()
+        _os.makedirs(d, exist_ok=True)
+        dst = _os.path.join(d, "%d_%s" % (int(time.time() * 1000),
+                                          _os.path.basename(url)))
+        _shutil.copy2(url, dst)
+        return dst
+    except Exception:
+        return url
+
+
+def _drop_stash_file(path: str) -> None:
+    import os as _os
+    try:
+        if path and path.startswith(_stash_dir()) and _os.path.exists(path):
+            _os.remove(path)
+    except Exception:
+        pass
+
+
+_AT_ONLY_REPLIES = (
+    "在呢在呢～叫我有什么事呀？(｡･ω･｡)",
+    "来啦来啦～想聊什么都可以哦～(≧▽≦)",
+    "在的在的～要帮忙还是唠嗑呀？(◕‿◕)",
+)
+
+
+def _is_at_only(event, msgs) -> bool:
+    """@ 了机器人但没有任何文本/媒体（QQ 拆条：@ 和图片分开发）。"""
+    if not getattr(event, "is_at_or_wake_command", False):
+        return False
+    for c in msgs:
+        t = str(getattr(c, "type", ""))
+        if "Image" in t or "File" in t or "Record" in t:
+            return False
+        if "At" not in t:
+            if str(getattr(c, "text", "") or "").strip():
+                return False
+    return True
+
+
 def _stash_group_media(plugin, event, msgs) -> bool:
     """未@ 的群聊图片/文件：静默暂存 60s，返回 True 表示吞掉本消息。"""
     if getattr(event, "is_at_or_wake_command", False):
@@ -253,11 +310,13 @@ def _stash_group_media(plugin, event, msgs) -> bool:
         f_url, f_name, f_img = _detect_media(event)
         if not f_url:
             return False
+        f_url = _preserve_media(f_url)
         slot = getattr(plugin, "_recent_media", None)
         if slot is None:
             slot = plugin._recent_media = {}
         now = time.time()
         for k in [k for k, v in slot.items() if now - v[0] > 60]:
+            _drop_stash_file(v[1])
             slot.pop(k, None)
         sender = str(event.get_sender_id())
         slot[(gid, sender)] = (now, f_url, f_name, f_img)
@@ -284,6 +343,7 @@ def _take_paired_media(plugin, event):
         if text and not any(kw in text for kw in _IMAGE_ASK_KEYWORDS):
             return ()
         slot.pop((gid, sender), None)
+        _drop_stash_file(st[1])
         return (st[1], st[2], st[3])
     except Exception:
         return ()
