@@ -12,6 +12,25 @@ from typing import Optional
 from .state import SocialAction
 
 
+class DocumentAction(str, Enum):
+    """文档 2.5.4 六动作（对齐契约命名，增量兼容 SocialAction）。"""
+    IGNORE = "ignore"
+    REACT = "react"
+    DIRECT_REPLY = "direct_reply"
+    ASK_CLARIFICATION = "ask_clarification"
+    USE_TOOLS = "use_tools"
+    DEFER = "defer"
+
+
+_DOC_ACTION_MAP = {
+    SocialAction.IGNORE: DocumentAction.IGNORE,
+    SocialAction.REACT: DocumentAction.REACT,
+    SocialAction.ASK: DocumentAction.ASK_CLARIFICATION,
+    SocialAction.DEFER: DocumentAction.DEFER,
+    SocialAction.BLOCK: DocumentAction.IGNORE,  # BLOCK -> IGNORE，原 reason 保留
+}
+
+
 class DecisionReason(str, Enum):
     """决策原因码 —— 可审计、可追踪。"""
     # 参与原因
@@ -58,6 +77,20 @@ class SocialDecision:
     @property
     def is_blocked(self) -> bool:
         return self.action == SocialAction.BLOCK
+
+
+    def document_action(self) -> DocumentAction:
+        """对齐文档 2.5.4 六动作。
+
+        ANSWER 按 should_use_tools 分流为 USE_TOOLS / DIRECT_REPLY；
+        BLOCK 映射为 IGNORE（权限/安全原因保留在 reason_codes）。
+        """
+        if self.action == SocialAction.ANSWER:
+            return (
+                DocumentAction.USE_TOOLS if self.should_use_tools
+                else DocumentAction.DIRECT_REPLY
+            )
+        return _DOC_ACTION_MAP[self.action]
 
 
 class SocialDecisionEngine:
