@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dududa20-prototype"
+version = "0.1.0"
+description = "dududa 2.0 Agent Runtime prototype"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--tb=short"]
+
+[tool.setuptools.packages.find]
+where = ["packages"]

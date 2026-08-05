@@ -1,0 +1,509 @@
+"""嘟嘟哒 2.0 Runtime Orchestrator —— 控制中枢。"""
+from __future__ import annotations
+
+from dataclasses import replace
+from typing import Any, Optional
+
+from ..core.envelope import MessageEnvelope, PreprocessedEnvelope
+from ..core.state import (
+    RuntimePhase, RunOutcome, SocialAction, RuntimeState,
+    RuntimeBudget, ToolStep, ToolPlan,
+)
+from ..core.context import ContextBuilder, ContextSnapshot, PolicyView
+from ..core.perception import PerceptionResult, SpeechAct
+from ..core.decision import SocialDecision, SocialDecisionEngine, DecisionReason
+from ..core.capability import (
+    CapabilityRegistry, CapabilityCandidate, ToolObservation,
+    ToolPlanValidator, ValidatorAction,
+)
+from ..core.memory import (
+    MemoryRepository, InMemoryRepository, WriteGate,
+    MemoryCandidate, MemoryRecord, MemoryType, SensitivityLevel,
+)
+from ..core.memory import MemoryScope as MemScope
+from ..core.memory import WriteGateDecision
+from ..core.renderer import (
+    OCRenderer, DraftResponse, FactAnchor, FinalResponse, Persona,
+)
+from ..core.delivery import (
+    RuntimeResult, DeliveryReceipt, CompletionReceipt,
+    DeliveryManager, NoOpOutputAdapter,
+)
+
+_TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
+
+
+class RuntimeOrchestrator:
+    """Agent Runtime 控制中枢。"""
+
+    def __init__(
+        self,
+        context_builder: Optional[ContextBuilder] = None,
+        decision_engine: Optional[SocialDecisionEngine] = None,
+        capability_registry: Optional[CapabilityRegistry] = None,
+        memory_repo: Optional[MemoryRepository] = None,
+        renderer: Optional[OCRenderer] = None,
+        delivery_manager: Optional[DeliveryManager] = None,
+        planner_integration=None,
+    ):
+        self._context_builder = context_builder or ContextBuilder()
+        self._decision_engine = decision_engine or SocialDecisionEngine()
+        self._capability_registry = capability_registry or CapabilityRegistry()
+        self._memory_repo = memory_repo or InMemoryRepository()
+        self._renderer = renderer or OCRenderer()
+        self._delivery_manager = delivery_manager or DeliveryManager(NoOpOutputAdapter())
+        self._write_gate = WriteGate(self._memory_repo)
+        self._tool_chain = planner_integration
+        self._last_state: Optional[RuntimeState] = None
+
+    async def run(
+        self,
+        envelope: MessageEnvelope,
+        budget: Optional[RuntimeBudget] = None,
+        policy: Optional[PolicyView] = None,
+    ) -> RuntimeResult:
+        budget = budget or RuntimeBudget()
+        # 兼容：允许直接传入 PreprocessedEnvelope（Connector 预处理产物）
+        if hasattr(envelope, "envelope"):
+            envelope = envelope.envelope
+        state = RuntimeState(envelope=envelope, budget=budget)
+
+        try:
+            state = self._phase_validate(state)
+            if state.phase == RuntimePhase.ABORTED:
+                return self._result_from_state(state, state.outcome or RunOutcome.FAILED)
+
+            state = self._phase_preprocess(state)
+            state = self._phase_scope(state)
+            state = self._phase_context(state, policy)
+            state = self._phase_perceive(state)
+            state = self._phase_decide(state)
+
+            if state.social_decision == SocialAction.BLOCK:
+                return self._result_from_state(state, RunOutcome.ABORTED)
+            if state.social_decision == SocialAction.IGNORE:
+                return self._result_from_state(state, RunOutcome.IGNORED)
+
+            if state.social_decision in (
+                SocialAction.ANSWER, SocialAction.ASK, SocialAction.USE_TOOLS,
+            ):
+                state = self._phase_list_capabilities(state)
+
+            if self._should_use_tools(state):
+                state = await self._phase_tool_chain(state)
+                if state.outcome == RunOutcome.FAILED:
+                    return self._result_from_state(state, RunOutcome.FAILED)
+            else:
+                state = state.transition(RuntimePhase.COMPOSED)
+
+            state = self._phase_compose(state)
+            state = self._phase_render(state)
+            state = self._with_updates(
+                state, memory_candidates=self._build_memory_candidates(state)
+            )
+            outcome = state.outcome or RunOutcome.SUCCEEDED
+            state = state.transition(RuntimePhase.READY_TO_EMIT, outcome=outcome)
+            self._last_state = state
+            return self._result_from_state(state, outcome)
+
+        except Exception as e:
+            state = state.with_error(str(e))
+            return self._result_from_state(
+                state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.FAILED),
+                RunOutcome.FAILED,
+            )
+
+    # ---- 阶段实现 ----
+
+    def _phase_validate(self, state: RuntimeState) -> RuntimeState:
+        envelope = state.envelope
+        if envelope is None or not isinstance(envelope, MessageEnvelope):
+            return state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.FAILED,
+                                     errors=("No valid envelope",))
+        if state.budget.is_expired():
+            return state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.ABORTED,
+                                     errors=("Budget expired",))
+        return state.transition(RuntimePhase.VALIDATED)
+
+    def _phase_preprocess(self, state: RuntimeState) -> RuntimeState:
+        return state.transition(RuntimePhase.PREPROCESSED,
+            preprocessed=PreprocessedEnvelope(envelope=state.envelope))
+
+    def _phase_scope(self, state: RuntimeState) -> RuntimeState:
+        return state.transition(RuntimePhase.SCOPED)
+
+    def _phase_context(self, state: RuntimeState, policy: Optional[PolicyView] = None) -> RuntimeState:
+        snapshot = self._context_builder.build(
+            envelope=state.envelope, policy=policy, budget=state.budget,
+        )
+        return state.transition(RuntimePhase.CONTEXT_BUILT, context_snapshot=snapshot, scope=snapshot)
+
+    def _phase_perceive(self, state: RuntimeState) -> RuntimeState:
+        """结构化感知：平台事实优先（@/命令/回复链），文本信号补充。"""
+        envelope = state.envelope
+        text = envelope.text if envelope else ""
+        is_explicit = bool(envelope) and envelope.is_explicit_command()
+        is_question = text.rstrip().endswith("?") or text.rstrip().endswith("？") or "吗" in text
+        speech_acts: tuple[SpeechAct, ...] = ()
+        if is_explicit:
+            speech_acts = (SpeechAct(act_type="command", confidence=1.0),)
+        elif is_question:
+            speech_acts = (SpeechAct(act_type="question", confidence=0.8),)
+        perception = PerceptionResult(
+            has_explicit_mention=bool(envelope.mentions),
+            has_reply_chain=envelope.reply_to is not None,
+            is_explicit_command=is_explicit,
+            needs_tools=("查" in text or "搜" in text or "/" in text),
+            target_users=envelope.mentions or (),
+            resolved_references={"text": text},
+            speech_acts=speech_acts,
+            candidate_intents=("course_query",) if ("查" in text or "搜" in text) else (),
+            confidence=1.0,
+        )
+        return state.transition(RuntimePhase.PERCEIVED, perception=perception)
+
+    def _phase_decide(self, state: RuntimeState) -> RuntimeState:
+        decision = self._decision_engine.decide(
+            perception=state.perception, context=state.context_snapshot,
+        )
+        return state.transition(RuntimePhase.DECIDED, social_decision=decision.action,
+            decision_reason=";".join(r.value for r in decision.reason_codes))
+
+    def _phase_list_capabilities(self, state: RuntimeState) -> RuntimeState:
+        permissions = self._permissions_of(state)
+        candidates = self._capability_registry.filter_candidates(permissions=permissions)
+        return state.transition(RuntimePhase.CAPABILITIES_LISTED, capability_candidates=candidates)
+
+    async def _phase_tool_chain(self, state: RuntimeState) -> RuntimeState:
+        """真实工具链：规划 -> 校验 -> 执行 -> 结果校验 -> 动作归一化。
+
+        文档 2.5.5：默认 4 步、全局硬上限 8；retry 计入步数；
+        deadline 到达后不再开始新调用。
+        """
+        budget = state.budget
+        max_steps = min(max(1, budget.max_tool_steps), _TOOL_HARD_CAP)
+        permissions = self._permissions_of(state)
+        candidates = state.capability_candidates or ()
+
+        state = state.transition(RuntimePhase.TOOLS_PLANNED)
+        if not candidates:
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    tool_observations=(), errors=("No capabilities",))
+
+        # 1) 规划：优先 Planner 模式；无集成或空计划时退化为直连 Top-K
+        plan = self._plan(state, candidates, max_steps, permissions)
+        if plan is None:
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    tool_observations=(), errors=("No plan",),
+                                    outcome=RunOutcome.DEGRADED)
+
+        # 2) 计划校验：Schema / 预算 / 依赖（fail closed）
+        validator = ToolPlanValidator(self._capability_registry)
+        ok, plan_errors = validator.validate_plan(plan, budget)
+        if not ok:
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    tool_observations=(), errors=plan_errors,
+                                    outcome=RunOutcome.DEGRADED)
+
+        # 3) 执行（每步重新授权 + deadline/预算检查）
+        observations = await self._execute(state, plan, max_steps, permissions)
+
+        # 4) 结果校验 -> 动作归一化
+        verdict = validator.validate_results(tuple(observations))
+        state = state.transition(RuntimePhase.TOOLS_EXECUTED,
+                                 tool_plan=plan, tool_observations=tuple(observations))
+        state = state.transition(RuntimePhase.VALIDATED_TOOLS)
+
+        if verdict.action == ValidatorAction.ABORT:
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    outcome=RunOutcome.FAILED,
+                                    errors=verdict.error_details)
+        if verdict.action == ValidatorAction.DEGRADE:
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    outcome=RunOutcome.DEGRADED)
+        if verdict.action == ValidatorAction.CLARIFY:
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    outcome=RunOutcome.SUCCEEDED,
+                                    errors=verdict.error_details)
+        return state.transition(RuntimePhase.VALIDATED_TOOLS, outcome=RunOutcome.SUCCEEDED)
+
+    # ---- 工具链子步骤 ----
+
+    def _plan(self, state: RuntimeState, candidates, max_steps, permissions):
+        if self._tool_chain is not None:
+            from ..planner.planner import PlanningContext
+            try:
+                plan = self._tool_chain.planner.plan(PlanningContext(
+                    user_intent=self._intent_of(state),
+                    available_capabilities=candidates,
+                    max_steps=max_steps,
+                    permissions=permissions,
+                ))
+                if plan is not None and getattr(plan, "steps", ()):
+                    return plan
+            except Exception:
+                pass
+        return self._fallback_plan(candidates, max_steps)
+
+    def _fallback_plan(self, candidates, max_steps):
+        """无 Planner 集成时的退路：按相关性取前 N 个能力直连。"""
+        from ..planner.planner import GeneratedPlan, PlannedStep
+        steps = []
+        seen = set()
+        for cand in candidates:
+            cap = cand.capability
+            if cap.capability_id in seen:
+                continue
+            if self._capability_registry.get_provider(cap.capability_id) is None:
+                continue
+            seen.add(cap.capability_id)
+            steps.append(PlannedStep(
+                step_id=f"f{len(steps) + 1}",
+                capability_id=cap.capability_id,
+                arguments={},
+                purpose=cap.description,
+            ))
+            if len(steps) >= max_steps:
+                break
+        if not steps:
+            return None
+        return GeneratedPlan(goal="fallback", steps=tuple(steps), rationale="direct fallback")
+
+    async def _execute(self, state: RuntimeState, plan, max_steps, permissions):
+        budget = state.budget
+        if self._tool_chain is not None and getattr(self._tool_chain, "executor", None) is not None:
+            from ..planner.executor import ExecutionContext
+            ctx = ExecutionContext(
+                max_steps=max_steps,
+                max_retries_per_step=budget.max_tool_retries,
+                deadline_seconds=budget.deadline_seconds,
+                permissions=permissions,
+                actor=self._actor_id(state),
+                conversation_scope=self._conversation_id(state),
+            )
+            step_results = await self._tool_chain.executor.execute_plan(plan, ctx)
+            by_id = {s.step_id: s for s in plan.steps}
+            observations = []
+            for sr in step_results:
+                step = by_id.get(sr.step_id)
+                observations.append(ToolObservation(
+                    step_id=sr.step_id,
+                    capability_id=step.capability_id if step else "",
+                    success=sr.success,
+                    data=sr.data if sr.success else None,
+                    error=sr.error,
+                    source=sr.source or "provider",
+                    latency_ms=sr.latency_ms,
+                    cached=sr.cached,
+                ))
+            return observations
+        return await self._execute_direct(state, plan, max_steps)
+
+    async def _execute_direct(self, state: RuntimeState, plan, max_steps):
+        """无 Planner/Executor 集成时的直连退化路径（仍做预算与去重）。"""
+        observations: list[ToolObservation] = []
+        for step in plan.steps[:max_steps]:
+            if state.budget.is_expired():
+                break
+            cap = self._capability_registry.get(step.capability_id)
+            provider = self._capability_registry.get_provider(step.capability_id) if cap else None
+            if cap is None or provider is None:
+                observations.append(ToolObservation(
+                    step_id=step.step_id, capability_id=step.capability_id,
+                    success=False, error="Capability unavailable"))
+                continue
+            try:
+                if self._capability_registry.record_call(
+                    step.capability_id, state.run_id, window_seconds=60.0
+                ):
+                    observations.append(ToolObservation(
+                        step_id=step.step_id, capability_id=step.capability_id,
+                        success=False, error="Duplicate call rejected"))
+                    continue
+                observations.append(await provider.execute(cap, dict(step.arguments or {})))
+            except Exception as e:
+                observations.append(ToolObservation(
+                    step_id=step.step_id, capability_id=step.capability_id,
+                    success=False, error=str(e)))
+        return observations
+
+    def _should_use_tools(self, state: RuntimeState) -> bool:
+        if not state.perception:
+            return False
+        if not state.capability_candidates:
+            return False
+        return (getattr(state.perception, "needs_tools", False)
+                or state.social_decision == SocialAction.USE_TOOLS)
+
+    def _phase_compose(self, state: RuntimeState) -> RuntimeState:
+        draft_text = self._build_draft_text(state)
+        draft = DraftResponse(
+            text=draft_text,
+            fact_anchors=self._extract_fact_anchors(state),
+            target_users=((state.envelope.sender.actor_id,)
+                          if state.envelope and state.envelope.sender else ()),
+        )
+        return state.transition(RuntimePhase.COMPOSED, draft_response=draft)
+
+    def _phase_render(self, state: RuntimeState) -> RuntimeState:
+        if state.draft_response is None:
+            return state.transition(RuntimePhase.RENDERED, final_response=FinalResponse(text=""))
+        final = self._renderer.render(state.draft_response)
+        return state.transition(RuntimePhase.RENDERED, final_response=final)
+
+    def _build_draft_text(self, state: RuntimeState) -> str:
+        if state.social_decision == SocialAction.ASK:
+            return "能再说详细一点吗？"
+        if state.social_decision == SocialAction.BLOCK:
+            return "抱歉，我暂时不能回答这个问题。"
+        obs = state.tool_observations
+        if obs:
+            ok_texts = [str(o.data) for o in obs if o.success and o.data is not None]
+            if ok_texts:
+                return chr(10).join(ok_texts)
+            if state.outcome == RunOutcome.DEGRADED:
+                return "查到了部分信息，还有一部分暂时不可用，我再整理一下~"
+            return "暂时没查到相关信息，换个说法再试试？"
+        if state.perception and state.perception.is_question:
+            return "让我想想……这个问题我还需要更多信息才能回答。"
+        return "嗯嗯。"
+
+    @staticmethod
+    def _extract_fact_anchors(state: RuntimeState) -> tuple[FactAnchor, ...]:
+        anchors: list[FactAnchor] = []
+        for obs in state.tool_observations:
+            if obs.success and obs.data is not None:
+                anchors.append(FactAnchor(field=obs.capability_id, value=str(obs.data), source=obs.source))
+        return tuple(anchors)
+
+    # ---- 记忆候选（文档 2.3.16：只产生候选，投递确认后过 Write Gate） ----
+
+    def _build_memory_candidates(self, state: RuntimeState) -> tuple[MemoryCandidate, ...]:
+        candidates: list[MemoryCandidate] = []
+        scope_tool = MemScope(
+            memory_type=MemoryType.EPISODIC,
+            platform=self._platform(state),
+            bot_id="dududa",
+            conversation_id=self._conversation_id(state),
+            actor_id=self._actor_id(state),
+        )
+        for obs in state.tool_observations:
+            if obs.success and obs.data is not None:
+                candidates.append(MemoryCandidate(
+                    proposed_record=MemoryRecord(
+                        scope=scope_tool,
+                        content=str(obs.data)[:2000],
+                        source="tool",
+                        sensitivity=SensitivityLevel.INTERNAL,
+                        evidence=(f"tool:{obs.capability_id}",),
+                    ),
+                    requires_delivery_ack=False,
+                ))
+        if state.final_response and state.final_response.text:
+            scope_bot = MemScope(
+                memory_type=MemoryType.SHORT_TERM,
+                platform=self._platform(state),
+                bot_id="dududa",
+                conversation_id=self._conversation_id(state),
+                actor_id=self._actor_id(state),
+            )
+            candidates.append(MemoryCandidate(
+                proposed_record=MemoryRecord(
+                    scope=scope_bot,
+                    content=f"[嘟嘟哒]: {state.final_response.text[:500]}",
+                    source="bot",
+                    sensitivity=SensitivityLevel.INTERNAL,
+                    evidence=(f"run:{state.run_id}",),
+                ),
+                requires_delivery_ack=True,
+            ))
+        return tuple(candidates)
+
+    async def acknowledge_delivery(
+        self, receipt: DeliveryReceipt, state: Optional[RuntimeState] = None,
+    ) -> CompletionReceipt:
+        """投递回执确认（文档 2.3.15-2.3.16）。
+
+        校验回执对应最近一次运行；重复/悬挂回执幂等拒绝；
+        投递未 SUCCEEDED 时跳过“已告知”类记忆。
+        """
+        state = state or getattr(self, "_last_state", None)
+        if state is None:
+            return CompletionReceipt(
+                run_id=receipt.run_id, final_phase="unknown",
+                delivery_status=receipt.status)
+        if state.run_id != receipt.run_id:
+            return CompletionReceipt(
+                run_id=receipt.run_id, final_phase=state.phase.value,
+                delivery_status=receipt.status, memory_write_receipts=())
+
+        state = state.transition(RuntimePhase.DELIVERY_ACKNOWLEDGED, delivery_receipt=receipt)
+        memory_receipts: list[str] = []
+        for candidate in state.memory_candidates:
+            if candidate.requires_delivery_ack:
+                if not receipt.is_ok:
+                    continue
+                candidate = replace(candidate, delivery_run_id=receipt.run_id)
+            decision = self._write_gate.evaluate(candidate)
+            if decision == WriteGateDecision.ALLOW:
+                rid = self._memory_repo.write(candidate.proposed_record)
+                memory_receipts.append(rid)
+        state = state.transition(RuntimePhase.MEMORY_EVALUATED,
+                                 memory_write_receipts=tuple(memory_receipts))
+        final_state = state.transition(RuntimePhase.COMPLETED)
+        return CompletionReceipt(
+            run_id=state.run_id, final_phase=final_state.phase.value,
+            delivery_status=receipt.status,
+            memory_write_receipts=tuple(memory_receipts))
+
+    # ---- 小工具 ----
+
+    @staticmethod
+    def _with_updates(state: RuntimeState, **updates: Any) -> RuntimeState:
+        return type(state)(**{**state.__dict__, **updates})
+
+    @staticmethod
+    def _permissions_of(state: RuntimeState) -> tuple[str, ...]:
+        snapshot = state.context_snapshot
+        if not snapshot:
+            return ()
+        return tuple(getattr(snapshot, "permissions", ()) or ())
+
+    @staticmethod
+    def _intent_of(state: RuntimeState) -> str:
+        env = state.envelope
+        if not env:
+            return ""
+        parts = list(env.mentions or ()) + [env.text]
+        return " ".join(p for p in parts if p)
+
+    @staticmethod
+    def _actor_id(state: RuntimeState) -> str:
+        env = state.envelope
+        return env.sender.actor_id if env and env.sender else "unknown"
+
+    @staticmethod
+    def _conversation_id(state: RuntimeState) -> str:
+        env = state.envelope
+        return env.conversation.conversation_id if env and env.conversation else "unknown"
+
+    @staticmethod
+    def _platform(state: RuntimeState) -> str:
+        env = state.envelope
+        plat = env.platform if env else None
+        return getattr(plat, "value", "qq") if plat else "qq"
+
+    @staticmethod
+    def _result_from_state(state: RuntimeState, outcome: Optional[RunOutcome]) -> RuntimeResult:
+        return RuntimeResult(
+            run_id=state.run_id,
+            outcome=outcome or RunOutcome.IGNORED,
+            final_response=state.final_response,
+            reason_codes=((state.decision_reason,) if state.decision_reason else ()),
+            trace_summary={
+                "phases_visited": len(state.trace),
+                "tool_steps": len(state.tool_observations),
+                "errors": state.errors,
+            },
+            requires_delivery_ack=(state.final_response is not None and bool(state.final_response.text)),
+        )

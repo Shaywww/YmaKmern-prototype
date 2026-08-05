@@ -1,0 +1,14 @@
+# AstrBot config for Dududa 2.0
+# 放到 ~/.astrbot/config.yaml
+
+platform:
+  type: lagrange
+  lagrange:
+    sign_url: ""
+    protocol: linux
+
+server:
+  host: 0.0.0.0
+  port: 6189
+
+log_level: INFO
