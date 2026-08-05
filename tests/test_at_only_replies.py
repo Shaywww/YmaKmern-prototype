@@ -105,3 +105,74 @@ def test_remote_media_url_from_raw():
 def test_remote_media_url_empty():
     ev = SimpleNamespace(raw_message=_FakeRaw([{"type": "text", "data": {"text": "hi"}}]))
     assert h._remote_media_url(ev) == ""
+
+
+def test_at_only_with_stashed_media_reads_image_first(monkeypatch):
+    """纯 @ 且已有配对 stash 图：必须优先读图，而不是回通用短句。"""
+    import asyncio
+    import time
+    from packages.application import dududa_handlers as h
+
+    class _AtComp:
+        type = "ComponentType.At"
+        text = ""
+
+    class _MsgObj:
+        message_id = "t-stash-pair-1"
+        group_id = "1093655251"
+
+    class _Ev:
+        message_str = ""
+        is_at_or_wake_command = True
+
+        def __init__(self):
+            self.message_obj = _MsgObj()
+            self._msgs = [_AtComp()]
+            self._stopped = False
+
+        def get_messages(self):
+            return self._msgs
+
+        def get_message_outline(self):
+            return "[At:3823883634]"
+
+        def stop_event(self):
+            self._stopped = True
+
+    class _Plugin:
+        enabled = True
+        _last_file_ts = time.time()
+        _processed = set()
+
+        def _is_self_message(self, ev):
+            return False
+
+        def _should_ignore(self, ev):
+            return False
+
+    calls = {}
+
+    async def fake_handle_media(plugin, event, url, name, is_image):
+        calls["media"] = (url, name, is_image)
+        return "（读图）这是一张课程表截图 (｡･ω･｡)"
+
+    def fake_take_paired(plugin, event):
+        calls["take"] = True
+        return ("/tmp/fake_stash.jpg", "stash.jpg", True)
+
+    def fake_drop(path):
+        calls["drop"] = path
+
+    monkeypatch.setattr(h, "handle_media", fake_handle_media)
+    monkeypatch.setattr(h, "_take_paired_media", fake_take_paired)
+    monkeypatch.setattr(h, "_drop_stash_file", fake_drop)
+
+    ev = _Ev()
+    plugin = _Plugin()
+    reply = asyncio.run(h.run_message_flow(plugin, ev))
+
+    assert reply and "课程表" in reply, reply
+    assert calls.get("take") is True
+    assert calls.get("drop") == "/tmp/fake_stash.jpg"
+    assert ev._stopped is True
+    assert reply not in h._AT_ONLY_REPLIES

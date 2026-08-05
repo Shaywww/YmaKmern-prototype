@@ -16,7 +16,7 @@ from packages.application.dududa_utils import (
     _redact_text, _file_ext, _parse_document, _IMAGE_EXTS,
 )
 
-from loguru import logger
+logger = logging.getLogger("dududa20")
 
 _REACT_EMOJIS = ["(\u30b7\u00b0\u3002\u00b0)\uff83", "(\u3002>\u3002<\u3002)",
                  "(\u3002\u30fb\u03c9\u30fb\u3002)", "(\u2267\u2207\u2266)"]
@@ -187,6 +187,16 @@ async def run_message_flow(plugin, event) -> str | None:
     plugin._processed.add(msg_id)
     if len(plugin._processed) > 2000: plugin._processed.clear()
     if _is_at_only(event, msgs):
+        # 纯@：优先配对同人 60s 内刚发的图（QQ 拆条），没图才回通用短句
+        _at_paired = _take_paired_media(plugin, event)
+        if _at_paired:
+            _at_reply = await handle_media(
+                plugin, event, _at_paired[0], _at_paired[1], _at_paired[2])
+            _drop_stash_file(_at_paired[0])
+            if _at_reply:
+                event.stop_event()
+                return _at_reply
+            return None
         return random.choice(_AT_ONLY_REPLIES)
     if plugin._should_ignore(event): return None
     if _stash_group_media(plugin, event, msgs):
