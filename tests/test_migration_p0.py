@@ -12,8 +12,10 @@ from packages.core.migration import MemoryMigration, MigrationSnapshot
 
 
 def rec(bot="bot_a", conv="g1", actor="u1", content="测试记忆", rid=None):
+    kwargs = {}
+    if rid is not None:
+        kwargs["record_id"] = rid
     return MemoryRecord(
-        record_id=rid,
         scope=MemoryScope(
             memory_type=MemoryType.SHORT_TERM, platform="qq",
             bot_id=bot, conversation_id=conv, actor_id=actor,
@@ -21,6 +23,7 @@ def rec(bot="bot_a", conv="g1", actor="u1", content="测试记忆", rid=None):
         content=content,
         source="message",
         evidence=("ev1",),
+        **kwargs,
     )
 
 

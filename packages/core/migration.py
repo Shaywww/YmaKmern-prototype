@@ -76,7 +76,7 @@ class MigrationSnapshot:
 def _record_to_dict(record: MemoryRecord) -> dict[str, Any]:
     s = record.scope
     return {
-        "record_id": record.record_id,
+        "record_id": record.record_id or uuid4().hex,
         "scope": {
             "memory_type": s.memory_type.value,
             "platform": s.platform,
