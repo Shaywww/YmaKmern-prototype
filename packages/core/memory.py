@@ -201,6 +201,10 @@ class WriteGate:
         if not record.content.strip():
             return WriteGateDecision.REJECT
 
+        # 1b. TTL 检查（文档 2.5.3：Scope -> 权限/隐私 -> TTL -> 语义排序）
+        if record.ttl_seconds is not None and record.ttl_seconds <= 0:
+            return WriteGateDecision.REJECT
+
         # 2. 敏感度检查
         if record.sensitivity == SensitivityLevel.RESTRICTED:
             return WriteGateDecision.REQUIRE_CONFIRMATION

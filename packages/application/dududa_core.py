@@ -13,8 +13,11 @@ import logging
 import time
 import httpx
 
-from packages.core.state import SocialAction
-from packages.core.memory import MemoryRecord, MemoryType, MemoryScope, SensitivityLevel
+from packages.core.state import SocialAction, WriteGateDecision
+from packages.core.memory import (
+    MemoryCandidate, MemoryRecord, MemoryType, MemoryScope,
+    SensitivityLevel, WriteGate,
+)
 from packages.core.perception import PerceptionResult, SpeechAct, EntityRef
 from packages.core.renderer import DraftResponse, Persona as OCPersona
 from packages.router.router import ModelConfig, ModelRole
@@ -338,7 +341,11 @@ class DududaCore:
 
     def _store_memory(self, event, *contents: str, msg_type="text",
                       sensitivity=None):
-        """写入记忆：先脱敏；Restricted 数据不落盘；私聊默认 PRIVATE。"""
+        """写入记忆：先脱敏；Restricted 数据不落盘；私聊默认 PRIVATE。
+
+        所有写入都经 WriteGate（文档 2.5.3）：ALLOW 才落盘，
+        REJECT / REQUIRE_CONFIRMATION / DEFER_FOR_CONFLICT 一律不写。
+        """
         try:
             scope = self._make_scope(event, msg_type=msg_type)
             if sensitivity is None:
@@ -355,10 +362,17 @@ class DududaCore:
                 if len(c) > 3000: c = c[:3000]
                 if c in recent_texts: continue
                 recent_texts.add(c)
-                self._memory.write(MemoryRecord(
+                record = MemoryRecord(
                     scope=scope, source="message", content=c,
                     sensitivity=sensitivity, visibility=sensitivity,
-                    evidence=(f"src:{msg_type}",)))
+                    evidence=(f"src:{msg_type}",))
+                decision = WriteGate(self._memory).evaluate(
+                    MemoryCandidate(proposed_record=record))
+                if decision == WriteGateDecision.ALLOW:
+                    self._memory.write(record)
+                else:
+                    logger.debug("Memory write %s (skipped): %.60s",
+                                 decision.value, c)
         except Exception as e: logger.warning("Memory write: %s", e)
 
     def _read_memory(self, event, limit=8, budget=2500, include_episodic=False):
