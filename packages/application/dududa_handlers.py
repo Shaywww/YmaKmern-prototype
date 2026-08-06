@@ -115,6 +115,85 @@ async def handle_image(plugin, event, data, name, ext,
     return reply or "(｡•́︿•̀｡) 图片读不出来..."
 
 
+def _tag_event_run(event, run_id: str) -> None:
+    try:
+        event.set_extra("dududa_run_id", run_id)
+    except Exception:
+        pass
+
+
+def _event_run_id(event) -> str:
+    try:
+        return str(event.get_extra("dududa_run_id") or "")
+    except Exception:
+        return ""
+
+
+def _stash_pending_delivery(plugin, event, result, reply: str) -> None:
+    """两段式 Phase A：记录待确认投递，回执由框架发送后的钩子确认。"""
+    pending = getattr(plugin, "_pending_deliveries", None)
+    if pending is None:
+        pending = plugin._pending_deliveries = {}
+    pending[result.run_id] = (result, reply or "", time.time())
+    _tag_event_run(event, result.run_id)
+
+
+async def complete_delivery_after_send(plugin, event) -> None:
+    """两段式 Phase B（after_message_sent 钩子）：真实回执 -> 确认投递 -> 记忆评估。"""
+    run_id = _event_run_id(event)
+    if not run_id:
+        return
+    pending = getattr(plugin, "_pending_deliveries", None) or {}
+    item = pending.pop(run_id, None)
+    if not item:
+        return
+    result, _reply, ready_ts = item
+    latency_ms = int((time.time() - ready_ts) * 1000)
+    try:
+        platform = str(getattr(event, "platform", "") or "")
+    except Exception:
+        platform = ""
+    receipt = DeliveryReceipt(
+        run_id=run_id, status=DeliveryStatus.SUCCEEDED)
+    try:
+        comp = await plugin.runtime.acknowledge_delivery(receipt)
+    except Exception as e:
+        logger.warning("Delivery ack failed | run_id=%s: %s", run_id, e)
+        return
+    trace_recorder.record(
+        event="delivery", run_id=run_id, trace_id=result.trace_id,
+        status=receipt.status.value, skipped=False, platform=platform,
+        latency_ms=latency_ms, final_phase=comp.final_phase,
+        memory_write_receipts=list(comp.memory_write_receipts))
+    logger.info(
+        "Flow delivery | run_id=%s trace_id=%s status=%s phase=%s "
+        "memory=%d latency=%dms",
+        run_id, result.trace_id, receipt.status.value, comp.final_phase,
+        len(comp.memory_write_receipts), latency_ms)
+
+
+async def _prune_stale_deliveries(plugin, max_age: float = 120.0) -> None:
+    """超时未确认的运行按 UNKNOWN 回执收尾：不写"已送达"记忆（文档 2.3.16）。"""
+    now = time.time()
+    pending = getattr(plugin, "_pending_deliveries", None)
+    if not pending:
+        return
+    for run_id in list(pending):
+        _item = pending.get(run_id)
+        if not _item or now - _item[2] <= max_age:
+            continue
+        pending.pop(run_id, None)
+        try:
+            comp = await plugin.runtime.acknowledge_delivery(
+                DeliveryReceipt(run_id=run_id,
+                               status=DeliveryStatus.UNKNOWN))
+            logger.info("Flow delivery stale | run_id=%s -> %s (unknown)",
+                        run_id, comp.final_phase)
+        except Exception as e:
+            logger.warning("Stale delivery ack failed | run_id=%s: %s",
+                           run_id, e)
+
+
 async def handle_text(plugin, event, run_id="", trace_id="") -> str:
     try:
         preprocessed = plugin.input_adapter.to_preprocessed(event)
@@ -159,16 +238,23 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
         user_snippet = f"[用户]: {preprocessed.combined_text[:300]}"
         bot_snippet = f"[嘟嘟哒]: {reply[:300]}" if reply else ""
         if result is not None:
-            try:
-                # 投递回执：消息已发送，确认后 Orchestrator 才落盘 bot 记忆
-                receipt = DeliveryReceipt(run_id=result.run_id,
-                                          status=DeliveryStatus.SUCCEEDED)
-                await plugin.runtime.acknowledge_delivery(receipt)
+            if result.has_visible_output:
+                # 两段式 Phase A：交给框架发送，回执由 after_message_sent 钩子确认
+                _stash_pending_delivery(plugin, event, result, reply or "")
                 plugin._store_memory(event, user_snippet,
                                        run_id=run_id, trace_id=trace_id)
                 return reply or ""
+            try:
+                # 无可视输出（IGNORE/降级无回复）：不伪造回执，只评估不依赖投递的记忆
+                comp = await plugin.runtime.complete_without_delivery()
+                logger.info("Flow no-output | run_id=%s final_phase=%s memory=%d",
+                            result.run_id, comp.final_phase,
+                            len(comp.memory_write_receipts))
             except Exception as e:
-                logger.warning("Delivery ack failed: %s", e)
+                logger.warning("complete_without_delivery failed: %s", e)
+            plugin._store_memory(event, user_snippet,
+                                   run_id=run_id, trace_id=trace_id)
+            return reply or ""
         plugin._store_memory(event, user_snippet, bot_snippet,
                                run_id=run_id, trace_id=trace_id)
         return reply or ""
@@ -195,6 +281,13 @@ async def run_message_flow(plugin, event) -> str | None:
     if msg_id in plugin._processed: return None
     plugin._processed.add(msg_id)
     if len(plugin._processed) > 2000: plugin._processed.clear()
+    _pending = getattr(plugin, "_pending_deliveries", None)
+    if _pending is None:
+        plugin._pending_deliveries = _pending = {}
+    try:
+        await _prune_stale_deliveries(plugin)
+    except Exception as _e:
+        logger.warning("Prune stale deliveries failed: %s", _e)
     run_id, trace_id = uuid4().hex, uuid4().hex
     _msg_snip = str(getattr(event, "message_str", "") or "")[:80]
     logger.info("Flow start | run_id=%s trace_id=%s msg=%r",

@@ -123,6 +123,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         try:
             state = self._phase_validate(state)
             if state.phase == RuntimePhase.ABORTED:
+                self._last_state = state
                 return self._result_from_state(state, state.outcome or RunOutcome.FAILED)
             state = self._phase_preprocess(state)
             state = self._phase_scope(state)
@@ -130,8 +131,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             state = self._phase_perceive(state)
             state = self._phase_decide(state)
             if state.social_decision == SocialAction.BLOCK:
+                self._last_state = state
                 return self._result_from_state(state, RunOutcome.ABORTED)
             if state.social_decision == SocialAction.IGNORE:
+                self._last_state = state
                 return self._result_from_state(state, RunOutcome.IGNORED)
             limits = getattr(self._plugin, "limits", None)
             if limits is not None:
@@ -146,6 +149,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                             text=getattr(limits, "RATE_LIMIT_HINT",
                                          "稍等一下再问我哦～")),
                         outcome=RunOutcome.SUCCEEDED)
+                    self._last_state = state
                     return self._result_from_state(state, RunOutcome.SUCCEEDED)
             if state.social_decision in (
                 SocialAction.ANSWER, SocialAction.ASK, SocialAction.USE_TOOLS,
@@ -154,6 +158,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if self._should_use_tools(state):
                 state = await self._phase_tool_chain(state)
                 if state.outcome == RunOutcome.FAILED:
+                    self._last_state = state
                     return self._result_from_state(state, RunOutcome.FAILED)
             else:
                 state = state.transition(RuntimePhase.COMPOSED)
@@ -185,11 +190,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             self._last_state = state
             return self._result_from_state(state, outcome)
         except Exception as e:
-            state = state.with_error(str(e))
-            return self._result_from_state(
-                state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.FAILED),
-                RunOutcome.FAILED,
-            )
+            state = state.with_error(str(e)).transition(
+                RuntimePhase.ABORTED, outcome=RunOutcome.FAILED)
+            self._last_state = state
+            return self._result_from_state(state, RunOutcome.FAILED)
 
     @staticmethod
     def _actor_key(state) -> str:

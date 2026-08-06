@@ -247,7 +247,10 @@ class TestDeliveryAckAndMemory:
         assert any("[嘟嘟哒]" in r.content for r in bots)
 
         second = await orch.acknowledge_delivery(receipt)
-        assert second.memory_write_receipts == ()
+        # 幂等：重复回执返回同一完成回执，不重复写记忆（文档 2.3.15）
+        assert second is first
+        bots2 = repo.query_selector(ScopeSelector(memory_type=MemoryType.SHORT_TERM))
+        assert sum(1 for r in bots2 if "[嘟嘟哒]" in r.content) == 1
 
     @pytest.mark.asyncio
     async def test_failed_receipt_skips_bot_memory(self):

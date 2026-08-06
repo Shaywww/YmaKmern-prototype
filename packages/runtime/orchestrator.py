@@ -63,6 +63,7 @@ class RuntimeOrchestrator:
         self._write_gate = WriteGate(self._memory_repo)
         self._tool_chain = planner_integration
         self._last_state: Optional[RuntimeState] = None
+        self._completions: dict[str, CompletionReceipt] = {}
 
     async def run(
         self,
@@ -85,6 +86,7 @@ class RuntimeOrchestrator:
         try:
             state = self._phase_validate(state)
             if state.phase == RuntimePhase.ABORTED:
+                self._last_state = state
                 return self._result_from_state(state, state.outcome or RunOutcome.FAILED)
 
             state = self._phase_preprocess(state)
@@ -94,8 +96,10 @@ class RuntimeOrchestrator:
             state = self._phase_decide(state)
 
             if state.social_decision == SocialAction.BLOCK:
+                self._last_state = state
                 return self._result_from_state(state, RunOutcome.ABORTED)
             if state.social_decision == SocialAction.IGNORE:
+                self._last_state = state
                 return self._result_from_state(state, RunOutcome.IGNORED)
 
             if state.social_decision in (
@@ -106,6 +110,7 @@ class RuntimeOrchestrator:
             if self._should_use_tools(state):
                 state = await self._phase_tool_chain(state)
                 if state.outcome == RunOutcome.FAILED:
+                    self._last_state = state
                     return self._result_from_state(state, RunOutcome.FAILED)
             else:
                 state = state.transition(RuntimePhase.COMPOSED)
@@ -121,11 +126,10 @@ class RuntimeOrchestrator:
             return self._result_from_state(state, outcome)
 
         except Exception as e:
-            state = state.with_error(str(e))
-            return self._result_from_state(
-                state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.FAILED),
-                RunOutcome.FAILED,
-            )
+            state = state.with_error(str(e)).transition(
+                RuntimePhase.ABORTED, outcome=RunOutcome.FAILED)
+            self._last_state = state
+            return self._result_from_state(state, RunOutcome.FAILED)
 
     # ---- 阶段实现 ----
 
@@ -456,8 +460,9 @@ class RuntimeOrchestrator:
     ) -> CompletionReceipt:
         """投递回执确认（文档 2.3.15-2.3.16）。
 
-        校验回执对应最近一次运行；重复/悬挂回执幂等拒绝；
-        投递未 SUCCEEDED 时跳过“已告知”类记忆。
+        校验回执对应等待确认的运行（run_id 唯一绑定）、时间带时区；
+        重复回执幂等返回首次完成回执；
+        投递未 SUCCEEDED 时跳过"已告知"类记忆。
         """
         state = state or getattr(self, "_last_state", None)
         if state is None:
@@ -465,14 +470,24 @@ class RuntimeOrchestrator:
                 run_id=receipt.run_id, final_phase="unknown",
                 delivery_status=receipt.status)
         if state.run_id != receipt.run_id:
+            # 悬挂/错配回执：幂等拒绝，不做任何推进
+            return CompletionReceipt(
+                run_id=receipt.run_id, final_phase=state.phase.value,
+                delivery_status=receipt.status, memory_write_receipts=())
+        cached = self._completions.get(receipt.run_id)
+        if cached is not None:
+            return cached
+        if receipt.acknowledged_at.tzinfo is None:
+            # 时间必须带时区（文档 2.3.15）
             return CompletionReceipt(
                 run_id=receipt.run_id, final_phase=state.phase.value,
                 delivery_status=receipt.status, memory_write_receipts=())
 
-        state = state.transition(RuntimePhase.DELIVERY_ACKNOWLEDGED, delivery_receipt=receipt)
+        state = state.transition(RuntimePhase.DELIVERY_ACKNOWLEDGED,
+                                 delivery_receipt=receipt)
         memory_receipts: list[str] = []
         for candidate in state.memory_candidates:
-            if candidate.requires_delivery_ack:
+            if getattr(candidate, "requires_delivery_ack", False):
                 if not receipt.is_ok:
                     continue
                 candidate = replace(candidate, delivery_run_id=receipt.run_id)
@@ -483,10 +498,72 @@ class RuntimeOrchestrator:
         state = state.transition(RuntimePhase.MEMORY_EVALUATED,
                                  memory_write_receipts=tuple(memory_receipts))
         final_state = state.transition(RuntimePhase.COMPLETED)
-        return CompletionReceipt(
+        self._last_state = final_state
+        comp = CompletionReceipt(
             run_id=state.run_id, final_phase=final_state.phase.value,
             delivery_status=receipt.status,
             memory_write_receipts=tuple(memory_receipts))
+        self._completions[receipt.run_id] = comp
+        trace_recorder.record(
+            event="run_complete", run_id=state.run_id,
+            trace_id=state.trace_id, final_phase=comp.final_phase,
+            delivery_status=(comp.delivery_status.value
+                             if comp.delivery_status else None),
+            memory_write_receipts=list(comp.memory_write_receipts))
+        logger.info(
+            "Run complete | run_id=%s final_phase=%s delivery=%s memory=%d",
+            state.run_id, comp.final_phase,
+            comp.delivery_status.value if comp.delivery_status else "-",
+            len(comp.memory_write_receipts))
+        return comp
+
+    async def complete_without_delivery(
+        self, state: Optional[RuntimeState] = None,
+    ) -> CompletionReceipt:
+        """无可视输出的运行（IGNORE/ABORTED/降级无回复）收尾（文档 2.3.16）。
+
+        不伪造空回复或 Delivery Receipt；只评估不依赖投递确认的候选，
+        依赖投递的"已告知"候选一律跳过。
+        """
+        state = state or getattr(self, "_last_state", None)
+        if state is None:
+            return CompletionReceipt(run_id="", final_phase="unknown")
+        cached = self._completions.get(state.run_id)
+        if cached is not None:
+            return cached
+        memory_receipts: list[str] = []
+        for candidate in state.memory_candidates:
+            if getattr(candidate, "requires_delivery_ack", False):
+                continue
+            decision = self._write_gate.evaluate(candidate)
+            if decision == WriteGateDecision.ALLOW:
+                memory_receipts.append(
+                    self._memory_repo.write(candidate.proposed_record))
+        if state.phase == RuntimePhase.READY_TO_EMIT:
+            state = state.transition(
+                RuntimePhase.MEMORY_EVALUATED,
+                memory_write_receipts=tuple(memory_receipts))
+            final_state = state.transition(RuntimePhase.COMPLETED)
+            self._last_state = final_state
+            final_phase = final_state.phase.value
+        else:
+            final_state = state
+            final_phase = state.phase.value
+        comp = CompletionReceipt(
+            run_id=state.run_id, final_phase=final_phase,
+            delivery_status=None,
+            memory_write_receipts=tuple(memory_receipts))
+        self._completions[state.run_id] = comp
+        trace_recorder.record(
+            event="run_complete", run_id=state.run_id,
+            trace_id=state.trace_id, final_phase=comp.final_phase,
+            delivery_status=None,
+            memory_write_receipts=list(comp.memory_write_receipts))
+        logger.info(
+            "Run complete | run_id=%s final_phase=%s delivery=%s memory=%d",
+            state.run_id, comp.final_phase, "-",
+            len(comp.memory_write_receipts))
+        return comp
 
     # ---- 小工具 ----
 
