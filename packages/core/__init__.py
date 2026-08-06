@@ -28,6 +28,9 @@ from .memory import (
     MemoryCandidate, WriteGate, MemoryRepository, InMemoryRepository,
     ScopeSelector, JSONMemoryRepository,
 )
+from .profile import (
+    UserProfile, SessionState, ProfileStore, extract_profile_signals,
+)
 from .protocols import MemoryPort, ModelPort, CapabilityPort, DeliveryPort
 from .renderer import (
     FactAnchor, DraftResponse, Persona, FinalResponse,
@@ -68,6 +71,7 @@ __all__ = [
     "MemoryType", "SensitivityLevel", "MemoryScope", "MemoryRecord",
     "MemoryCandidate", "WriteGate", "MemoryRepository", "InMemoryRepository",
     "ScopeSelector", "JSONMemoryRepository",
+    "UserProfile", "SessionState", "ProfileStore", "extract_profile_signals",
     # ports
     "MemoryPort", "ModelPort", "CapabilityPort", "DeliveryPort",
     # renderer

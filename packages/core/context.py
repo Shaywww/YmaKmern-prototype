@@ -46,6 +46,7 @@ class UserPreference:
     style: Optional[str] = None
     preferred_name: Optional[str] = None
     remembered_facts: tuple[str, ...] = ()
+    preferences: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -91,9 +92,11 @@ class ContextBuilder:
         self,
         memory_repo: Optional[Any] = None,
         capability_registry: Optional[Any] = None,
+        profile_store: Optional[Any] = None,
     ):
         self._memory_repo = memory_repo
         self._capability_registry = capability_registry
+        self._profile_store = profile_store
 
     def build(
         self,
@@ -127,10 +130,37 @@ class ContextBuilder:
         if self._capability_registry is not None:
             capability_summaries = self._capability_registry.summaries()
 
+        # 用户画像 / 会话状态（文档 2.4.6：SESSION_STATE / USER_PROFILE）
+        user_pref: Optional[UserPreference] = None
+        conv = conversation_context or ConversationContext()
+        if self._profile_store is not None:
+            try:
+                actor = envelope.sender.actor_id
+                conv_id = envelope.conversation.conversation_id
+                user = self._profile_store.get_user(
+                    envelope.platform.value, "dududa", actor)
+                if user is not None:
+                    user_pref = UserPreference(
+                        actor_id=actor,
+                        preferred_name=user.preferred_name or None,
+                        remembered_facts=user.facts,
+                        preferences=user.preferences,
+                    )
+                sess = self._profile_store.get_session(conv_id, actor)
+                if sess is not None and sess.active_topics:
+                    conv = ConversationContext(
+                        recent_messages=conv.recent_messages,
+                        active_topics=sess.active_topics,
+                        reply_chain_summary=conv.reply_chain_summary,
+                    )
+            except Exception:
+                pass  # 画像存储异常不阻断推理
+
         return ContextSnapshot(
             current_message=envelope,
-            conversation=conversation_context or ConversationContext(),
+            conversation=conv,
             policy=policy or PolicyView(),
+            user_preference=user_pref,
             authorized_memories=tuple(authorized_memories),
             available_capability_summaries=capability_summaries,
             permissions=tuple(permissions),

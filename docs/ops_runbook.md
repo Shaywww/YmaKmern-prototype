@@ -124,3 +124,22 @@ systemctl is-active astrbot                 # active
     grep -n "ServerCircuitBreaker" packages/mcp/registry.py
     python3.12 -m pytest tests/test_mcp_access_breaker.py -q   # 预期全绿
     # QQ 发 /dududa_mcp 查看访问策略与熔断状态
+
+## 7. 用户画像（SESSION_STATE / USER_PROFILE，文档 2.4.6）
+
+画像/会话状态按日累积，文件默认 data/profiles.json（插件路径
+/root/data/plugins/dududa20/data/profiles.json），可用 DUDUDA_PROFILE_FILE 覆盖。
+
+- 会话状态（SESSION_STATE）：每条消息更新 message_count / last_intent / active_topics（最新在前，最多 8 个）。
+- 用户画像（USER_PROFILE）：仅在 engaged（@ / 显式命令 / 回复链）时学习，避免群聊噪音；
+  规则提取称呼（"叫我XX"）、偏好（"我喜欢XX"）、事实（"我是XX"），无 LLM 调用。
+- 上下文注入：ContextSnapshot.user_preference（称呼/偏好/事实）+ conversation.active_topics；
+  生产合成时画像摘要注入 LLM 前缀（"用户希望被称为… / 用户偏好… / 最近话题…"）。
+- 隔离：按 platform + bot + actor 隔离用户，按 conversation + actor 隔离会话；
+  文件损坏时隔离为 .corrupt-<ts> 并 fail-closed（不参与召回）。
+
+验证：
+
+    grep -n "class ProfileStore" packages/core/profile.py
+    python3.12 -m pytest tests/test_profile_session_p0.py -q   # 预期全绿
+    # QQ @机器人 发：叫我XX / 我喜欢XX -> 检查 data/profiles.json

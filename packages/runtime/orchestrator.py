@@ -55,6 +55,7 @@ class RuntimeOrchestrator:
         renderer: Optional[OCRenderer] = None,
         delivery_manager: Optional[DeliveryManager] = None,
         planner_integration=None,
+        profile_store: Optional[Any] = None,
     ):
         self._context_builder = context_builder or ContextBuilder()
         self._decision_engine = decision_engine or SocialDecisionEngine()
@@ -64,6 +65,7 @@ class RuntimeOrchestrator:
         self._delivery_manager = delivery_manager or DeliveryManager(NoOpOutputAdapter())
         self._write_gate = WriteGate(self._memory_repo)
         self._tool_chain = planner_integration
+        self._profile_store = profile_store  # SESSION_STATE / USER_PROFILE（文档 2.4.6）
         self._last_state: Optional[RuntimeState] = None
         self._completions: dict[str, CompletionReceipt] = {}
 
@@ -194,6 +196,7 @@ class RuntimeOrchestrator:
             confidence=1.0,
         )
         record_state_perception(perception, state, source="rule")
+        self._record_profile(state, perception)
         return state.transition(RuntimePhase.PERCEIVED, perception=perception)
 
     def _phase_decide(self, state: RuntimeState) -> RuntimeState:
@@ -673,6 +676,35 @@ class RuntimeOrchestrator:
         env = state.envelope
         plat = env.platform if env else None
         return getattr(plat, "value", "qq") if plat else "qq"
+
+    def _record_profile(self, state: RuntimeState, perception) -> None:
+        """SESSION_STATE / USER_PROFILE 学习（文档 2.4.6）。
+
+        每条消息更新会话状态；engaged（@/命令/回复链）时学习画像信号，
+        避免把群聊噪音写进长期偏好。
+        """
+        store = self._profile_store
+        if store is None:
+            return
+        env = state.envelope
+        if env is None or env.sender is None:
+            return
+        engaged = bool(
+            getattr(env, "mentions", ()) or env.reply_to
+            or bool(getattr(perception, "is_explicit_command", False)))
+        try:
+            store.record_message(
+                platform=self._platform(state),
+                bot_id="dududa",
+                conversation_id=self._conversation_id(state),
+                actor_id=self._actor_id(state),
+                text=getattr(env, "text", "") or "",
+                intents=tuple(getattr(perception, "candidate_intents", ()) or ()),
+                topics=tuple(getattr(perception, "topics", ()) or ()),
+                engaged=engaged,
+            )
+        except Exception as e:
+            logger.warning("Profile record failed: %s", e)
 
     @staticmethod
     def _result_from_state(state: RuntimeState, outcome: Optional[RunOutcome]) -> RuntimeResult:

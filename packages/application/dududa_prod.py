@@ -83,7 +83,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     """
 
     def __init__(self, plugin, decision_engine, capability_registry, memory_repo,
-                 renderer, planner_integration):
+                 renderer, planner_integration, profile_store=None):
         super().__init__(
             context_builder=plugin.context_builder,
             decision_engine=decision_engine,
@@ -91,7 +91,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             memory_repo=memory_repo,
             renderer=renderer,
             planner_integration=planner_integration,
+            profile_store=profile_store,
         )
+        self._profile_store = profile_store
         self._plugin = plugin
         self._pending_event = None
         self._injected_perception = None
@@ -211,6 +213,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if self._injected_perception is not None:
             record_state_perception(
                 self._injected_perception, state, source="rule")
+            self._record_profile(state, self._injected_perception)
             return state.transition(RuntimePhase.PERCEIVED,
                                     perception=self._injected_perception)
         return super()._phase_perceive(state)
@@ -250,6 +253,26 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 args["keyword"] = kw
             steps.append(type(s)(**{**s.__dict__, "arguments": args}))
         return type(plan)(**{**plan.__dict__, "steps": tuple(steps)})
+
+    def _profile_lines(self, state) -> tuple:
+        """画像摘要（称呼/偏好/事实 + 会话活跃话题），注入 LLM 上下文。"""
+        store = getattr(self, "_profile_store", None)
+        if store is None:
+            return ()
+        try:
+            env = state.envelope
+            if env is None or env.sender is None:
+                return ()
+            user = store.get_user(
+                self._platform(state), "dududa", env.sender.actor_id)
+            sess = store.get_session(
+                self._conversation_id(state), env.sender.actor_id)
+        except Exception:
+            return ()
+        lines = list(user.summary_lines() if user else ())
+        if sess is not None and sess.active_topics:
+            lines.append("最近话题: " + "、".join(sess.active_topics[:6]))
+        return tuple(lines)
 
     async def _phase_compose_prod(self, state):
         draft_text = await self._compose_prod_text(state)
@@ -295,6 +318,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         mem_prefix = plugin._read_memory(event)
         if any(kw in combined for kw in ["文件", "图片", "刚才", "之前", "刚刚", "那个", "这个"]):
             mem_prefix = plugin._read_memory(event, include_episodic=True)
+        profile_lines = self._profile_lines(state)
+        if profile_lines:
+            mem_prefix = ("\n".join(profile_lines) + "\n") + (mem_prefix or "")
         try:
             is_group = bool(getattr(getattr(event, "message_obj", None), "group", None))
         except Exception:
