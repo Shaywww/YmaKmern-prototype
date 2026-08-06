@@ -13,6 +13,8 @@ import logging
 import time
 import httpx
 
+from packages.core.trace_recorder import trace_recorder
+
 from packages.core.state import SocialAction, WriteGateDecision
 from packages.core.decision import DecisionReason
 from packages.core.memory import (
@@ -363,7 +365,7 @@ class DududaCore:
         )
 
     def _store_memory(self, event, *contents: str, msg_type="text",
-                      sensitivity=None):
+                      sensitivity=None, run_id="", trace_id=""):
         """写入记忆：先脱敏；Restricted 数据不落盘；私聊默认 PRIVATE。
 
         所有写入都经 WriteGate（文档 2.5.3）：ALLOW 才落盘，
@@ -390,7 +392,9 @@ class DududaCore:
                     sensitivity=sensitivity, visibility=sensitivity,
                     evidence=(f"src:{msg_type}",))
                 decision = WriteGate(self._memory).evaluate(
-                    MemoryCandidate(proposed_record=record))
+                    MemoryCandidate(proposed_record=record,
+                                    metadata={"run_id": run_id,
+                                              "trace_id": trace_id}))
                 if decision == WriteGateDecision.ALLOW:
                     self._memory.write(record)
                 else:
@@ -444,7 +448,8 @@ class DududaCore:
         p = self._personas.active
         return getattr(p, "tone", "neutral")
 
-    async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5):
+    async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
+                        run_id="", trace_id=""):
         system = _redact_text(system or "")
         user_msg = _redact_text(user_msg or "")
         if _contains_restricted(user_msg):
@@ -457,7 +462,8 @@ class DududaCore:
                 resp = await self._model_router.route_request(
                     ModelRequest(
                         role=ModelRole.RESPONSE_COMPOSITION, messages=msgs,
-                        max_tokens=max_tokens, temperature=temperature),
+                        max_tokens=max_tokens, temperature=temperature,
+                        metadata={"run_id": run_id, "trace_id": trace_id}),
                     provider=self._llm_provider,
                 )
                 reply = resp.text or ""
@@ -501,7 +507,8 @@ class DududaCore:
             logger.exception("Fallback LLM also failed: %s", e2)
             return "诶呀，短路了一下..."
 
-    async def _call_vision(self, system, user_text, image_b64, mime):
+    async def _call_vision(self, system, user_text, image_b64, mime,
+                           run_id="", trace_id=""):
         system = _redact_text(system or "")
         user_text = _redact_text(user_text or "")
         if _contains_restricted(user_text):
@@ -520,6 +527,11 @@ class DududaCore:
                 ],
                 "max_tokens": 1024, "temperature": 0.3,
             }
+            _v_start = time.time()
+            trace_recorder.record(
+                event="model_request", run_id=run_id, trace_id=trace_id,
+                role=ModelRole.IMAGE_UNDERSTANDING.value,
+                model_id=self._cfg["VISION_MODEL"], data_class="public")
             async with httpx.AsyncClient(timeout=90) as c:
                 r = await c.post(
                     f"{self._cfg['VISION_BASE'].rstrip('/')}/chat/completions",
@@ -530,8 +542,19 @@ class DududaCore:
                 r.raise_for_status()
                 data = r.json()
                 reply = data["choices"][0]["message"]["content"]
+                trace_recorder.record(
+                    event="model_response", run_id=run_id, trace_id=trace_id,
+                    role=ModelRole.IMAGE_UNDERSTANDING.value,
+                    model_id=self._cfg["VISION_MODEL"],
+                    degraded=False,
+                    latency_ms=round((time.time() - _v_start) * 1000, 1),
+                    error_kind="")
                 reply = self._render_response(reply or "", self._persona_tone())
                 return reply or ""
         except Exception as e:
             logger.exception("Vision error: %s", e)
+            trace_recorder.record(
+                event="model_error", run_id=run_id, trace_id=trace_id,
+                role=ModelRole.IMAGE_UNDERSTANDING.value,
+                model_id=self._cfg["VISION_MODEL"], error_kind="vision_failed")
             return "(\u3002\u2022\u0301\ufe3f\u2022\u0300\u3002) \u56fe\u7247\u770b\u4e0d\u4e86\u2026"

@@ -71,11 +71,13 @@ async def handle_media(plugin, event, url, name, is_image,
             f"用户说：{pre.combined_text if pre.combined_text.strip() else '请帮我看看这个文件'}\n\n"
             "请基于以上文件内容如实回复，不准编造。"
         )
-        reply = await plugin._call_llm(system, user_msg, max_tokens=2048, temperature=0.3)
+        reply = await plugin._call_llm(system, user_msg, max_tokens=2048,
+                                       temperature=0.3,
+                                       run_id=run_id, trace_id=trace_id)
         plugin._store_memory(event,
             f"[文件《{name}》]:\n{text[:3000]}",
             f"[嘟嘟哒]: {reply[:500]}" if reply else "",
-            msg_type="file")
+            msg_type="file", run_id=run_id, trace_id=trace_id)
         plugin._last_file_ts = time.time()
         return reply or "生成失败..."
     except Exception as e:
@@ -83,7 +85,8 @@ async def handle_media(plugin, event, url, name, is_image,
         return "文件处理出错，稍后再试吧..."
 
 
-async def handle_image(plugin, event, data, name, ext) -> str:
+async def handle_image(plugin, event, data, name, ext,
+                         run_id="", trace_id="") -> str:
     import base64 as _b64
     b64 = _b64.b64encode(data).decode()
     mime_map = {"jpg":"image/jpeg","jpeg":"image/jpeg","png":"image/png",
@@ -101,11 +104,12 @@ async def handle_image(plugin, event, data, name, ext) -> str:
         "用户发来一张图片。请详细描述图片内容。"
         "★ 如果图片里有文字，必须完整提取。回复用颜表情风格，但内容必须准确。"
     )
-    reply = await plugin._call_vision(system, user_text, b64, mime)
+    reply = await plugin._call_vision(system, user_text, b64, mime,
+                                       run_id=run_id, trace_id=trace_id)
     plugin._store_memory(event,
         f"[图片《{name}》]:\n{reply[:3000]}",
         f"[嘟嘟哒]: {reply[:500]}" if reply else "",
-        msg_type="image")
+        msg_type="image", run_id=run_id, trace_id=trace_id)
     plugin._last_file_ts = time.time()
     return reply or "(｡•́︿•̀｡) 图片读不出来..."
 
@@ -149,7 +153,8 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
             reply = await plugin._call_llm(
                 f"你是{p.display_name}，自称{p.first_person}。你就是嘟嘟哒。用颜表情风格，短回复。"
                 "如果用户只发来一个词或短名词（如 USTC、AstrBot），视为在询问它的含义，直接解释，不要当打招呼。",
-                preprocessed.combined_text, max_tokens=1024, temperature=0.5)
+                preprocessed.combined_text, max_tokens=1024, temperature=0.5,
+                run_id=run_id, trace_id=trace_id)
         user_snippet = f"[用户]: {preprocessed.combined_text[:300]}"
         bot_snippet = f"[嘟嘟哒]: {reply[:300]}" if reply else ""
         if result is not None:
@@ -158,11 +163,13 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
                 receipt = DeliveryReceipt(run_id=result.run_id,
                                           status=DeliveryStatus.SUCCEEDED)
                 await plugin.runtime.acknowledge_delivery(receipt)
-                plugin._store_memory(event, user_snippet)
+                plugin._store_memory(event, user_snippet,
+                                       run_id=run_id, trace_id=trace_id)
                 return reply or ""
             except Exception as e:
                 logger.warning("Delivery ack failed: %s", e)
-        plugin._store_memory(event, user_snippet, bot_snippet)
+        plugin._store_memory(event, user_snippet, bot_snippet,
+                               run_id=run_id, trace_id=trace_id)
         return reply or ""
     except Exception as e:
         logger.exception("Text error: %s", e)

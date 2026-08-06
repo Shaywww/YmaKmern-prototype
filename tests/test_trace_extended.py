@@ -262,3 +262,109 @@ async def test_delivery_records_sent(monkeypatch, tmp_path):
     lines = rec.lines_for()
     assert lines[0]["event"] == "delivery"
     assert lines[0]["skipped"] is False and lines[0]["platform"] == "qq"
+
+
+# ---------------- run_id/trace_id 贯穿（生产路径） ----------------
+
+import types
+
+
+def _load_plugin(tmp_path, monkeypatch):
+    import importlib.util
+    import types as _types
+    from unittest import mock as _mock
+    sys.path.insert(0, "/root/data/plugins/dududa20")
+    spec = importlib.util.spec_from_file_location(
+        "dududa_main_rid", "/root/data/plugins/dududa20/main.py")
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+    try:
+        ctx = main.star.Context()
+    except TypeError:
+        ctx = _mock.Mock()
+    monkeypatch.setattr(main, "MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setattr(main, "CONFIRM_FILE", str(tmp_path / "confirmations.json"))
+    plugin = main.Main(ctx)
+    plugin.enabled = True
+    return plugin, main
+
+
+class _FakeEvent:
+    def __init__(self):
+        self.message_obj = types.SimpleNamespace(group="g9", self_id="bot9")
+        self._platform = "aiocqhttp"
+        self.session_id = "s9"
+        self.sender = types.SimpleNamespace(user_id="u9")
+        self.message_str = "hello"
+    def get_session_id(self): return self.session_id
+    def get_sender_id(self): return "u9"
+    def get_platform_name(self): return self._platform
+    def get_message_type(self): return "group_message"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_threads_run_id(monkeypatch, tmp_path):
+    from packages.application import dududa_core as core_mod
+    from packages.router import router as router_mod
+    rec = TraceRecorder(tmp_path / "traces")
+    monkeypatch.setattr(core_mod, "trace_recorder", rec)
+    monkeypatch.setattr(router_mod, "trace_recorder", rec)
+    plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    provider = StubProvider()
+    cfg = RouterConfig(roles={ModelRole.RESPONSE_COMPOSITION: ModelConfig(
+        role=ModelRole.RESPONSE_COMPOSITION, model_id="m-a",
+        fallback_model_id="m-b")})
+    plugin._core._model_router = ModelRouter(config=cfg, provider=provider)
+    plugin._core._llm_provider = provider
+    reply = await plugin._call_llm("你是嘟嘟哒", "你好", run_id="r8", trace_id="t8")
+    assert reply
+    lines = rec.lines_for()
+    assert [l["event"] for l in lines] == ["model_request", "model_response"]
+    assert lines[0]["run_id"] == "r8" and lines[0]["trace_id"] == "t8"
+    assert lines[1]["run_id"] == "r8"
+
+
+@pytest.mark.asyncio
+async def test_store_memory_threads_run_id(monkeypatch, tmp_path):
+    from packages.application import dududa_core as core_mod
+    from packages.core import memory as mem_mod
+    rec = TraceRecorder(tmp_path / "traces")
+    monkeypatch.setattr(core_mod, "trace_recorder", rec)
+    monkeypatch.setattr(mem_mod, "trace_recorder", rec)
+    plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    plugin._store_memory(_FakeEvent(), "hello trace memory",
+                         run_id="r9", trace_id="t9")
+    lines = rec.lines_for()
+    assert lines and lines[0]["event"] == "memory_gate"
+    assert lines[0]["decision"] == "allow"
+    assert lines[0]["run_id"] == "r9" and lines[0]["trace_id"] == "t9"
+
+
+@pytest.mark.asyncio
+async def test_call_vision_threads_run_id(monkeypatch, tmp_path):
+    from packages.application import dududa_core as core_mod
+    rec = TraceRecorder(tmp_path / "traces")
+    monkeypatch.setattr(core_mod, "trace_recorder", rec)
+
+    class _FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "看到一张图"}}]}
+
+    class _FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k): return _FakeResp()
+
+    monkeypatch.setattr(core_mod, "httpx",
+                        types.SimpleNamespace(AsyncClient=_FakeClient))
+    plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    reply = await plugin._call_vision("描述图片", "这是什么", "b64", "image/png",
+                                      run_id="r10", trace_id="t10")
+    assert reply
+    lines = rec.lines_for()
+    kinds = [l["event"] for l in lines]
+    assert "model_request" in kinds and "model_response" in kinds
+    assert lines[0]["run_id"] == "r10"
+    assert lines[1]["run_id"] == "r10"

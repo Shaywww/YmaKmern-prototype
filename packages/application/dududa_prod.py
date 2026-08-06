@@ -262,8 +262,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             )
         else:
             user_msg = mem_prefix + combined
+        _llm_kwargs = {}
+        try:
+            import inspect as _inspect
+            if "run_id" in _inspect.signature(plugin._call_llm).parameters:
+                _llm_kwargs = {"run_id": state.run_id, "trace_id": state.trace_id}
+        except Exception:
+            pass
         reply = await plugin._call_llm(system, user_msg,
-                                       max_tokens=1024, temperature=0.5)
+                                       max_tokens=1024, temperature=0.5,
+                                       **_llm_kwargs)
         return reply or ""
 
     @staticmethod
