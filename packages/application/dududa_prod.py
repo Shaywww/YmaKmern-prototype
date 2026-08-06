@@ -11,6 +11,7 @@ from packages.core.capability import CapProvider, ToolObservation
 from packages.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from packages.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
 from packages.runtime.orchestrator import RuntimeOrchestrator
+from uuid import uuid4
 
 from packages.application.dududa_utils import (
     _group_safe_observations, _redact_text, _contains_restricted,
@@ -106,14 +107,18 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 pass
 
     async def run(self, envelope, budget=None, policy=None,
-                  perception=None, event=None):
+                  perception=None, event=None, run_id=None, trace_id=None):
         """镜像 RuntimeOrchestrator.run()，但 COMPOSED 阶段改为生产异步合成。"""
         budget = budget or RuntimeBudget()
         self._pending_event = event
         self._injected_perception = perception
         if hasattr(envelope, "envelope"):
             envelope = envelope.envelope
-        state = RuntimeState(envelope=envelope, budget=budget)
+        state = RuntimeState(
+            envelope=envelope, budget=budget,
+            run_id=run_id or uuid4().hex,
+            trace_id=trace_id or uuid4().hex,
+        )
         try:
             state = self._phase_validate(state)
             if state.phase == RuntimePhase.ABORTED:

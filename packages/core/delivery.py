@@ -30,6 +30,7 @@ class RuntimeResult:
     """运行完成时的结果 —— 在 READY_TO_EMIT 阶段产生。"""
     run_id: str
     outcome: RunOutcome
+    trace_id: str = ""
     final_response: Optional[FinalResponse] = None
     reaction: Optional[str] = None      # 轻量反应（表情等）
     reason_codes: tuple[str, ...] = ()

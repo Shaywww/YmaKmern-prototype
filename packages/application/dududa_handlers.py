@@ -7,6 +7,7 @@ Main 只做事件适配与结果发送。
 import logging
 import random
 import time
+from uuid import uuid4
 
 from packages.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
 from packages.core.delivery import DeliveryReceipt, DeliveryStatus
@@ -22,10 +23,12 @@ _REACT_EMOJIS = ["(\u30b7\u00b0\u3002\u00b0)\uff83", "(\u3002>\u3002<\u3002)",
                  "(\u3002\u30fb\u03c9\u30fb\u3002)", "(\u2267\u2207\u2266)"]
 
 
-async def handle_media(plugin, event, url, name, is_image) -> str:
+async def handle_media(plugin, event, url, name, is_image,
+                       run_id="", trace_id="") -> str:
     ext = _file_ext(name)
     try:
-        logger.info("Media: %s (%s) image=%s url=%s", name, ext, is_image, url[:50])
+        logger.info("Media | run_id=%s trace_id=%s: %s (%s) image=%s url=%s",
+                    run_id, trace_id, name, ext, is_image, url[:50])
         if url.startswith("/"):
             import os as _os
             if _os.path.exists(url):
@@ -105,7 +108,7 @@ async def handle_image(plugin, event, data, name, ext) -> str:
     return reply or "(｡•́︿•̀｡) 图片读不出来..."
 
 
-async def handle_text(plugin, event) -> str:
+async def handle_text(plugin, event, run_id="", trace_id="") -> str:
     try:
         preprocessed = plugin.input_adapter.to_preprocessed(event)
         if not preprocessed or not preprocessed.combined_text.strip(): return ""
@@ -128,6 +131,8 @@ async def handle_text(plugin, event) -> str:
                                           deadline_seconds=40),
                     perception=perception,
                     event=event,
+                    run_id=run_id or None,
+                    trace_id=trace_id or None,
                 )
                 logger.info("Flow runtime: ok=%s reply=%r",
                             bool(result and result.final_response and result.final_response.text),
@@ -167,13 +172,6 @@ async def run_message_flow(plugin, event) -> str | None:
     返回要发送的文本；None 表示不回复。
     """
     if not plugin.enabled: return None
-    try:
-        logger.info("Flow in: mstr=%r at=%s gid=%s",
-                    (str(getattr(event, "message_str", "") or "")[:60]),
-                    str(getattr(event, "is_at_or_wake_command", "?")),
-                    str(getattr(getattr(event, "message_obj", None), "group_id", "")))
-    except Exception:
-        pass
     if plugin._is_self_message(event): return None
     msgs = event.get_messages()
     if not msgs:
@@ -186,24 +184,46 @@ async def run_message_flow(plugin, event) -> str | None:
     if msg_id in plugin._processed: return None
     plugin._processed.add(msg_id)
     if len(plugin._processed) > 2000: plugin._processed.clear()
+    run_id, trace_id = uuid4().hex, uuid4().hex
+    _msg_snip = str(getattr(event, "message_str", "") or "")[:80]
+    logger.info("Flow start | run_id=%s trace_id=%s msg=%r",
+                run_id, trace_id, _msg_snip)
+    try:
+        return await _run_flow_inner(
+            plugin, event, msgs, run_id, trace_id)
+    except Exception as e:
+        logger.exception("Flow error | run_id=%s trace_id=%s: %s",
+                         run_id, trace_id, e)
+        return None
+
+
+async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
+    """run_message_flow 主体：所有分支带 run_id/trace_id 落日志（P1-3 Trace）。"""
     if _is_at_only(event, msgs):
         # 纯@：优先配对同人 60s 内刚发的图（QQ 拆条），没图才回通用短句
         _at_paired = _take_paired_media(plugin, event)
         if _at_paired:
             _at_reply = await handle_media(
-                plugin, event, _at_paired[0], _at_paired[1], _at_paired[2])
+                plugin, event, _at_paired[0], _at_paired[1], _at_paired[2],
+                run_id=run_id, trace_id=trace_id)
             _drop_stash_file(_at_paired[0])
             if _at_reply:
                 event.stop_event()
+                logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
+                            run_id, trace_id, _at_reply[:80])
                 return _at_reply
             return None
-        return random.choice(_AT_ONLY_REPLIES)
+        _r = random.choice(_AT_ONLY_REPLIES)
+        logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
+                    run_id, trace_id, _r[:80])
+        return _r
     if plugin._should_ignore(event): return None
     if _stash_group_media(plugin, event, msgs):
         return None
-    state = RuntimeState()
+    state = RuntimeState(run_id=run_id, trace_id=trace_id)
     action, reason = plugin._social_decision(event)
-    logger.info("Flow decision: %s (%s)", action, reason)
+    logger.info("Flow decision | run_id=%s trace_id=%s: %s (%s)",
+                run_id, trace_id, action, reason)
     if action == SocialAction.IGNORE:
         state = state.transition(RuntimePhase.DECIDED,
                                  social_decision=SocialAction.IGNORE,
@@ -214,7 +234,8 @@ async def run_message_flow(plugin, event) -> str | None:
         state = state.transition(RuntimePhase.COMPLETED,
                                  outcome=RunOutcome.SUCCEEDED)
         _r = random.choice(_REACT_EMOJIS)
-        logger.info("Flow react: %r", _r)
+        logger.info("Flow react | run_id=%s trace_id=%s: %r",
+                    run_id, trace_id, _r)
         return _r
     state = state.transition(RuntimePhase.DECIDED,
                              social_decision=action,
@@ -230,22 +251,29 @@ async def run_message_flow(plugin, event) -> str | None:
         pass
     file_url, file_name, is_image = _detect_media(event)
     if file_url:
-        reply = await handle_media(plugin, event, file_url, file_name, is_image)
+        reply = await handle_media(plugin, event, file_url, file_name, is_image,
+                                   run_id=run_id, trace_id=trace_id)
         if reply:
             event.stop_event()
+            logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
+                        run_id, trace_id, reply[:80])
             return reply
         return None
     if not file_url:
         paired = _take_paired_media(plugin, event)
         if paired:
-            reply = await handle_media(plugin, event, paired[0], paired[1], paired[2])
+            reply = await handle_media(plugin, event, paired[0], paired[1], paired[2],
+                                       run_id=run_id, trace_id=trace_id)
             _drop_stash_file(paired[0])
             if reply:
                 event.stop_event()
+                logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
+                            run_id, trace_id, reply[:80])
                 return reply
             return None
-    reply = await handle_text(plugin, event)
-    logger.info("Flow text reply: %r", (reply or "")[:80])
+    reply = await handle_text(plugin, event, run_id=run_id, trace_id=trace_id)
+    logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
+                run_id, trace_id, (reply or "")[:80])
     return reply or None
 
 _IMAGE_ASK_KEYWORDS = ("图", "照片", "这张", "这个", "什么", "怎么样", "啥",

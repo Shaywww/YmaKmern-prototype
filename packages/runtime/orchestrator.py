@@ -1,8 +1,10 @@
 """嘟嘟哒 2.0 Runtime Orchestrator —— 控制中枢。"""
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Any, Optional
+from uuid import uuid4
 
 from ..core.envelope import MessageEnvelope, PreprocessedEnvelope
 from ..core.state import (
@@ -34,6 +36,8 @@ from ..safeguards.security import Redactor
 _TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
 _REDACTOR = Redactor()  # 工具结果脱敏（文档 2.5.9）
 
+logger = logging.getLogger("dududa20")  # 与插件日志同源，进 journalctl
+
 
 class RuntimeOrchestrator:
     """Agent Runtime 控制中枢。"""
@@ -63,12 +67,18 @@ class RuntimeOrchestrator:
         envelope: MessageEnvelope,
         budget: Optional[RuntimeBudget] = None,
         policy: Optional[PolicyView] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
     ) -> RuntimeResult:
         budget = budget or RuntimeBudget()
         # 兼容：允许直接传入 PreprocessedEnvelope（Connector 预处理产物）
         if hasattr(envelope, "envelope"):
             envelope = envelope.envelope
-        state = RuntimeState(envelope=envelope, budget=budget)
+        state = RuntimeState(
+            envelope=envelope, budget=budget,
+            run_id=run_id or uuid4().hex,
+            trace_id=trace_id or uuid4().hex,
+        )
 
         try:
             state = self._phase_validate(state)
@@ -502,9 +512,21 @@ class RuntimeOrchestrator:
 
     @staticmethod
     def _result_from_state(state: RuntimeState, outcome: Optional[RunOutcome]) -> RuntimeResult:
+        _outcome = outcome or RunOutcome.IGNORED
+        logger.info(
+            "Run end | run_id=%s trace_id=%s outcome=%s final_phase=%s errors=%d",
+            state.run_id, state.trace_id, _outcome.value, state.phase.value,
+            len(state.errors),
+        )
+        if _outcome in (RunOutcome.FAILED, RunOutcome.ABORTED):
+            logger.warning(
+                "Run error | run_id=%s trace_id=%s errors=%s",
+                state.run_id, state.trace_id, list(state.errors)[:5],
+            )
         return RuntimeResult(
             run_id=state.run_id,
-            outcome=outcome or RunOutcome.IGNORED,
+            trace_id=state.trace_id,
+            outcome=_outcome,
             final_response=state.final_response,
             reason_codes=((state.decision_reason,) if state.decision_reason else ()),
             trace_summary={

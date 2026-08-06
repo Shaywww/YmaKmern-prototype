@@ -159,6 +159,7 @@ class RuntimeState:
     所有字段通过不可变快照或受控 reducer 更新。
     """
     run_id: str = field(default_factory=lambda: uuid4().hex)
+    trace_id: str = field(default_factory=lambda: uuid4().hex)
     phase: RuntimePhase = RuntimePhase.RECEIVED
     outcome: Optional[RunOutcome] = None
 

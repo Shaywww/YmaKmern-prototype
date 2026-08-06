@@ -152,7 +152,7 @@ def test_at_only_with_stashed_media_reads_image_first(monkeypatch):
 
     calls = {}
 
-    async def fake_handle_media(plugin, event, url, name, is_image):
+    async def fake_handle_media(plugin, event, url, name, is_image, **kwargs):
         calls["media"] = (url, name, is_image)
         return "（读图）这是一张课程表截图 (｡･ω･｡)"
 
