@@ -217,7 +217,7 @@ async def run_message_flow(plugin, event) -> str | None:
         logger.info("Flow react: %r", _r)
         return _r
     state = state.transition(RuntimePhase.DECIDED,
-                             social_decision=SocialAction.ANSWER,
+                             social_decision=action,
                              decision_reason=reason)
     state = state.transition(RuntimePhase.VALIDATED)
     perception = plugin._perceive(event)

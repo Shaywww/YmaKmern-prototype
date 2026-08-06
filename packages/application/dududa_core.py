@@ -14,6 +14,7 @@ import time
 import httpx
 
 from packages.core.state import SocialAction, WriteGateDecision
+from packages.core.decision import DecisionReason
 from packages.core.memory import (
     MemoryCandidate, MemoryRecord, MemoryType, MemoryScope,
     SensitivityLevel, WriteGate,
@@ -81,6 +82,7 @@ class DududaCore:
         self._llm_provider = llm_provider
         self._cfg = config  # 保持引用：适配层可用动态代理（monkeypatch 兼容）
         self._pending_confirms = {}
+        self._react_cooldown: dict = {}  # 群聊问候 10s 冷却（文档 2.5.4）
         self._load_confirmations()
 
     # ---- 身份与 Bot 隔离 ----
@@ -272,20 +274,32 @@ class DududaCore:
             return SocialAction.ANSWER, "fallback"
         is_group = bool(getattr(event.message_obj, "group", None))
         if not is_group:
-            return SocialAction.ANSWER, "private"
+            return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
         mentioned = bool(getattr(event, "is_at_or_wake_command", True))
         if not mentioned:
-            return SocialAction.IGNORE, "group_not_mentioned"
+            return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()
-        # Only pure greeting/single emoji gets REACT
+        # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）
+        if any(kw in clean for kw in ("帮我", "查", "搜", "算", "翻译")):
+            return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
+        # 纯问候/单表情 -> REACT（同会话 10s 冷却，文档 2.5.4 速率冷却）
         if len(clean) <= 1:
-            return SocialAction.REACT, "short"
-        # Questions always deserve ANSWER
-        if any(clean.endswith(q) for q in ("?", "？", "吗", "呢", "嘛")):
-            return SocialAction.ANSWER, "question"
+            return self._react_with_cooldown(event)
         if len(clean) <= 2 and not any(kw in clean for kw in ("谁", "什么", "怎么", "为什么", "帮")):
-            return SocialAction.REACT, "short"
-        return SocialAction.ANSWER, "normal"
+            return self._react_with_cooldown(event)
+        # 问句 -> DIRECT_REPLY
+        if any(clean.endswith(q) for q in ("?", "？", "吗", "呢", "嘛")):
+            return SocialAction.DIRECT_REPLY, DecisionReason.DIRECT_MENTION.value
+        return SocialAction.DIRECT_REPLY, DecisionReason.DIRECT_MENTION.value
+
+    def _react_with_cooldown(self, event) -> tuple:
+        now = time.time()
+        conv = str(event.get_session_id())
+        last = self._react_cooldown.get(conv, 0.0)
+        if now - last < 10.0:
+            return SocialAction.IGNORE, DecisionReason.COOLDOWN_ACTIVE.value
+        self._react_cooldown[conv] = now
+        return SocialAction.REACT, DecisionReason.GREETING_ONLY.value
 
     def _perceive(self, event) -> PerceptionResult:
         try:

@@ -30,6 +30,7 @@ class DecisionReason(str, Enum):
     KEYWORD_MATCH = "keyword_match"           # 关键词命中
     HIGH_RELEVANCE = "high_relevance"         # 高语义相关度
     EXPLICIT_COMMAND = "explicit_command"     # 显式命令
+    GREETING_ONLY = "greeting_only"           # 纯问候/单表情
 
     # 不参与原因
     LOW_RELEVANCE = "low_relevance"           # 低相关度
