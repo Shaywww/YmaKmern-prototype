@@ -51,7 +51,8 @@ async def handle_media(plugin, event, url, name, is_image,
                 data = r.content
 
         if is_image or ext in _IMAGE_EXTS:
-            return await handle_image(plugin, event, data, name, ext)
+            return await handle_image(plugin, event, data, name, ext,
+                                      run_id=run_id, trace_id=trace_id)
 
         text = _parse_document(data, name)
         if not text: return "无法解析文件格式~"

@@ -419,6 +419,8 @@ class RuntimeOrchestrator:
                         evidence=(f"tool:{obs.capability_id}",),
                     ),
                     requires_delivery_ack=False,
+                    metadata={"run_id": state.run_id,
+                              "trace_id": state.trace_id},
                 ))
         if state.final_response and state.final_response.text:
             scope_bot = MemScope(
@@ -437,6 +439,8 @@ class RuntimeOrchestrator:
                     evidence=(f"run:{state.run_id}",),
                 ),
                 requires_delivery_ack=True,
+                metadata={"run_id": state.run_id,
+                          "trace_id": state.trace_id},
             ))
         return tuple(candidates)
 

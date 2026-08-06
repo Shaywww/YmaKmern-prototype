@@ -368,3 +368,18 @@ async def test_call_vision_threads_run_id(monkeypatch, tmp_path):
     assert "model_request" in kinds and "model_response" in kinds
     assert lines[0]["run_id"] == "r10"
     assert lines[1]["run_id"] == "r10"
+
+
+def test_orchestrator_memory_candidates_carry_run_id():
+    from packages.runtime.orchestrator import RuntimeOrchestrator
+    from packages.core.state import RuntimeState, RuntimePhase, RunOutcome
+    from packages.core.renderer import FinalResponse
+    orch = RuntimeOrchestrator()
+    state = RuntimeState(run_id="r11", trace_id="t11")
+    state = state.transition(RuntimePhase.READY_TO_EMIT,
+                             outcome=RunOutcome.SUCCEEDED,
+                             final_response=FinalResponse(text="你好"))
+    cands = orch._build_memory_candidates(state)
+    assert cands
+    assert all(c.metadata.get("run_id") == "r11" for c in cands)
+    assert all(c.metadata.get("trace_id") == "t11" for c in cands)
