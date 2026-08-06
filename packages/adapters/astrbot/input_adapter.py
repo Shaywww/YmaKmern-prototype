@@ -88,6 +88,7 @@ class AstrBotInputAdapter:
             mentions=tuple(mentions),
             platform_message_id=getattr(event, "message_id", "") or getattr(event, "session_id", "") or None,
             received_at=datetime.now(timezone.utc),
+            reply_to=self._extract_reply(event),
         )
 
     def to_preprocessed(self, event: AstrMessageEvent) -> PreprocessedEnvelope:
@@ -180,6 +181,44 @@ class AstrBotInputAdapter:
         return mentions
 
     # ── 多模态预处理 ──────────────────────────────────
+
+    def _extract_reply(self, event: AstrMessageEvent) -> Optional[MessageEnvelope]:
+        """提取回复链（Reply 组件）。
+
+        Connector 契约：回复必须指向同一会话。当平台在 Reply 载荷里
+        显式给出 group_id 且与当前会话不一致时，用引用会话构造 reply_to，
+        供 Orchestrator / Handler 做跨会话拒绝。
+        """
+        try:
+            comps = event.get_messages() or ()
+        except Exception:
+            return None
+        for comp in comps:
+            if getattr(comp, "type", "") != "reply":
+                continue
+            rid = str(getattr(comp, "id", "") or getattr(comp, "message_id", "") or "")
+            if not rid:
+                continue
+            platform = PLATFORM_MAP.get(
+                AstrBotPlatform(event.get_platform_name()), Platform.QQ)
+            cur_group = str(getattr(event, "group_id", "") or "")
+            src_group = str(getattr(comp, "group_id", "") or "")
+            if src_group and cur_group and src_group != cur_group:
+                kind, conv_id = MessageKind.GROUP, src_group
+            else:
+                kind = MessageKind.GROUP if cur_group else MessageKind.PRIVATE
+                conv_id = cur_group or (getattr(event, "session_id", "") or "unknown")
+            return MessageEnvelope(
+                envelope_id=uuid4().hex,
+                platform=platform,
+                kind=kind,
+                conversation=ConversationRef(
+                    conversation_id=conv_id, platform=platform, kind=kind),
+                sender=Actor(actor_id="", platform=platform, display_name=""),
+                text="", mentions=(), received_at=datetime.now(timezone.utc),
+                platform_message_id=rid,
+            )
+        return None
 
     def _extract_ocr(self, components: list[MessageComponent]) -> Optional[str]:
         """图片 OCR 提取 —— 接入时替换为真实 OCR 服务。"""

@@ -13,16 +13,16 @@ from ...core.capability import CapabilityRegistry
 from ...mcp.registry import register_all_mcp_services
 
 logger = logging.getLogger('dududa20.astrbot')
-DUPLICATE_WINDOW = 1000
-_processed_messages: set[str] = set()
+from ...core.idempotency import MessageIdempotencyRegistry
 
+DUPLICATE_WINDOW = 1000
+_processed_messages = MessageIdempotencyRegistry(
+    ttl_seconds=600.0, max_keys=DUPLICATE_WINDOW)
+
+# Connector 幂等键（空 platform/bot 兼容旧测试）：重复返回 True。
 def _is_duplicate(message_id: str) -> bool:
     if not message_id: return False
-    if message_id in _processed_messages: return True
-    _processed_messages.add(message_id)
-    if len(_processed_messages) > DUPLICATE_WINDOW:
-        _processed_messages.clear()
-    return False
+    return not _processed_messages.check_and_register("", "", message_id)
 
 class DududaPlugin:
     def __init__(self, actor_config=None, persona_registry=None, capability_registry=None):

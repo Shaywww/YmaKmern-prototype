@@ -264,6 +264,48 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
         return "诶呀，短路了一下..."
 
 
+def _dedupe_message(plugin, event, msg_id) -> bool:
+    # Connector 幂等键 (platform, bot_id, message_id) 判重。
+    # 生产插件带 MessageIdempotencyRegistry（TTL 有界）时走注册表；
+    # 无注册表（旧测试桩）退回进程内 _processed 集合。
+    # 返回 True 表示 TTL 窗口内重复，应忽略该消息。
+    _idem = getattr(plugin, "_idem", None)
+    if _idem is not None:
+        try:
+            _platform = str(event.get_platform_name())
+        except Exception:
+            _platform = ""
+        try:
+            _bot = str(plugin._get_bot_id(event))
+        except Exception:
+            _bot = ""
+        return not _idem.check_and_register(_platform, _bot, msg_id)
+    if msg_id in plugin._processed:
+        return True
+    plugin._processed.add(msg_id)
+    if len(plugin._processed) > 2000:
+        plugin._processed.clear()
+    return False
+
+
+def _cross_session_reply_dropped(plugin, event) -> bool:
+    # Connector 契约：回复链跨会话 -> 拒绝（不回复、不处理）。
+    # 通过 Adapter 提取的 reply_to 判断：引用会话与当前会话不一致时丢弃。
+    try:
+        envelope = plugin.input_adapter.to_envelope(event)
+    except Exception:
+        return False
+    reply = getattr(envelope, "reply_to", None)
+    if reply is None:
+        return False
+    src = getattr(getattr(reply, "conversation", None), "conversation_id", None)
+    dst = getattr(getattr(envelope, "conversation", None), "conversation_id", None)
+    if src is not None and src != dst:
+        logger.info("Cross-session reply dropped: src=%s dst=%s", src, dst)
+        return True
+    return False
+
+
 async def run_message_flow(plugin, event) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
@@ -279,9 +321,7 @@ async def run_message_flow(plugin, event) -> str | None:
     try: msg_id = str(event.message_obj.message_id)
     except Exception: pass
     if not msg_id: msg_id = str(id(event))
-    if msg_id in plugin._processed: return None
-    plugin._processed.add(msg_id)
-    if len(plugin._processed) > 2000: plugin._processed.clear()
+    if _dedupe_message(plugin, event, msg_id): return None
     _pending = getattr(plugin, "_pending_deliveries", None)
     if _pending is None:
         plugin._pending_deliveries = _pending = {}
@@ -318,6 +358,8 @@ async def run_message_flow(plugin, event) -> str | None:
 
 async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
     """run_message_flow 主体：所有分支带 run_id/trace_id 落日志（P1-3 Trace）。"""
+    if _cross_session_reply_dropped(plugin, event):
+        return None
     if _is_at_only(event, msgs):
         # 纯@：优先配对同人 60s 内刚发的图（QQ 拆条），没图才回通用短句
         _at_paired = _take_paired_media(plugin, event)

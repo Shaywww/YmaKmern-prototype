@@ -141,6 +141,16 @@ class RuntimeOrchestrator:
         if state.budget.is_expired():
             return state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.ABORTED,
                                      errors=("Budget expired",))
+        # Connector 契约：回复链跨会话 -> 拒绝（不回复、不处理）
+        reply = getattr(envelope, "reply_to", None)
+        if reply is not None:
+            src = getattr(getattr(reply, "conversation", None),
+                          "conversation_id", None)
+            dst = getattr(envelope.conversation, "conversation_id", None)
+            if src is not None and src != dst:
+                return state.transition(
+                    RuntimePhase.ABORTED, outcome=RunOutcome.IGNORED,
+                    errors=("Cross-session reply rejected",))
         return state.transition(RuntimePhase.VALIDATED)
 
     def _phase_preprocess(self, state: RuntimeState) -> RuntimeState:

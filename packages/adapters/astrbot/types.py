@@ -40,8 +40,10 @@ class At(MessageComponent):
         super().__init__(type="at", qq=qq)
 
 class Reply(MessageComponent):
-    def __init__(self, id: str):
-        super().__init__(type="reply", qq=id)
+    def __init__(self, id: str = "", qq: str = "", group_id: str = ""):
+        super().__init__(type="reply", qq=qq or id)
+        self.id = id
+        self.group_id = group_id
 
 @dataclass
 class AstrSender:
