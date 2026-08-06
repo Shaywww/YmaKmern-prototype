@@ -6,7 +6,7 @@
 import logging
 
 from packages.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
-from packages.core.renderer import FactAnchor, DraftResponse
+from packages.core.renderer import FactAnchor, DraftResponse, FinalResponse
 from packages.core.capability import CapProvider, ToolObservation
 from packages.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from packages.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
@@ -133,6 +133,20 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 return self._result_from_state(state, RunOutcome.ABORTED)
             if state.social_decision == SocialAction.IGNORE:
                 return self._result_from_state(state, RunOutcome.IGNORED)
+            limits = getattr(self._plugin, "limits", None)
+            if limits is not None:
+                actor_key = self._actor_key(state)
+                rate = limits.check_message(
+                    actor_key, run_id=state.run_id, trace_id=state.trace_id)
+                if not rate.allowed:
+                    # 2.5.9 Runtime 限流：不进入工具/LLM，直接返回提示
+                    state = state.transition(
+                        RuntimePhase.RENDERED,
+                        final_response=FinalResponse(
+                            text=getattr(limits, "RATE_LIMIT_HINT",
+                                         "稍等一下再问我哦～")),
+                        outcome=RunOutcome.SUCCEEDED)
+                    return self._result_from_state(state, RunOutcome.SUCCEEDED)
             if state.social_decision in (
                 SocialAction.ANSWER, SocialAction.ASK, SocialAction.USE_TOOLS,
             ):
@@ -144,6 +158,24 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             else:
                 state = state.transition(RuntimePhase.COMPOSED)
             state = await self._phase_compose_prod(state)
+            if limits is not None:
+                draft = state.draft_response
+                if draft is not None:
+                    est_tokens = max(
+                        1, (len(draft.text or "")
+                            + len(getattr(state.envelope, "text", "") or "")) // 4)
+                    budget = limits.spend_tokens(
+                        actor_key, est_tokens,
+                        run_id=state.run_id, trace_id=state.trace_id)
+                    if not budget.allowed:
+                        # 2.5.9 日预算耗尽：替换草稿为提示，不继续消费模型
+                        state = state.transition(
+                            RuntimePhase.COMPOSED,
+                            draft_response=DraftResponse(
+                                text=getattr(limits, "BUDGET_HINT",
+                                             "今天的对话额度用完啦～"),
+                                fact_anchors=draft.fact_anchors,
+                                target_users=draft.target_users))
             state = await self._phase_render(state)
             state = self._with_updates(
                 state, memory_candidates=self._build_memory_candidates(state)
@@ -158,6 +190,17 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 state.transition(RuntimePhase.ABORTED, outcome=RunOutcome.FAILED),
                 RunOutcome.FAILED,
             )
+
+    @staticmethod
+    def _actor_key(state) -> str:
+        """限流/预算的 key：会话 Actor（envelope.sender.actor_id）。"""
+        try:
+            sender = getattr(state.envelope, "sender", None)
+            if sender is not None and getattr(sender, "actor_id", ""):
+                return str(sender.actor_id)
+        except Exception:
+            pass
+        return "unknown"
 
     def _phase_perceive(self, state):
         if self._injected_perception is not None:
