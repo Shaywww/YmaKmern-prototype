@@ -11,7 +11,8 @@ from io import BytesIO
 
 from packages.safeguards.security import Redactor
 
-logger = logging.getLogger("dududa20")
+from packages.application.dududa_log import get_logger as _get_logger
+logger = _get_logger("dududa20")
 
 _IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 

@@ -17,7 +17,8 @@ from packages.application.dududa_utils import (
     _redact_text, _file_ext, _parse_document, _IMAGE_EXTS,
 )
 
-logger = logging.getLogger("dududa20")
+from packages.application.dududa_log import get_logger as _get_logger
+logger = _get_logger("dududa20")
 
 _REACT_EMOJIS = ["(\u30b7\u00b0\u3002\u00b0)\uff83", "(\u3002>\u3002<\u3002)",
                  "(\u3002\u30fb\u03c9\u30fb\u3002)", "(\u2267\u2207\u2266)"]

@@ -36,7 +36,8 @@ from ..safeguards.security import Redactor
 _TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
 _REDACTOR = Redactor()  # 工具结果脱敏（文档 2.5.9）
 
-logger = logging.getLogger("dududa20")  # 与插件日志同源，进 journalctl
+from packages.application.dududa_log import get_logger as _get_logger
+logger = _get_logger("dududa20")  # 与插件日志同源，进 journalctl
 
 
 class RuntimeOrchestrator:

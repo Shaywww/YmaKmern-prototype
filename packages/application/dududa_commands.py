@@ -10,7 +10,8 @@ import logging
 from packages.safeguards.security import AuthorizationDecision
 from packages.core.renderer import OCRenderer
 
-logger = logging.getLogger("dududa20")
+from packages.application.dududa_log import get_logger as _get_logger
+logger = _get_logger("dududa20")
 
 
 def _deny_hint(res, conf) -> str:

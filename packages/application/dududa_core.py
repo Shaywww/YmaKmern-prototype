@@ -32,7 +32,8 @@ from packages.application.dududa_utils import (
     _has_media_in_raw, _IGNORE_PATTERNS,
 )
 
-logger = logging.getLogger("dududa20")
+from packages.application.dududa_log import get_logger as _get_logger
+logger = _get_logger("dududa20")
 
 
 def persona_to_oc(template):

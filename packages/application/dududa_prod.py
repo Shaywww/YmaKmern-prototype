@@ -17,7 +17,8 @@ from packages.application.dududa_utils import (
     _group_safe_observations, _redact_text, _contains_restricted,
 )
 
-logger = logging.getLogger("dududa20")
+from packages.application.dududa_log import get_logger as _get_logger
+logger = _get_logger("dududa20")
 
 
 class _ProdDecisionEngine(SocialDecisionEngine):
