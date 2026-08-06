@@ -171,7 +171,10 @@ class RuntimeOrchestrator:
             has_explicit_mention=bool(envelope.mentions),
             has_reply_chain=envelope.reply_to is not None,
             is_explicit_command=is_explicit,
-            needs_tools=("查" in text or "搜" in text or "/" in text),
+            needs_tools=("查" in text or "搜" in text or "/" in text
+                         or any(k in text for k in
+                                ("几点", "时间", "几号", "星期几", "日期",
+                                 "什么时候了", "现在是", "现在几"))),
             target_users=envelope.mentions or (),
             resolved_references={"text": text},
             speech_acts=speech_acts,

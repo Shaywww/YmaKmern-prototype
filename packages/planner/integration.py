@@ -76,6 +76,16 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
         COMPLEX_PATTERNS["program_check"],
     )
 
+    # 日期/时间（文档 2.5.x 时钟能力）：注册在最后，考试/课表等模式优先
+    planner.register_pattern(
+        ("几点", "时间", "几号", "星期几", "日期", "什么时候了", "现在是", "现在几"),
+        {"name": "time_lookup", "goal": "Get current date and time",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.clock",
+                     "arguments": {"action": "get_now"},
+                     "purpose": "Get current local time",
+                     "expected_output": "Current date/time"}]},
+    )
+
     return ToolChainIntegration(planner, executor, recovery, capability_registry)
 
 class ToolChainIntegration:

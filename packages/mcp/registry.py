@@ -5,6 +5,7 @@ from .academic_calendar import AcademicCalendarService
 from .training_program import TrainingProgramService
 from .second_classroom import SecondClassroomService
 from .campus_notice import CampusNoticeService
+from .clock_service import ClockService
 import time
 from ..core.capability import ToolObservation
 
@@ -20,6 +21,7 @@ def create_all_services() -> dict:
         "training_program": TrainingProgramService(),
         "second_classroom": SecondClassroomService(),
         "campus_notice": CampusNoticeService(),
+        "clock": ClockService(),
     }
     return _SERVICES
 
@@ -56,6 +58,7 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
         "training_program": {"type":"object","properties":{"action":{"type":"string","enum":["get_program","list_majors"]},"major_id":{"type":"string"}}},
         "second_classroom": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_upcoming","get_by_category"]},"keyword":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
         "campus_notice": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_pinned","get_recent"]},"keyword":{"type":"string"},"source":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
+        "clock": {"type":"object","properties":{"action":{"type":"string","enum":["get_now","get_date","get_time"]},"fmt":{"type":"string"}}},
     }
 
     count = 0

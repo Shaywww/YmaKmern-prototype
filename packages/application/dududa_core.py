@@ -332,12 +332,14 @@ class DududaCore:
             entities.append(EntityRef(name=m.group(1), entity_type="person", confidence=0.9, evidence=m.group(0)))
         topics = []
         topic_kw = {"课程": "course", "考试": "exam", "作业": "homework", "天气": "weather",
-                    "文件": "file", "图片": "image", "成绩": "grade", "食堂": "canteen", "图书馆": "library"}
+                    "文件": "file", "图片": "image", "成绩": "grade", "食堂": "canteen", "图书馆": "library",
+                    "几点": "time", "时间": "time", "几号": "time", "星期几": "time",
+                    "日期": "time", "什么时候了": "time", "现在是": "time", "现在几": "time"}
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
         intents = list(topics) if topics else ["chitchat"]
-        needs_tools = any(t in ("course", "exam", "grade", "weather") for t in topics)
+        needs_tools = any(t in ("course", "exam", "grade", "weather", "time") for t in topics)
         has_command = any(a.act_type == "command" for a in acts)
         return PerceptionResult(
             speech_acts=tuple(acts),

@@ -83,7 +83,8 @@ class TestMCP:
         r = client.get("/mcp/services")
         assert r.status_code == 200
         data = r.json()
-        assert data["count"] == 6
+        assert data["count"] == 7
+        assert "clock" in data["services"]
         assert "course_schedule" in data["services"]
 
     def test_service_health(self, client):
@@ -129,7 +130,7 @@ class TestRuntime:
         data = r.json()
         assert "active_persona" in data
         assert data["persona_count"] >= 4
-        assert data["mcp_services"] == 6
+        assert data["mcp_services"] == 7
 
 class TestDashboard:
     def test_dashboard_html(self, client):
