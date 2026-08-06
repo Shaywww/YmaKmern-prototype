@@ -22,6 +22,21 @@ _IGNORE_PATTERNS = {
     "哈哈", "嘿嘿", "呵呵", "。。。", "……", ".....", "？", "?", "！",
 }
 
+_GREETING_RE = re.compile(
+    r"(?:你好|您好|嗨|哈喽|在吗|在嘛|早上好|中午好|下午好|晚上好|"
+    r"早安|晚安|拜拜|再见|\bhi\b|\bhello\b|\bhey\b|"
+    r"^哈+|^嘿+|^呵+|^h+$|^233+$|^[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+$)")
+
+def _is_greeting_text(text: str) -> bool:
+    """是否纯问候/轻互动（文档 2.5.4：REACT / greeting_only 判定）。
+
+    短名词（USTC/AI/课程名）不属于问候，避免被归为 REACT 或套话回复。
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return _GREETING_RE.search(t) is not None
+
 # Restricted 数据（文档 2.5.9）：密码/Token/Cookie/私钥/QQ 登录态
 # 不进 Memory、不发模型或 Tool。
 _RESTRICTED_PATTERNS = (

@@ -232,6 +232,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             extra = "用户提出了一个问题，请认真回答。"
         elif perception and perception.is_command():
             extra = f"用户请求执行操作: {', '.join(perception.candidate_intents)}。请给出有用的回复。"
+        elif perception and any(a.act_type == "noun_query"
+                                for a in perception.speech_acts):
+            extra = "用户只发来一个词或短名词，视为在询问它的含义，请直接解释，不要当打招呼。"
         system = (
             f"你是{p.display_name}，自称{p.first_person}。你就是嘟嘟哒。"
             "用颜表情风格，短回复。"

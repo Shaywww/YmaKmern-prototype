@@ -146,7 +146,8 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
             logger.info("Flow fallback LLM")
             p = plugin.personas.active
             reply = await plugin._call_llm(
-                f"你是{p.display_name}，自称{p.first_person}。你就是嘟嘟哒。用颜表情风格，短回复。",
+                f"你是{p.display_name}，自称{p.first_person}。你就是嘟嘟哒。用颜表情风格，短回复。"
+                "如果用户只发来一个词或短名词（如 USTC、AstrBot），视为在询问它的含义，直接解释，不要当打招呼。",
                 preprocessed.combined_text, max_tokens=1024, temperature=0.5)
         user_snippet = f"[用户]: {preprocessed.combined_text[:300]}"
         bot_snippet = f"[嘟嘟哒]: {reply[:300]}" if reply else ""

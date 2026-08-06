@@ -29,7 +29,7 @@ from packages.safeguards.security import (
 
 from packages.application.dududa_utils import (
     _redact_text, _contains_restricted, _atomic_write_json,
-    _has_media_in_raw, _IGNORE_PATTERNS,
+    _has_media_in_raw, _IGNORE_PATTERNS, _is_greeting_text,
 )
 
 from packages.application.dududa_log import get_logger as _get_logger
@@ -286,12 +286,11 @@ class DududaCore:
         if any(kw in clean for kw in ("帮我", "查", "搜", "算", "翻译")):
             return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
         # 纯问候/单表情 -> REACT（同会话 10s 冷却，文档 2.5.4 速率冷却）
-        if len(clean) <= 1:
-            return self._react_with_cooldown(event)
-        if len(clean) <= 2 and not any(kw in clean for kw in ("谁", "什么", "怎么", "为什么", "帮")):
+        # 短名词（USTC/AI/课程名）不属于问候，走 DIRECT_REPLY 解释含义
+        if len(clean) <= 1 or _is_greeting_text(clean):
             return self._react_with_cooldown(event)
         # 问句 -> DIRECT_REPLY
-        if any(clean.endswith(q) for q in ("?", "？", "吗", "呢", "嘛")):
+        if any(clean.endswith(q) for q in ("?", "？", "吗", "呢", "嘛", "么")):
             return SocialAction.DIRECT_REPLY, DecisionReason.DIRECT_MENTION.value
         return SocialAction.DIRECT_REPLY, DecisionReason.DIRECT_MENTION.value
 
@@ -313,12 +312,19 @@ class DududaCore:
         if not combined:
             return PerceptionResult(confidence=0.3, ambiguities=("empty_text",))
         acts = []
-        if any(combined.endswith(q) for q in ("?", "？", "吗", "呢", "嘛")):
+        if any(combined.endswith(q) for q in ("?", "？", "吗", "呢", "嘛", "么")):
             acts.append(SpeechAct(act_type="question", confidence=0.8))
         if combined.startswith("/") or any(kw in combined for kw in ("帮我", "查", "搜", "算", "翻译")):
             acts.append(SpeechAct(act_type="command", confidence=0.7))
         if not acts:
-            acts.append(SpeechAct(act_type="statement" if len(combined) > 10 else "greeting", confidence=0.5))
+            if _is_greeting_text(combined):
+                acts.append(SpeechAct(act_type="greeting", confidence=0.5))
+            else:
+                acts.append(SpeechAct(act_type="statement", confidence=0.5))
+                # 短名词/短语（无标点无空白）默认视为询问含义
+                if len(combined) <= 16 and not re.search(
+                        r"[，。！？、\s：:；;]", combined):
+                    acts.append(SpeechAct(act_type="noun_query", confidence=0.6))
         entities = []
         for m in re.finditer(r"@\S+", combined):
             entities.append(EntityRef(name=m.group(1), entity_type="person", confidence=0.9, evidence=m.group(0)))
