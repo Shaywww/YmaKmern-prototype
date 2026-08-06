@@ -295,6 +295,8 @@ class RuntimeOrchestrator:
                 permissions=permissions,
                 actor=self._actor_id(state),
                 conversation_scope=self._conversation_id(state),
+                run_id=state.run_id,
+                trace_id=state.trace_id,
             )
             step_results = await self._tool_chain.executor.execute_plan(plan, ctx)
             by_id = {s.step_id: s for s in plan.steps}

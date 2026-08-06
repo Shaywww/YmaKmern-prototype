@@ -16,6 +16,7 @@ from uuid import uuid4
 from .envelope import Platform
 from .state import RunOutcome, RuntimeState
 from .renderer import FinalResponse
+from .trace_recorder import trace_recorder
 
 
 class DeliveryStatus(str, Enum):
@@ -142,10 +143,15 @@ class DeliveryManager:
     ) -> DeliveryReceipt:
         """发送并记录回执。"""
         if not result.has_visible_output:
-            return DeliveryReceipt(
+            receipt = DeliveryReceipt(
                 run_id=result.run_id,
                 status=DeliveryStatus.SUCCEEDED,
             )
+            trace_recorder.record(
+                event="delivery", run_id=result.run_id,
+                trace_id=result.trace_id, status=receipt.status.value,
+                skipped=True, platform="")
+            return receipt
 
         self._pending[result.run_id] = result
         receipt = await self._adapter.send(
@@ -153,6 +159,11 @@ class DeliveryManager:
         )
         self._receipts[result.run_id] = receipt
         self._pending.pop(result.run_id, None)
+        trace_recorder.record(
+            event="delivery", run_id=result.run_id,
+            trace_id=result.trace_id, status=receipt.status.value,
+            skipped=False,
+            platform=getattr(platform, "value", str(platform)))
         return receipt
 
     def get_receipt(self, run_id: str) -> Optional[DeliveryReceipt]:

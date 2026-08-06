@@ -5,7 +5,15 @@
 用法: cd /opt/dududa20-prototype && python3.12 -m tests.evals.run_evals
 """
 import asyncio
+import os
 import sys
+from pathlib import Path
+
+# Eval 自身的 Trace 事件写入独立目录，不污染生产 data/traces（文档 2.5.10）
+os.environ.setdefault(
+    "DUDUDA_TRACE_DIR",
+    str(Path(__file__).resolve().parents[2] / "data" / "traces-eval"),
+)
 
 sys.path.insert(0, "/opt/dududa20-prototype")
 sys.path.insert(0, "/root/data/plugins/dududa20")

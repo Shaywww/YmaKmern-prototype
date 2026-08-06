@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Optional
+from ..core.trace_recorder import trace_recorder
 
 
 class ModelRole(str, Enum):
@@ -70,6 +71,29 @@ class ModelError(Exception):
     @property
     def stable_code(self) -> str:
         return self.kind.value
+
+
+def _trace_ids(request) -> dict:
+    """Trace 关联 ID：从请求 metadata 提取，用于跨层关联（文档 2.5.10）。"""
+    return {
+        "run_id": str(request.metadata.get("run_id", "")),
+        "trace_id": str(request.metadata.get("trace_id", "")),
+    }
+
+
+def _record_model_response(request, model_id, degraded, latency_ms, error_kind=""):
+    trace_recorder.record(
+        event="model_response", **_trace_ids(request),
+        role=request.role.value, model_id=model_id,
+        degraded=degraded, latency_ms=round(latency_ms, 1),
+        error_kind=error_kind)
+
+
+def _record_model_error(request, model_id, error_kind):
+    trace_recorder.record(
+        event="model_error", **_trace_ids(request),
+        role=request.role.value, model_id=model_id or "",
+        error_kind=error_kind)
 
 
 @dataclass(frozen=True)
@@ -239,7 +263,14 @@ class ModelRouter:
         if request.route_hint and config.route_hint_allowed:
             model_id = request.route_hint
 
+        trace_recorder.record(event="model_request", **_trace_ids(request),
+                              role=request.role.value, model_id=model_id,
+                              data_class=request.data_class.value)
+
         if provider is None:
+            _record_model_response(request, model_id, True,
+                                   (time.time() - start) * 1000,
+                                   error_kind="no_provider")
             return ModelResponse(
                 role=request.role,
                 text=self._stub_response(request.role, request.messages),
@@ -250,6 +281,8 @@ class ModelRouter:
 
         try:
             text = await provider.complete(model_id, request.messages, config)
+            _record_model_response(request, model_id, False,
+                                   (time.time() - start) * 1000)
             return ModelResponse(
                 role=request.role,
                 text=text,
@@ -263,6 +296,8 @@ class ModelRouter:
                     text = await provider.complete(
                         config.fallback_model_id, request.messages, config
                     )
+                    _record_model_response(request, config.fallback_model_id, True,
+                                           (time.time() - start) * 1000)
                     return ModelResponse(
                         role=request.role,
                         text=text,
@@ -279,8 +314,10 @@ class ModelRouter:
                         retryable=True,
                         role=request.role,
                     ) from ex
+            _record_model_error(request, model_id, e.stable_code)
             raise
         except Exception as e:
+            _record_model_error(request, model_id, "provider_unavailable")
             raise ModelError(
                 ModelErrorKind.PROVIDER_UNAVAILABLE,
                 f"provider call failed: {e}",

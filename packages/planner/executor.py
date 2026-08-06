@@ -5,6 +5,7 @@ from typing import Any, Optional
 from uuid import uuid4
 import asyncio
 import time as _time
+from ..core.trace_recorder import trace_recorder
 
 
 class AuthorizationError(RuntimeError):
@@ -26,6 +27,9 @@ class ExecutionContext:
     policy_hint: str = ""
     confirmed_ids: tuple = ()
     max_risk: Optional[object] = None
+    # ---- Trace 关联 ID（文档 2.5.10）----
+    run_id: str = ""
+    trace_id: str = ""
 
     @property
     def is_expired(self) -> bool:
@@ -88,48 +92,60 @@ class ToolExecutor:
         start = _time.time()
         retries = 0
         cap = None
+        cap_id = str(getattr(step, "capability_id", ""))
+
+        def _done(result: StepResult) -> StepResult:
+            trace_recorder.record(
+                event="tool_result", run_id=ctx.run_id, trace_id=ctx.trace_id,
+                step_id=step.step_id, capability_id=cap_id,
+                success=result.success, latency_ms=round(result.latency_ms, 1),
+                retries_used=result.retries_used)
+            return result
+
         while retries <= ctx.max_retries_per_step:
             ctx.step_count += 1
+            trace_recorder.record(
+                event="tool_call", run_id=ctx.run_id, trace_id=ctx.trace_id,
+                step_id=step.step_id, capability_id=cap_id, attempt=retries + 1)
             try:
                 # Doc 2.4.12: re-resolve Definition + re-authorize before EVERY execution
                 cap = self._reauthorize(step, ctx)
                 result = await self._call_provider(step, cap)
                 ctx.retry_count = 0
-                return StepResult(
+                return _done(StepResult(
                     step_id=step.step_id, success=True, data=result,
                     source="provider", latency_ms=(_time.time()-start)*1000,
                     retries_used=retries, completed=True,
-                )
+                ))
             except AuthorizationError as e:
                 # Auth/permission/schema/security rejections are NOT fixed by retry
-                return StepResult(
+                return _done(StepResult(
                     step_id=step.step_id, success=False, error=str(e),
                     latency_ms=(_time.time()-start)*1000,
                     retries_used=retries, completed=True,
-                )
+                ))
             except Exception as e:
                 retries += 1
                 ctx.retry_count += 1
                 # Doc 2.4.12: non-idempotent capabilities do not auto-retry
                 if cap is not None and not cap.idempotent:
-                    return StepResult(
+                    return _done(StepResult(
                         step_id=step.step_id, success=False, error=str(e),
                         latency_ms=(_time.time()-start)*1000,
                         retries_used=retries, completed=True,
-                    )
+                    ))
                 if not ctx.can_retry or ctx.is_expired:
-                    return StepResult(
+                    return _done(StepResult(
                         step_id=step.step_id, success=False, error=str(e),
                         latency_ms=(_time.time()-start)*1000,
                         retries_used=retries, completed=True,
-                    )
+                    ))
                 await asyncio.sleep(0.5 * retries)  # Exponential-ish backoff
 
-        return StepResult(
+        return _done(StepResult(
             step_id=step.step_id, success=False, error="Max retries exceeded",
             latency_ms=(_time.time()-start)*1000, retries_used=retries, completed=True,
-        )
-
+        ))
     def _reauthorize(self, step, ctx: ExecutionContext):
         """Doc 2.4.12: re-resolve Definition/Provider and check latest permissions,
         risk, confirmation, argument schema and idempotency key before execution."""

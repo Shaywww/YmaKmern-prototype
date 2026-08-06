@@ -21,6 +21,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from .state import WriteGateDecision
+from .trace_recorder import trace_recorder
 
 
 _logger = logging.getLogger("dududa20.memory")
@@ -194,7 +195,13 @@ class WriteGate:
         self._repo = repository
 
     def evaluate(self, candidate: MemoryCandidate) -> WriteGateDecision:
-        """评估候选记忆，返回写入决策。"""
+        """评估候选记忆，返回写入决策（含 Trace 记录）。"""
+        decision = self._evaluate(candidate)
+        self._record_gate(candidate, decision)
+        return decision
+
+    def _evaluate(self, candidate: MemoryCandidate) -> WriteGateDecision:
+        """原 evaluate 主体。"""
         record = candidate.proposed_record
 
         # 1. 内容检查
@@ -238,12 +245,32 @@ class WriteGate:
         self, candidate: MemoryCandidate
     ) -> WriteGateDecision:
         """评估用户显式声明的记忆（/remember）。"""
+        decision = self._evaluate_explicit(candidate)
+        self._record_gate(candidate, decision)
+        return decision
+
+    def _evaluate_explicit(
+        self, candidate: MemoryCandidate
+    ) -> WriteGateDecision:
+        """原 evaluate_explicit 主体。"""
         # 显式声明的记忆信任度更高
         if not candidate.proposed_record.content.strip():
             return WriteGateDecision.REJECT
         if candidate.proposed_record.sensitivity == SensitivityLevel.RESTRICTED:
             return WriteGateDecision.REQUIRE_CONFIRMATION
         return WriteGateDecision.ALLOW
+
+    def _record_gate(self, candidate: MemoryCandidate,
+                     decision: WriteGateDecision) -> None:
+        """Trace：记忆写入门禁决策（只记元数据，不记内容）。"""
+        record = candidate.proposed_record
+        trace_recorder.record(
+            event="memory_gate", decision=decision.value,
+            scope=str(record.scope),
+            sensitivity=getattr(record.sensitivity, "value", ""),
+            run_id=str(candidate.metadata.get("run_id", "")),
+            trace_id=str(candidate.metadata.get("trace_id", "")),
+        )
 
 
 class MemoryRepository(ABC):
