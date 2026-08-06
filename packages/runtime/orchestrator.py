@@ -192,7 +192,11 @@ class RuntimeOrchestrator:
 
     def _phase_list_capabilities(self, state: RuntimeState) -> RuntimeState:
         permissions = self._permissions_of(state)
-        candidates = self._capability_registry.filter_candidates(permissions=permissions)
+        # 生产注册表 10+ 能力：默认 top_k=8 会截掉后注册的 mcp.clock/campus_notice，
+        # 导致「现在几点」无候选可规划、降级为闲聊。放宽候选上限；
+        # 步数仍由 max_steps 与全局硬上限约束（文档 2.5.5）。
+        candidates = self._capability_registry.filter_candidates(
+            permissions=permissions, max_count=24)
         return state.transition(RuntimePhase.CAPABILITIES_LISTED, capability_candidates=candidates)
 
     async def _phase_tool_chain(self, state: RuntimeState) -> RuntimeState:

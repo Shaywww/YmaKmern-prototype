@@ -12,11 +12,13 @@ import pytest
 from packages.core.envelope import (
     MessageEnvelope, Actor, Platform, MessageKind, ConversationRef,
 )
-from packages.core.state import SocialAction, RunOutcome
+from packages.core.state import SocialAction, RunOutcome, RuntimeState
 from packages.core.decision import (
     SocialDecisionEngine, SocialDecision, DecisionReason,
 )
-from packages.core.capability import CapabilityRegistry
+from packages.core.capability import (
+    Capability, CapabilityRegistry, CapabilityRisk,
+)
 from packages.core.memory import InMemoryRepository
 from packages.core.delivery import DeliveryManager, NoOpOutputAdapter
 from packages.mcp.clock_service import ClockService
@@ -60,6 +62,48 @@ def _orch_with_clock():
         delivery_manager=DeliveryManager(NoOpOutputAdapter()),
         planner_integration=integrate_with_orchestrator(None, reg),
     )
+
+
+class _StubProvider:
+    """测试用最小 provider：health OK，execute 不会被调用。"""
+
+    def health(self):
+        return True
+
+    async def execute(self, capability, arguments):
+        return None
+
+
+class TestCandidateCutoff:
+    @pytest.mark.asyncio
+    async def test_production_shape_keeps_clock_in_candidates(self):
+        """生产注册表（3 内置 + 7 MCP = 10 项）超过默认 top_k=8 时，
+        mcp.clock 不得被候选截断（曾导致「现在几点」降级为闲聊）。"""
+        reg = CapabilityRegistry()
+        for i in range(3):
+            reg.register(
+                Capability(capability_id=f"builtin_{i}", name=f"内置{i}",
+                           description="builtin",
+                           risk=CapabilityRisk.READ_ONLY),
+                _StubProvider())
+        register_all_mcp_services(reg)
+        assert len(reg.list_enabled()) == 10
+        orch = RuntimeOrchestrator(
+            decision_engine=_ForceToolsEngine(),
+            capability_registry=reg,
+            memory_repo=InMemoryRepository(),
+            delivery_manager=DeliveryManager(NoOpOutputAdapter()),
+            planner_integration=integrate_with_orchestrator(None, reg),
+        )
+        state = RuntimeState(
+            envelope=_envelope("现在几点"), run_id="r-cut", trace_id="t-cut")
+        listed = orch._phase_list_capabilities(state)
+        ids = [c.capability.capability_id for c in listed.capability_candidates]
+        assert "mcp.clock" in ids
+        plan = orch._plan(listed, listed.capability_candidates, 4, ())
+        assert plan is not None and plan.steps
+        assert plan.steps[0].capability_id == "mcp.clock"
+
 
 
 class TestClockService:
