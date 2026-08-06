@@ -23,11 +23,23 @@ class OpenAIProvider(ModelProvider):
         api_key: str,
         base_url: str = "https://api.deepseek.com/v1",
         timeout: float = 30.0,
+        base_urls: Optional[dict[str, str]] = None,
+        api_keys: Optional[dict[str, str]] = None,
     ):
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
+        self._base_urls = {k: v.rstrip("/") for k, v in (base_urls or {}).items()}
+        self._api_keys = dict(api_keys or {})
         self._timeout = timeout
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+
+    def _base_for(self, model_id: str) -> str:
+        """按模型选择 base（降级模型可指向不同网关）。"""
+        return self._base_urls.get(model_id, self._base_url)
+
+    def _key_for(self, model_id: str) -> str:
+        """按模型选择密钥（降级模型可指向不同网关的密钥）。"""
+        return self._api_keys.get(model_id, self._api_key)
 
     async def complete(
         self,
@@ -36,7 +48,7 @@ class OpenAIProvider(ModelProvider):
         config: ModelConfig,
     ) -> str:
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {self._key_for(model_id)}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -49,14 +61,14 @@ class OpenAIProvider(ModelProvider):
             payload["response_format"] = config.structured_output
         try:
             resp = await self._client.post(
-                f"{self._base_url}/chat/completions",
+                f"{self._base_for(model_id)}/chat/completions",
                 json=payload,
                 headers=headers,
             )
             if resp.status_code == 429:
                 raise ModelError(
                     ModelErrorKind.RATE_LIMITED,
-                    f"rate limited by {self._base_url}",
+                    f"rate limited by {self._base_for(model_id)}",
                     retryable=True,
                     model_id=model_id,
                 )

@@ -21,7 +21,7 @@ from packages.core.memory import (
 )
 from packages.core.perception import PerceptionResult, SpeechAct, EntityRef
 from packages.core.renderer import DraftResponse, Persona as OCPersona
-from packages.router.router import ModelConfig, ModelRole
+from packages.router.router import ModelConfig, ModelRole, ModelError, ModelRequest
 from packages.core.envelope import Actor, Platform
 from packages.safeguards.security import (
     AuthorizationDecision, AuthorizationResult, AuthReason,
@@ -69,7 +69,8 @@ class DududaCore:
 
     def __init__(self, *, memory, personas, renderer, oc_renderer,
                  permission_engine, confirmations, cap_registry,
-                 context_builder, input_adapter, llm_provider, config):
+                 context_builder, input_adapter, llm_provider, config,
+                 model_router=None):
         self._memory = memory
         self._personas = personas
         self._renderer = renderer
@@ -80,6 +81,7 @@ class DududaCore:
         self._context_builder = context_builder
         self._input_adapter = input_adapter
         self._llm_provider = llm_provider
+        self._model_router = model_router  # 8 类角色路由（文档 2.5.7），None = 旧路径
         self._cfg = config  # 保持引用：适配层可用动态代理（monkeypatch 兼容）
         self._pending_confirms = {}
         self._react_cooldown: dict = {}  # 群聊问候 10s 冷却（文档 2.5.4）
@@ -442,15 +444,38 @@ class DududaCore:
             logger.warning("Restricted content blocked from LLM")
             return "这类敏感信息我不能处理哦，请不要发送密码、Token、Cookie 或登录凭证。"
         msgs = [{"role":"system","content":system},{"role":"user","content":user_msg}]
-        # Primary: DeepSeek via OpenAIProvider
-        try:
-            reply = await self._llm_provider.complete(self._cfg["MODEL"], msgs,
-                ModelConfig(role=ModelRole.COMPOSER, model_id=self._cfg["MODEL"],
-                            max_tokens=max_tokens, temperature=temperature))
-            reply = self._render_response(reply or "", self._persona_tone())
-            return reply or ""
-        except Exception as e:
-            logger.warning("Primary LLM (%s) failed: %s, trying fallback...", self._cfg["MODEL"], e)
+        # Primary: 角色化 Model Router（文档 2.5.7：RESPONSE_COMPOSITION + 降级）
+        if self._model_router is not None:
+            try:
+                resp = await self._model_router.route_request(
+                    ModelRequest(
+                        role=ModelRole.RESPONSE_COMPOSITION, messages=msgs,
+                        max_tokens=max_tokens, temperature=temperature),
+                    provider=self._llm_provider,
+                )
+                reply = resp.text or ""
+                if resp.degraded:
+                    logger.warning("Router degraded for %s via %s",
+                                   ModelRole.RESPONSE_COMPOSITION.value,
+                                   resp.model_id)
+            except ModelError as e:
+                logger.warning("Router %s failed (%s), trying fallback...",
+                               ModelRole.RESPONSE_COMPOSITION.value,
+                               e.stable_code)
+                reply = ""
+            if reply:
+                reply = self._render_response(reply, self._persona_tone())
+                return reply or ""
+        else:
+            # 无 Router 装配（兼容/测试）：旧主路径
+            try:
+                reply = await self._llm_provider.complete(self._cfg["MODEL"], msgs,
+                    ModelConfig(role=ModelRole.COMPOSER, model_id=self._cfg["MODEL"],
+                                max_tokens=max_tokens, temperature=temperature))
+                reply = self._render_response(reply or "", self._persona_tone())
+                return reply or ""
+            except Exception as e:
+                logger.warning("Primary LLM (%s) failed: %s, trying fallback...", self._cfg["MODEL"], e)
         # Fallback: MHCoding GPT-5.5 via httpx
         try:
             async with httpx.AsyncClient(timeout=60) as c:

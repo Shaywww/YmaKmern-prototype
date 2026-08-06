@@ -8,7 +8,7 @@ Model Router 负责统一模型选择、数据分类过滤、健康检查与降�
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Optional
 
@@ -193,10 +193,19 @@ class ModelRouter:
         # 健康状态缓存
         self._health_cache: dict[str, tuple[bool, float]] = {}
 
-    async def route_request(self, request: ModelRequest) -> ModelResponse:
-        """严格路由契约：失败抛 ModelError（稳定错误码）。"""
+    async def route_request(
+        self,
+        request: ModelRequest,
+        provider: Optional[ModelProvider] = None,
+    ) -> ModelResponse:
+        """严格路由契约：失败抛 ModelError（稳定错误码）。
+
+        provider 可临时覆盖提供者（测试注入 / 会话级切换）；
+        缺省使用自身装配的 provider。
+        """
         import time
         start = time.time()
+        provider = provider or self._provider
 
         config = self._config.get(request.role)
         if config is None:
@@ -204,6 +213,16 @@ class ModelRouter:
                 ModelErrorKind.NO_ROUTE,
                 f"No model configured for role: {request.role}",
                 role=request.role,
+            )
+
+        # 请求级预算覆盖：per-call max_tokens/temperature 生效（文档 2.5.7）
+        if request.max_tokens is not None or request.temperature is not None:
+            config = replace(
+                config,
+                max_tokens=request.max_tokens or config.max_tokens,
+                temperature=(request.temperature
+                             if request.temperature is not None
+                             else config.temperature),
             )
 
         # 数据分类过滤：敏感/受限数据不得进入未授权 Provider
@@ -220,7 +239,7 @@ class ModelRouter:
         if request.route_hint and config.route_hint_allowed:
             model_id = request.route_hint
 
-        if self._provider is None:
+        if provider is None:
             return ModelResponse(
                 role=request.role,
                 text=self._stub_response(request.role, request.messages),
@@ -230,7 +249,7 @@ class ModelRouter:
             )
 
         try:
-            text = await self._provider.complete(model_id, request.messages, config)
+            text = await provider.complete(model_id, request.messages, config)
             return ModelResponse(
                 role=request.role,
                 text=text,
@@ -241,7 +260,7 @@ class ModelRouter:
             # 可重试错误尝试降级模型
             if e.retryable and config.fallback_model_id:
                 try:
-                    text = await self._provider.complete(
+                    text = await provider.complete(
                         config.fallback_model_id, request.messages, config
                     )
                     return ModelResponse(
