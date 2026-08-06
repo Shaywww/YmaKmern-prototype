@@ -31,15 +31,30 @@ async def cmd_status_impl(plugin) -> str:
 
 
 async def cmd_mcp_impl(plugin) -> str:
-    """统一 MCP Client 状态（启用 DUDUDA_MCP_CLIENT=1 后生效）。"""
+    """MCP 状态：访问策略（按群/按人）+ 服务熔断 + 统一 Client（可选）。"""
+    from packages.mcp.access import mcp_access
+    from packages.mcp.registry import breaker_status
+
+    acc = mcp_access.status()
+    lines = [
+        f"访问策略: default={acc['default_policy']}",
+        f"  文件: {acc['path']} (exists={acc['exists']})",
+        f"  群 allow={list(acc['groups'].get('allow', ()))} deny={list(acc['groups'].get('deny', ()))}",
+        f"  人 allow={list(acc['users'].get('allow', ()))} deny={list(acc['users'].get('deny', ()))}",
+    ]
+    st = breaker_status()
+    if st:
+        lines.append("熔断: " + ", ".join(f"{k}={v}" for k, v in st.items()))
     factory = getattr(plugin, "mcp_client", None)
     if factory is None:
-        return "统一 MCP Client 未启用（需设置 DUDUDA_MCP_CLIENT=1）"
-    try:
-        tools = await factory.list_tools()
-        return f"MCP client: {factory.health()} | 发现工具: {len(tools)}"
-    except Exception as e:
-        return f"MCP client 异常: {e}"
+        lines.append("统一 MCP Client 未启用（需设置 DUDUDA_MCP_CLIENT=1）")
+    else:
+        try:
+            tools = await factory.list_tools()
+            lines.append(f"统一 MCP Client: {factory.health()} | 发现工具: {len(tools)}")
+        except Exception as e:
+            lines.append(f"MCP client 异常: {e}")
+    return "\n".join(lines)
 
 
 async def cmd_health_impl(plugin) -> str:

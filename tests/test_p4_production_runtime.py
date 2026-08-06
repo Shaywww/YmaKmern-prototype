@@ -107,6 +107,11 @@ def _make_orchestrator(memory=None):
     memory = memory or InMemoryRepository()
     reg = CapabilityRegistry()
     register_all_mcp_services(reg)
+    # iCourse 按群/按人策略：本文件专注工具链行为，固定为无限制（legacy allow）
+    import packages.runtime.orchestrator as _orch_mod
+    from packages.mcp.access import MCPAccessPolicy
+    _orch_mod.mcp_access = MCPAccessPolicy(
+        config_path="/nonexistent/mcp_access_unittest.json")
     plugin = _FakePlugin(memory)
     plugin.context_builder = ContextBuilder(
         memory_repo=memory, capability_registry=reg)

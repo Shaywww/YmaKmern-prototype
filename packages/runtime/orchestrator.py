@@ -34,6 +34,7 @@ from ..core.delivery import (
 )
 from ..safeguards.security import Redactor
 from ..core.trace_recorder import trace_recorder
+from ..mcp.access import mcp_access  # iCourse 按群/按人策略（文档 2.5.6）
 
 _TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
 _REDACTOR = Redactor()  # 工具结果脱敏（文档 2.5.9）
@@ -209,7 +210,30 @@ class RuntimeOrchestrator:
         # 步数仍由 max_steps 与全局硬上限约束（文档 2.5.5）。
         candidates = self._capability_registry.filter_candidates(
             permissions=permissions, max_count=24)
+        # iCourse MCP 按群/按人策略（文档 2.5.6）：未放行的服务不进候选
+        candidates = self._scope_filter_candidates(state, candidates)
         return state.transition(RuntimePhase.CAPABILITIES_LISTED, capability_candidates=candidates)
+
+    def _scope_filter_candidates(
+        self, state: RuntimeState, candidates: tuple[CapabilityCandidate, ...]
+    ) -> tuple[CapabilityCandidate, ...]:
+        """按群/按人策略过滤 iCourse 候选（fail closed）。
+
+        非 iCourse 能力（clock 等）恒允许；被拒能力在规划前剔除。
+        """
+        conv = self._conversation_id(state)
+        actor = self._actor_id(state)
+        kept: list[CapabilityCandidate] = []
+        denied: list[str] = []
+        for cand in candidates:
+            if mcp_access.is_allowed(cand.capability.capability_id, conv, actor):
+                kept.append(cand)
+            else:
+                denied.append(cand.capability.capability_id)
+        if denied:
+            logger.info("iCourse MCP scope-gated: %s (conv=%s actor=%s)",
+                        ",".join(denied), conv, actor)
+        return tuple(kept)
 
     async def _phase_tool_chain(self, state: RuntimeState) -> RuntimeState:
         """真实工具链：规划 -> 校验 -> 执行 -> 结果校验 -> 动作归一化。
@@ -242,6 +266,14 @@ class RuntimeOrchestrator:
             return state.transition(RuntimePhase.VALIDATED_TOOLS,
                                     tool_observations=(), errors=plan_errors,
                                     outcome=RunOutcome.DEGRADED)
+
+        # 2.5) 按群/按人策略裁剪计划步骤（fail closed）：被拒能力不执行
+        plan = self._scope_prune_plan(state, plan)
+        if plan is None:
+            return state.transition(
+                RuntimePhase.VALIDATED_TOOLS, tool_observations=(),
+                errors=("iCourse MCP not enabled for this scope",),
+                outcome=RunOutcome.DEGRADED)
 
         # 3) 执行（每步重新授权 + deadline/预算检查）
         observations = await self._execute(state, plan, max_steps, permissions)
@@ -282,6 +314,27 @@ class RuntimeOrchestrator:
             except Exception:
                 pass
         return self._fallback_plan(candidates, max_steps)
+
+    def _scope_prune_plan(self, state: RuntimeState, plan):
+        """按群/按人策略裁剪计划步骤（fail closed）。
+
+        被拒能力的步骤直接删除；全部被拒返回 None（调用方降级）。
+        """
+        conv = self._conversation_id(state)
+        actor = self._actor_id(state)
+        steps = list(getattr(plan, "steps", ()) or ())
+        kept = [s for s in steps
+                if mcp_access.is_allowed(getattr(s, "capability_id", ""), conv, actor)]
+        if not kept:
+            return None
+        if len(kept) == len(steps):
+            return plan
+        from ..planner.planner import GeneratedPlan
+        return GeneratedPlan(
+            goal=getattr(plan, "goal", "fallback"),
+            steps=tuple(kept),
+            rationale=getattr(plan, "rationale", "scope-pruned"),
+        )
 
     def _fallback_plan(self, candidates, max_steps):
         """无 Planner 集成时的退路：按相关性取前 N 个能力直连。"""

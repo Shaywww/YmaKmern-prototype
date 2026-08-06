@@ -38,11 +38,11 @@ class CourseScheduleService(BaseMCPService):
         if course_id: results = [c for c in results if c.course_id == course_id]
         if department: results = [c for c in results if c.department == department]
         if keyword:
-            kw = keyword.lower()
+            kw = (keyword or "").lower()
             results = [c for c in results if kw in c.name.lower() or kw in c.description.lower()]
         return results
 
-    async def search(self, keyword: str) -> ServiceResult:
+    async def search(self, keyword: str = "") -> ServiceResult:
         return await self.query(cache_key=f"search:{keyword}", keyword=keyword)
 
     async def get_course(self, course_id: str) -> ServiceResult:
