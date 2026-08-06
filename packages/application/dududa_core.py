@@ -449,7 +449,7 @@ class DududaCore:
         return getattr(p, "tone", "neutral")
 
     async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
-                        run_id="", trace_id=""):
+                        run_id="", trace_id="", skip_render=False):
         system = _redact_text(system or "")
         user_msg = _redact_text(user_msg or "")
         if _contains_restricted(user_msg):
@@ -477,7 +477,8 @@ class DududaCore:
                                e.stable_code)
                 reply = ""
             if reply:
-                reply = self._render_response(reply, self._persona_tone())
+                if not skip_render:
+                    reply = self._render_response(reply, self._persona_tone())
                 return reply or ""
         else:
             # 无 Router 装配（兼容/测试）：旧主路径
@@ -485,7 +486,8 @@ class DududaCore:
                 reply = await self._llm_provider.complete(self._cfg["MODEL"], msgs,
                     ModelConfig(role=ModelRole.COMPOSER, model_id=self._cfg["MODEL"],
                                 max_tokens=max_tokens, temperature=temperature))
-                reply = self._render_response(reply or "", self._persona_tone())
+                if not skip_render:
+                    reply = self._render_response(reply or "", self._persona_tone())
                 return reply or ""
             except Exception as e:
                 logger.warning("Primary LLM (%s) failed: %s, trying fallback...", self._cfg["MODEL"], e)
@@ -501,14 +503,15 @@ class DududaCore:
                 )
                 r.raise_for_status()
                 reply = r.json()["choices"][0]["message"]["content"]
-            reply = self._render_response(reply or "", self._persona_tone())
+            if not skip_render:
+                reply = self._render_response(reply or "", self._persona_tone())
             return reply or ""
         except Exception as e2:
             logger.exception("Fallback LLM also failed: %s", e2)
             return "诶呀，短路了一下..."
 
     async def _call_vision(self, system, user_text, image_b64, mime,
-                           run_id="", trace_id=""):
+                           run_id="", trace_id="", skip_render=False):
         system = _redact_text(system or "")
         user_text = _redact_text(user_text or "")
         if _contains_restricted(user_text):
@@ -549,7 +552,8 @@ class DududaCore:
                     degraded=False,
                     latency_ms=round((time.time() - _v_start) * 1000, 1),
                     error_kind="")
-                reply = self._render_response(reply or "", self._persona_tone())
+                if not skip_render:
+                    reply = self._render_response(reply or "", self._persona_tone())
                 return reply or ""
         except Exception as e:
             logger.exception("Vision error: %s", e)

@@ -156,9 +156,9 @@ class TestHybridRenderer:
     """2.5.8 hybrid Renderer：LLM 风格转换 + 事实锚点保持。"""
 
     def _persona(self):
-        # 表情计数按"连续 CJK/符号段"统计，测试用宽松上限聚焦事实锚点
+        # 表情计数按"连续 CJK/符号段"统计，按生产 persona 上限 2 校验真实 emoji 计数
         return Persona(persona_id="t", version="1.0", name="测试",
-                       max_emojis_per_message=10)
+                       max_emojis_per_message=2)
 
     def _draft(self):
         return DraftResponse(
