@@ -111,7 +111,7 @@ class RuntimeOrchestrator:
                 state = state.transition(RuntimePhase.COMPOSED)
 
             state = self._phase_compose(state)
-            state = self._phase_render(state)
+            state = await self._phase_render(state)
             state = self._with_updates(
                 state, memory_candidates=self._build_memory_candidates(state)
             )
@@ -362,10 +362,17 @@ class RuntimeOrchestrator:
         )
         return state.transition(RuntimePhase.COMPOSED, draft_response=draft)
 
-    def _phase_render(self, state: RuntimeState) -> RuntimeState:
+    async def _phase_render(self, state: RuntimeState) -> RuntimeState:
         if state.draft_response is None:
             return state.transition(RuntimePhase.RENDERED, final_response=FinalResponse(text=""))
-        final = self._renderer.render(state.draft_response)
+        renderer = self._renderer
+        if hasattr(renderer, "render_hybrid"):
+            # 2.5.8 hybrid：LLM 风格转换 + 事实校验，失败回退确定性渲染
+            final = await renderer.render_hybrid(
+                state.draft_response, run_id=state.run_id,
+                trace_id=state.trace_id)
+        else:
+            final = renderer.render(state.draft_response)
         return state.transition(RuntimePhase.RENDERED, final_response=final)
 
     def _build_draft_text(self, state: RuntimeState) -> str:

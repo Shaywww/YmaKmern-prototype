@@ -6,8 +6,14 @@ OC Renderer 接收 DraftResponse，用版本化 Persona 渲染为 FinalResponse�
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Awaitable, Callable, Optional
+
+from .trace_recorder import trace_recorder
+
+# 模型回调：(prompt, *, run_id="", trace_id="") -> 转换后的回复文本
+RenderLLM = Callable[..., Awaitable[str]]
 
 
 @dataclass(frozen=True)
@@ -135,8 +141,12 @@ class OCRenderer:
     输出 FinalResponse。
     """
 
-    def __init__(self, persona: Optional[Persona] = None):
+    def __init__(self, persona: Optional[Persona] = None,
+                 llm: Optional[RenderLLM] = None,
+                 max_repairs: int = 1):
         self._persona = persona
+        self._llm = llm
+        self._max_repairs = max(0, int(max_repairs))
         self._validator = RenderValidator()
 
     def render(self, draft: DraftResponse) -> FinalResponse:
@@ -177,6 +187,101 @@ class OCRenderer:
             fact_check_errors=errors,
             emoji_count=self._count_emojis(rendered_text if passed else draft.text),
         )
+
+    # ---- 2.5.8 hybrid：模型风格转换 + 事实保持 ----
+
+    def _build_render_prompt(self, persona: Persona,
+                             draft: DraftResponse) -> str:
+        """构造风格转换 Prompt：人格约束 + 草稿 + 不可变锚点。"""
+        parts = [persona.render_prompt()]
+        parts.append("以下是需要你按人格重新表达的草稿回复：")
+        parts.append(draft.text)
+        if draft.fact_anchors:
+            parts.append("不可修改的事实锚点（必须逐字保留）：")
+            for a in draft.fact_anchors:
+                parts.append(f"- {a.field}: {a.value}")
+        if draft.citations:
+            parts.append("引用（必须保留）：" + "；".join(draft.citations))
+        if draft.refusals:
+            parts.append("拒绝结论（不得软化）：" + "；".join(draft.refusals))
+        if draft.immutable_constraints:
+            parts.append("硬约束（不得违反）："
+                         + "；".join(draft.immutable_constraints))
+        parts.append(
+            "只输出转换后的回复文本本身，不要任何解释、前缀或引号。")
+        return "\n".join(parts)
+
+    async def _invoke_llm(self, prompt: str,
+                          run_id: str, trace_id: str) -> str:
+        """调用模型回调；兼容 (prompt) 与 (prompt, run_id, trace_id) 签名。"""
+        try:
+            return await self._llm(prompt, run_id=run_id, trace_id=trace_id)
+        except TypeError:
+            return await self._llm(prompt)
+
+    def _final(self, text: str, persona: Persona,
+               passed: bool, errors: tuple[str, ...]) -> FinalResponse:
+        return FinalResponse(
+            text=text, persona_id=persona.persona_id,
+            persona_version=persona.version,
+            fact_check_passed=passed, fact_check_errors=errors,
+            emoji_count=self._count_emojis(text),
+        )
+
+    async def render_hybrid(self, draft: DraftResponse,
+                            run_id: str = "", trace_id: str = "") -> FinalResponse:
+        """hybrid 渲染：LLM 按 Persona 做风格转换，校验失败最多修复一次，
+        仍失败回退确定性渲染（原文，事实安全）。llm 未配置时等同 render。"""
+        start = time.time()
+        persona = self._persona or Persona(
+            persona_id="default", version="1.0", name="嘟嘟哒"
+        )
+        if self._llm is None:
+            return self.render(draft)
+
+        prompt = self._build_render_prompt(persona, draft)
+        text = ""
+        try:
+            text = (await self._invoke_llm(
+                prompt, run_id, trace_id) or "").strip()
+        except Exception:
+            text = ""
+        if not text:
+            return self.render(draft)
+
+        errors: tuple[str, ...] = ()
+        for attempt in range(self._max_repairs + 1):
+            final = self._final(text, persona, False, ())
+            passed, errors = self._validator.validate(draft, final, persona)
+            if passed:
+                trace_recorder.record(
+                    event="render_result", run_id=run_id, trace_id=trace_id,
+                    passed=True, fallback=False, attempts=attempt + 1,
+                    latency_ms=round((time.time() - start) * 1000, 1))
+                return self._final(text, persona, True, ())
+            if attempt >= self._max_repairs:
+                break
+            repair_prompt = (
+                prompt
+                + "\n\n上一次转换不符合要求：\n"
+                + "\n".join(errors)
+                + "\n请修正后重新输出。")
+            try:
+                text = (await self._invoke_llm(
+                    repair_prompt, run_id, trace_id) or "").strip()
+            except Exception:
+                text = ""
+            if not text:
+                break
+
+        fallback = self.render(draft)
+        trace_recorder.record(
+            event="render_result", run_id=run_id, trace_id=trace_id,
+            passed=True, fallback=True,
+            attempts=self._max_repairs + 1,
+            errors=list(errors)[:3],
+            latency_ms=round((time.time() - start) * 1000, 1))
+        return fallback
 
     @staticmethod
     def _count_emojis(text: str) -> int:

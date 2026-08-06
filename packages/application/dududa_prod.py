@@ -144,7 +144,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             else:
                 state = state.transition(RuntimePhase.COMPOSED)
             state = await self._phase_compose_prod(state)
-            state = self._phase_render(state)
+            state = await self._phase_render(state)
             state = self._with_updates(
                 state, memory_candidates=self._build_memory_candidates(state)
             )
