@@ -150,7 +150,8 @@ async def complete_delivery_after_send(plugin, event) -> None:
     result, _reply, ready_ts = item
     latency_ms = int((time.time() - ready_ts) * 1000)
     try:
-        platform = str(getattr(event, "platform", "") or "")
+        _plat = getattr(event, "platform", None)
+        platform = str(getattr(_plat, "name", "") or _plat or "")
     except Exception:
         platform = ""
     receipt = DeliveryReceipt(
