@@ -29,8 +29,10 @@ from ..core.delivery import (
     RuntimeResult, DeliveryReceipt, CompletionReceipt,
     DeliveryManager, NoOpOutputAdapter,
 )
+from ..safeguards.security import Redactor
 
 _TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
+_REDACTOR = Redactor()  # 工具结果脱敏（文档 2.5.9）
 
 
 class RuntimeOrchestrator:
@@ -358,7 +360,8 @@ class RuntimeOrchestrator:
             return "抱歉，我暂时不能回答这个问题。"
         obs = state.tool_observations
         if obs:
-            ok_texts = [str(o.data) for o in obs if o.success and o.data is not None]
+            ok_texts = [str(_REDACTOR.redact(o.data)[0])
+                        for o in obs if o.success and o.data is not None]
             if ok_texts:
                 return chr(10).join(ok_texts)
             if state.outcome == RunOutcome.DEGRADED:
@@ -373,7 +376,10 @@ class RuntimeOrchestrator:
         anchors: list[FactAnchor] = []
         for obs in state.tool_observations:
             if obs.success and obs.data is not None:
-                anchors.append(FactAnchor(field=obs.capability_id, value=str(obs.data), source=obs.source))
+                anchors.append(FactAnchor(
+                    field=obs.capability_id,
+                    value=str(_REDACTOR.redact(obs.data)[0]),
+                    source=obs.source))
         return tuple(anchors)
 
     # ---- 记忆候选（文档 2.3.16：只产生候选，投递确认后过 Write Gate） ----
@@ -392,7 +398,7 @@ class RuntimeOrchestrator:
                 candidates.append(MemoryCandidate(
                     proposed_record=MemoryRecord(
                         scope=scope_tool,
-                        content=str(obs.data)[:2000],
+                        content=str(_REDACTOR.redact(obs.data)[0])[:2000],
                         source="tool",
                         sensitivity=SensitivityLevel.INTERNAL,
                         evidence=(f"tool:{obs.capability_id}",),
