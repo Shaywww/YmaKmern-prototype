@@ -13,6 +13,7 @@ from ..core.state import (
 )
 from ..core.context import ContextBuilder, ContextSnapshot, PolicyView
 from ..core.perception import PerceptionResult, SpeechAct
+from ..core.perception_store import record_state_perception
 from ..core.decision import SocialDecision, SocialDecisionEngine, DecisionReason
 from ..core.capability import (
     CapabilityRegistry, CapabilityCandidate, ToolObservation,
@@ -191,6 +192,7 @@ class RuntimeOrchestrator:
             candidate_intents=("course_query",) if ("查" in text or "搜" in text) else (),
             confidence=1.0,
         )
+        record_state_perception(perception, state, source="rule")
         return state.transition(RuntimePhase.PERCEIVED, perception=perception)
 
     def _phase_decide(self, state: RuntimeState) -> RuntimeState:

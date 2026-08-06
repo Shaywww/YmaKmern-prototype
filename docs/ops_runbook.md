@@ -95,3 +95,4 @@ systemctl is-active astrbot                 # active
 ```
 
 真机行为抽查：QQ 发图 + `@机器人` 追问，`journalctl -u astrbot -n 50 | grep -E "Flow start|Run end"` 应出现 `run_id/trace_id` 配对的 `Flow start → Run end → Flow end`；`data/traces/2026-08-06.jsonl`（按日滚动）记录 `model_request/model_response/render_result/memory_gate/run_end/flow_end` 等事件。
+感知结果按日入库 `data/perceptions/YYYY-MM-DD.jsonl`（目录可用 `DUDUDA_PERCEPTION_DIR` 覆盖），记录每条消息的 speech_acts/topics/entities/candidate_intents/needs_tools/confidence 与 run/trace 绑定。

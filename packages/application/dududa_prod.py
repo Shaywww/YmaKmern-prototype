@@ -11,6 +11,7 @@ from packages.core.capability import CapProvider, ToolObservation
 from packages.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from packages.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
 from packages.runtime.orchestrator import RuntimeOrchestrator
+from packages.core.perception_store import record_state_perception
 from uuid import uuid4
 
 from packages.application.dududa_utils import (
@@ -208,6 +209,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     def _phase_perceive(self, state):
         if self._injected_perception is not None:
+            record_state_perception(
+                self._injected_perception, state, source="rule")
             return state.transition(RuntimePhase.PERCEIVED,
                                     perception=self._injected_perception)
         return super()._phase_perceive(state)

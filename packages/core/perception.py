@@ -6,8 +6,10 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Optional
+from uuid import uuid4
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,39 @@ class PerceptionResult:
             a.act_type == "command" for a in self.speech_acts
         )
 
+    def to_record(self, *, record_id: str = "", run_id: str = "",
+                  trace_id: str = "", ts_ms: Optional[int] = None,
+                  platform: str = "", bot_id: str = "",
+                  conversation_id: str = "", actor_id: str = "",
+                  text: str = "", source: str = "rule") -> "PerceptionRecord":
+        """把感知结果落成可入库的结构化 PerceptionRecord（文档 2.5.4）。"""
+        return PerceptionRecord(
+            record_id=record_id or uuid4().hex,
+            run_id=run_id,
+            trace_id=trace_id,
+            ts_ms=ts_ms if ts_ms is not None else int(time.time() * 1000),
+            platform=platform,
+            bot_id=bot_id,
+            conversation_id=conversation_id,
+            actor_id=actor_id,
+            text=text,
+            source=source,
+            schema_version=self.schema_version,
+            speech_acts=self.speech_acts,
+            topics=self.topics,
+            entities=self.entities,
+            resolved_references=dict(self.resolved_references or {}),
+            candidate_intents=self.candidate_intents,
+            needs_tools=self.needs_tools,
+            suggested_capabilities=self.suggested_capabilities,
+            confidence=self.confidence,
+            ambiguities=self.ambiguities,
+            has_explicit_mention=self.has_explicit_mention,
+            has_reply_chain=self.has_reply_chain,
+            is_explicit_command=self.is_explicit_command,
+            valid=self.is_valid,
+        )
+
     @property
     def is_valid(self) -> bool:
         """检查结果是否通过基本 Schema 校验。"""
@@ -91,3 +126,68 @@ class PerceptionResult:
             if e.confidence < 0.0 or e.confidence > 1.0:
                 return False
         return True
+
+
+@dataclass(frozen=True)
+class PerceptionRecord:
+    """感知结果的结构化快照（入库版本）。
+
+    绑定 run_id/trace_id 与所在会话（platform/bot/conversation/actor），
+    保留完整证据（文本、言语行为、实体、指代、意图、工具需求、置信度、
+    歧义与平台事实），供 Eval、用户画像与后续 WebUI 使用。
+    """
+    record_id: str
+    run_id: str = ""
+    trace_id: str = ""
+    ts_ms: int = 0
+    platform: str = ""
+    bot_id: str = ""
+    conversation_id: str = ""
+    actor_id: str = ""
+    text: str = ""
+    source: str = "rule"          # rule | model | injected
+    schema_version: str = "1.0"
+    speech_acts: tuple[SpeechAct, ...] = ()
+    topics: tuple[str, ...] = ()
+    entities: tuple[EntityRef, ...] = ()
+    resolved_references: dict[str, str] = field(default_factory=dict)
+    candidate_intents: tuple[str, ...] = ()
+    needs_tools: bool = False
+    suggested_capabilities: tuple[str, ...] = ()
+    confidence: float = 0.0
+    ambiguities: tuple[str, ...] = ()
+    has_explicit_mention: bool = False
+    has_reply_chain: bool = False
+    is_explicit_command: bool = False
+    valid: bool = True
+
+    def to_dict(self) -> dict:
+        """JSON 可序列化视图（ts/ts_ms 由 Store 统一写入）。"""
+        return {
+            "record_id": self.record_id,
+            "run_id": self.run_id,
+            "trace_id": self.trace_id,
+            "platform": self.platform,
+            "bot_id": self.bot_id,
+            "conversation_id": self.conversation_id,
+            "actor_id": self.actor_id,
+            "text": self.text,
+            "source": self.source,
+            "schema_version": self.schema_version,
+            "speech_acts": [[a.act_type, a.confidence]
+                            for a in self.speech_acts],
+            "topics": list(self.topics),
+            "entities": [{"name": e.name, "entity_type": e.entity_type,
+                          "confidence": e.confidence, "evidence": e.evidence}
+                         for e in self.entities],
+            "resolved_references": dict(self.resolved_references or {}),
+            "candidate_intents": list(self.candidate_intents),
+            "needs_tools": self.needs_tools,
+            "suggested_capabilities": list(self.suggested_capabilities),
+            "confidence": self.confidence,
+            "ambiguities": list(self.ambiguities),
+            "has_explicit_mention": self.has_explicit_mention,
+            "has_reply_chain": self.has_reply_chain,
+            "is_explicit_command": self.is_explicit_command,
+            "valid": self.valid,
+        }
