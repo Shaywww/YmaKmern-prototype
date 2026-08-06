@@ -37,7 +37,8 @@ class ExecutionContext:
 
     @property
     def can_retry(self) -> bool:
-        return self.retry_count < self.max_retries_per_step and not self.is_expired
+        # max_retries_per_step 表示允许的重试次数（不含首次尝试）
+        return self.retry_count <= self.max_retries_per_step and not self.is_expired
 
 @dataclass
 class StepResult:
@@ -72,6 +73,10 @@ class ToolExecutor:
         for batch in batches:
             if not ctx.can_execute_step:
                 break
+            remaining = ctx.max_steps - ctx.step_count
+            if remaining <= 0:
+                break
+            batch = batch[:remaining]  # 硬上限按步生效，不因并行 batch 越界
             batch_results = await asyncio.gather(*[self._execute_step(s, ctx) for s in batch])
             results.extend(batch_results)
             for r in batch_results:

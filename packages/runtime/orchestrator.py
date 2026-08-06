@@ -190,7 +190,8 @@ class RuntimeOrchestrator:
         state = state.transition(RuntimePhase.TOOLS_PLANNED)
         if not candidates:
             return state.transition(RuntimePhase.VALIDATED_TOOLS,
-                                    tool_observations=(), errors=("No capabilities",))
+                                    tool_observations=(), errors=("No capabilities",),
+                                    outcome=RunOutcome.DEGRADED)
 
         # 1) 规划：优先 Planner 模式；无集成或空计划时退化为直连 Top-K
         plan = self._plan(state, candidates, max_steps, permissions)
