@@ -143,3 +143,27 @@ systemctl is-active astrbot                 # active
     grep -n "class ProfileStore" packages/core/profile.py
     python3.12 -m pytest tests/test_profile_session_p0.py -q   # 预期全绿
     # QQ @机器人 发：叫我XX / 我喜欢XX -> 检查 data/profiles.json
+
+## 8. Dashboard 收敛（文档清单第 7 项）
+
+管理面端口 6185（AstrBot Dashboard）、3001/6099（NapCat OneBot / WebUI）仅放行受信来源：
+本机回环、私网（10/8、172.16/12、192.168/16）、CGNAT（100.64/10）、运维公网 IP；其余一律 DROP。
+
+- 脚本 /usr/local/sbin/dududa-fw.sh（幂等，可重复执行）+ systemd 单元 dududa-fw.service（开机自启）。
+- 关键坑：podman 发布端口由 DNAT 转发且容器重启后 IP 会漂移（10.88.0.2 -> 10.88.0.3），
+  INPUT 链看不到 3001/6099 流量；拦截必须放 raw PREROUTING（DNAT 之前，nat 表禁止 DROP），
+  FORWARD 纵深防御按 podman 子网 10.88.0.0/16 匹配。
+- token 已重置：NapCat WebUI token（webui.json）、OneBot 反向 WS access token
+  （onebot11_*.json 与 AstrBot cmd_config.json 双侧一致）；旧配置备份为 .bak-<ts>。
+- autoLoginAccount 已设为 3823883634，NapCat 重启后自动登录。
+
+验证：
+
+    bash /usr/local/sbin/dududa-fw.sh && iptables -t raw -L DUDUDA-PRE -n   # 白名单 RETURN + DROP
+    systemctl is-enabled dududa-fw                                        # enabled
+    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:6099/         # 301（白名单可达）
+    # 负向验证（raw 表不支持 REJECT，用 DROP）：
+    iptables -t raw -I DUDUDA-PRE 1 -p tcp -m tcp --dport 6099 -s <本机IP> -j DROP
+    curl -s -m 6 http://<公网IP>:6099/   # 超时/000
+    iptables -t raw -D DUDUDA-PRE -p tcp -m tcp --dport 6099 -s <本机IP> -j DROP
+    grep -F autoLogin /opt/napcat/config/webui.json                       # 3823883634
