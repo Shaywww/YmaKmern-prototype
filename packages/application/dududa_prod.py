@@ -83,7 +83,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     """
 
     def __init__(self, plugin, decision_engine, capability_registry, memory_repo,
-                 renderer, planner_integration, profile_store=None):
+                 renderer, planner_integration, profile_store=None,
+                 idempotency_registry=None):
         super().__init__(
             context_builder=plugin.context_builder,
             decision_engine=decision_engine,
@@ -92,6 +93,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             renderer=renderer,
             planner_integration=planner_integration,
             profile_store=profile_store,
+            idempotency_registry=idempotency_registry,
         )
         self._profile_store = profile_store
         self._plugin = plugin
@@ -123,6 +125,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             run_id=run_id or uuid4().hex,
             trace_id=trace_id or uuid4().hex,
         )
+        if self._dedupe_envelope(envelope):
+            # 幂等键重复：该消息已被处理过（已有人回答）-> 不回复、可审计
+            state = state.transition(
+                RuntimePhase.ABORTED, outcome=RunOutcome.IGNORED,
+                decision_reason=DecisionReason.ALREADY_ANSWERED.value,
+                social_decision=SocialAction.IGNORE,
+            )
+            self._last_state = state
+            return self._result_from_state(state, RunOutcome.IGNORED)
+
         try:
             state = self._phase_validate(state)
             if state.phase == RuntimePhase.ABORTED:

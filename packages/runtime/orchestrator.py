@@ -15,6 +15,7 @@ from ..core.context import ContextBuilder, ContextSnapshot, PolicyView
 from ..core.perception import PerceptionResult, SpeechAct
 from ..core.perception_store import record_state_perception
 from ..core.decision import SocialDecision, SocialDecisionEngine, DecisionReason
+from ..core.idempotency import MessageIdempotencyRegistry
 from ..core.capability import (
     CapabilityRegistry, CapabilityCandidate, ToolObservation,
     ToolPlanValidator, ValidatorAction,
@@ -56,6 +57,7 @@ class RuntimeOrchestrator:
         delivery_manager: Optional[DeliveryManager] = None,
         planner_integration=None,
         profile_store: Optional[Any] = None,
+        idempotency_registry: Optional[MessageIdempotencyRegistry] = None,
     ):
         self._context_builder = context_builder or ContextBuilder()
         self._decision_engine = decision_engine or SocialDecisionEngine()
@@ -66,6 +68,7 @@ class RuntimeOrchestrator:
         self._write_gate = WriteGate(self._memory_repo)
         self._tool_chain = planner_integration
         self._profile_store = profile_store  # SESSION_STATE / USER_PROFILE（文档 2.4.6）
+        self._idempotency_registry = idempotency_registry  # Connector 幂等键判重（文档 2.4.1）
         self._last_state: Optional[RuntimeState] = None
         self._completions: dict[str, CompletionReceipt] = {}
 
@@ -86,6 +89,15 @@ class RuntimeOrchestrator:
             run_id=run_id or uuid4().hex,
             trace_id=trace_id or uuid4().hex,
         )
+        if self._dedupe_envelope(envelope):
+            # 幂等键重复：该消息已被处理过（已有人回答）-> 不回复、可审计
+            state = state.transition(
+                RuntimePhase.ABORTED, outcome=RunOutcome.IGNORED,
+                decision_reason=DecisionReason.ALREADY_ANSWERED.value,
+                social_decision=SocialAction.IGNORE,
+            )
+            self._last_state = state
+            return self._result_from_state(state, RunOutcome.IGNORED)
 
         try:
             state = self._phase_validate(state)
@@ -134,6 +146,29 @@ class RuntimeOrchestrator:
                 RuntimePhase.ABORTED, outcome=RunOutcome.FAILED)
             self._last_state = state
             return self._result_from_state(state, RunOutcome.FAILED)
+
+
+    def _dedupe_envelope(self, envelope: MessageEnvelope) -> bool:
+        """Connector 幂等键 (platform, bot_id, message_id) 判重（文档 2.4.1）。
+
+        未注入注册表或缺少 platform_message_id 时放行；
+        判重异常不阻断主流程（降级为放行）。
+        """
+        reg = self._idempotency_registry
+        if reg is None:
+            return False
+        mid = getattr(envelope, "platform_message_id", None)
+        if not mid:
+            return False
+        try:
+            plat = getattr(getattr(envelope, "platform", None), "value", "qq")
+        except Exception:
+            plat = "qq"
+        try:
+            return not reg.check_and_register(plat, "dududa", mid)
+        except Exception as e:
+            logger.warning("Idempotency check failed: %s", e)
+            return False
 
     # ---- 阶段实现 ----
 
