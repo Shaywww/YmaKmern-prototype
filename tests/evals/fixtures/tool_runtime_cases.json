@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "cases": [
+    {"name": "hard_cap", "plan_steps": 10, "max_steps": 8, "expect_executed": 8},
+    {"name": "retry_idempotent", "max_retries": 2, "fail_times": 2, "expect_attempts": 3},
+    {"name": "retry_non_idempotent", "max_retries": 2, "fail_times": 99, "expect_attempts": 1},
+    {"name": "no_candidates", "expect_outcome": "degraded"}
+  ]
+}

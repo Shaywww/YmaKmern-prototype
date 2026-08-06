@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "cases": [
+    {"text": "好的，明天上午十点开会哦～", "anchors": [{"field": "time", "value": "明天上午十点"}]},
+    {"text": "数据结构课程在周四下午 2 点，教室 5201。", "anchors": [{"field": "course", "value": "数据结构"}, {"field": "room", "value": "5201"}]},
+    {"text": "这次考试时间是 8 月 20 日，不要记错啦！", "anchors": [{"field": "date", "value": "8 月 20 日"}]}
+  ]
+}

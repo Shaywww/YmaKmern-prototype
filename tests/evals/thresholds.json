@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "perception": {
+    "accuracy": {"gte": 1.0},
+    "greeting_misfires": {"eq": 0}
+  },
+  "social_decision": {
+    "accuracy": {"gte": 1.0},
+    "distinct_actions": {"gte": 4}
+  },
+  "tool_runtime": {
+    "hard_cap_ok": true,
+    "retry_ok": true,
+    "non_idempotent_ok": true,
+    "degrade_ok": true
+  },
+  "memory_writegate": {
+    "accuracy": {"gte": 1.0},
+    "integration_restricted_blocked": true,
+    "integration_normal_stored": true
+  },
+  "oc_render": {
+    "anchor_retention": {"gte": 1.0}
+  }
+}

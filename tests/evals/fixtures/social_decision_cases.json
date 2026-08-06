@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "cases": [
+    {"text": "@bot USTC", "expect": "direct_reply"},
+    {"text": "@bot AI", "expect": "direct_reply"},
+    {"text": "@bot 你好", "expect": "react", "session": "s_greet1"},
+    {"text": "@bot 哈", "expect": "react", "session": "s_greet2"},
+    {"text": "@bot 帮我查一下数据结构课程", "expect": "use_tools"},
+    {"text": "@bot 明天考什么？", "expect": "direct_reply"},
+    {"text": "大家好", "at": false, "expect": "ignore"},
+    {"text": "在吗", "group": null, "expect": "direct_reply"}
+  ]
+}

@@ -32,6 +32,7 @@ from ..core.delivery import (
     DeliveryManager, NoOpOutputAdapter,
 )
 from ..safeguards.security import Redactor
+from ..core.trace_recorder import trace_recorder
 
 _TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
 _REDACTOR = Redactor()  # 工具结果脱敏（文档 2.5.9）
@@ -524,6 +525,17 @@ class RuntimeOrchestrator:
                 "Run error | run_id=%s trace_id=%s errors=%s",
                 state.run_id, state.trace_id, list(state.errors)[:5],
             )
+            trace_recorder.record(
+                event="run_error", run_id=state.run_id, trace_id=state.trace_id,
+                errors=list(state.errors)[:5],
+            )
+        trace_recorder.record(
+            event="run_end", run_id=state.run_id, trace_id=state.trace_id,
+            outcome=_outcome.value, final_phase=state.phase.value,
+            errors=len(state.errors), phases_visited=len(state.trace),
+            tool_steps=len(state.tool_observations),
+            decision_reason=state.decision_reason or "",
+        )
         return RuntimeResult(
             run_id=state.run_id,
             trace_id=state.trace_id,

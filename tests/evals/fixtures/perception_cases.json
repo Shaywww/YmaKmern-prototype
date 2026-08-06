@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "cases": [
+    {"text": "USTC", "expect": ["statement", "noun_query"], "not_expect": ["greeting"]},
+    {"text": "AI", "expect": ["statement", "noun_query"], "not_expect": ["greeting"]},
+    {"text": "数据结构", "expect": ["statement", "noun_query"], "not_expect": ["greeting"]},
+    {"text": "你好", "expect": ["greeting"]},
+    {"text": "哈", "expect": ["greeting"]},
+    {"text": "明天考什么？", "expect": ["question"]},
+    {"text": "USTC是什么", "expect": ["question"]},
+    {"text": "帮我查一下数据结构课程", "expect": ["command"]},
+    {"text": "现在几点", "expect": ["statement"]},
+    {"text": "今天天气怎么样？", "expect": ["question"]}
+  ]
+}

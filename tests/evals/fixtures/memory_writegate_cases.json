@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "cases": [
+    {"name": "ttl_non_positive", "content": "过期记忆", "ttl_seconds": 0, "source": "message", "evidence": ["e1"], "expect": "not_allow"},
+    {"name": "missing_evidence", "content": "没有证据的记忆", "source": "message", "evidence": [], "expect": "not_allow"},
+    {"name": "normal_allow", "content": "明天考试在上午", "source": "message", "evidence": ["msg:m1"], "expect": "allow"},
+    {"name": "exact_duplicate", "content": "明天考试在上午", "source": "message", "evidence": ["msg:m2"], "pre_seed": "明天考试在上午", "expect": "not_allow"}
+  ],
+  "integration": {
+    "restricted": "我的密码是 sk-abc123def456ghi789jklmno",
+    "normal": "下午三点的会议改到四点了"
+  }
+}

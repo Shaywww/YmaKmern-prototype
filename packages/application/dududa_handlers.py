@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from packages.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
 from packages.core.delivery import DeliveryReceipt, DeliveryStatus
+from packages.core.trace_recorder import trace_recorder
 
 from packages.application.dududa_utils import (
     _detect_media, _has_media_in_raw, _contains_restricted,
@@ -190,12 +191,26 @@ async def run_message_flow(plugin, event) -> str | None:
     _msg_snip = str(getattr(event, "message_str", "") or "")[:80]
     logger.info("Flow start | run_id=%s trace_id=%s msg=%r",
                 run_id, trace_id, _msg_snip)
+    _flow_ts = time.time()
     try:
-        return await _run_flow_inner(
+        _session = str(event.get_session_id())
+    except Exception:
+        _session = ""
+    trace_recorder.record(event="flow_start", run_id=run_id, trace_id=trace_id,
+                          msg=_msg_snip, session=_session)
+    try:
+        reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
+        trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
+                              duration_ms=int((time.time() - _flow_ts) * 1000),
+                              reply=(reply or "")[:200])
+        return reply
     except Exception as e:
         logger.exception("Flow error | run_id=%s trace_id=%s: %s",
                          run_id, trace_id, e)
+        trace_recorder.record(event="flow_error", run_id=run_id, trace_id=trace_id,
+                              duration_ms=int((time.time() - _flow_ts) * 1000),
+                              error=str(e)[:300])
         return None
 
 
