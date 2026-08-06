@@ -25,6 +25,8 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger("dududa20.mcp.client")
 
+from ..core.trace_recorder import trace_recorder  # noqa: E402
+
 
 class McpErrorKind(str, Enum):
     """归一化错误类型。"""
@@ -186,6 +188,10 @@ class UnifiedMCPClient:
         breaker_failures: int = 5,
         breaker_reset: float = 30.0,
         audit_path: Optional[str] = None,
+        export_root: Optional[str] = None,
+        data_dir: Optional[str] = None,
+        crawl_limit: int = 0,
+        crawl_max_steps: int = 0,
         transport_factory: Optional[Callable[[], StdioMCPTransport]] = None,
     ):
         self._cmd = cmd
@@ -195,6 +201,15 @@ class UnifiedMCPClient:
         self._breaker_threshold = max(1, int(breaker_failures))
         self._breaker_reset = max(0.0, float(breaker_reset))
         self._audit_path = audit_path
+        # doc 2.5.6: export/import/crawl/refresh side-effect path args
+        # must resolve inside export root; crawl calls get quota + step caps.
+        self._export_root = (os.path.abspath(export_root)
+                             if export_root else None)
+        self._data_dir = (os.path.abspath(data_dir) if data_dir else None)
+        self._crawl_limit = max(0, int(crawl_limit))
+        self._crawl_max_steps = max(0, int(crawl_max_steps))
+        self._crawl_window_start = 0.0
+        self._crawl_count = 0
         self._transport_factory = transport_factory or (
             lambda: StdioMCPTransport(cmd, self._args, timeout))
         self._transport: Optional[StdioMCPTransport] = None
@@ -237,6 +252,98 @@ class UnifiedMCPClient:
     def _record_success(self) -> None:
         self._breaker_failures = 0
 
+    # -- 2.5.6 security: export root / crawl quota --
+
+    _FS_SIDE_EFFECT_PREFIXES = ("export", "import", "crawl", "refresh")
+
+    def _render_path_value(self, value: str) -> str:
+        """Render {export_root}/{data_dir} placeholders; reject if unset."""
+        if "{export_root}" in value:
+            if self._export_root is None:
+                raise McpError(
+                    McpErrorKind.DENIED,
+                    "export_root not configured; {export_root} unresolvable")
+            value = value.replace("{export_root}", self._export_root)
+        if "{data_dir}" in value:
+            data_dir = self._data_dir or os.path.join(os.getcwd(), "data")
+            value = value.replace("{data_dir}", data_dir)
+        return value
+
+    def _looks_like_path(self, value: Any) -> bool:
+        if not isinstance(value, str) or not value:
+            return False
+        if "{" in value or value.startswith(("/", "~", ".", "\\")):
+            return True
+        return "/" in value or "\\" in value or os.path.isabs(value)
+
+    def _render_side_effect_paths(self, tool: str,
+                                  arguments: Optional[dict]) -> Optional[dict]:
+        """Render path placeholders + validate inside export root.
+
+        Path args of export/import/crawl/refresh tools must stay inside
+        export root after rendering; the rendered dict is passed to the
+        server. Query tools (search_*/get_*) are never checked so
+        keyword-like params are not false-positived.
+        """
+        if not tool.startswith(self._FS_SIDE_EFFECT_PREFIXES):
+            return None
+        changed = False
+        out = dict(arguments or {})
+        for key, value in (arguments or {}).items():
+            if not self._looks_like_path(value):
+                continue
+            resolved = self._render_path_value(value)
+            abs_path = os.path.abspath(resolved)
+            bases = [b for b in (self._export_root, self._data_dir) if b]
+            if not bases:
+                raise McpError(
+                    McpErrorKind.DENIED,
+                    f"{tool}: export_root not configured, "
+                    f"path arg {key!r} denied")
+            inside = False
+            for base in bases:
+                rel = os.path.relpath(abs_path, base)
+                if not (os.path.isabs(rel) or rel == ".."
+                        or rel.startswith(".." + os.sep)):
+                    inside = True
+                    break
+            if not inside:
+                raise McpError(
+                    McpErrorKind.DENIED,
+                    f"{tool}: path arg {key!r} outside allowed roots: "
+                    f"{abs_path}")
+            if resolved != value:
+                out[key] = resolved
+                changed = True
+        return out if changed else None
+
+    def _check_crawl_quota(self, tool: str) -> None:
+        """crawl rate limit: fixed 60s window, 0 = unlimited."""
+        if self._crawl_limit <= 0 or not tool.startswith("crawl"):
+            return
+        now = time.time()
+        if now - self._crawl_window_start >= 60.0:
+            self._crawl_window_start = now
+            self._crawl_count = 0
+        if self._crawl_count >= self._crawl_limit:
+            self._audit("crawl_quota", tool=tool,
+                        limit=self._crawl_limit, window_seconds=60.0)
+            raise McpError(McpErrorKind.DENIED,
+                           f"crawl rate limit exceeded: {tool}")
+        self._crawl_count += 1
+
+    def _apply_crawl_steps(self, tool: str,
+                           arguments: Optional[dict]) -> Optional[dict]:
+        """crawl step/page cap: clamp over-limit int args."""
+        if not tool.startswith("crawl") or self._crawl_max_steps <= 0:
+            return arguments
+        out = dict(arguments or {})
+        for key in ("limit", "max_pages", "pages", "depth", "count"):
+            if (key in out and isinstance(out[key], int)
+                    and out[key] > self._crawl_max_steps):
+                out[key] = self._crawl_max_steps
+        return out
+
     # -- 会话 --
 
     async def _get_transport(self) -> StdioMCPTransport:
@@ -270,6 +377,16 @@ class UnifiedMCPClient:
 
     async def call_tool(self, name: str,
                         arguments: Optional[dict] = None) -> dict:
+        # 2.5.6: path render/validation + crawl quota run before transport
+        try:
+            rendered = self._render_side_effect_paths(name, arguments)
+            if rendered is not None:
+                arguments = rendered
+            self._check_crawl_quota(name)
+            arguments = self._apply_crawl_steps(name, arguments)
+        except McpError as e:
+            self._audit("denied", tool=name, reason=e.message)
+            raise
         if self._breaker_open():
             self._audit("breaker_open", tool=name)
             raise McpError(McpErrorKind.BUSY, "circuit breaker open")
@@ -341,19 +458,35 @@ class McpServerRegistry:
         return server_id in self._servers
 
     async def call(self, server_id: str, tool: str,
-                   arguments: Optional[dict] = None) -> dict:
-        client = self._servers.get(server_id)
-        if client is None:
-            raise McpError(McpErrorKind.CONNECTION,
-                           f"unknown server: {server_id}")
-        if tool in self._deny.get(server_id, ()):
-            logger.warning("MCP tool denied by policy: %s/%s", server_id, tool)
-            raise McpError(McpErrorKind.DENIED, f"tool denied: {tool}")
-        allow = self._allow.get(server_id)
-        if allow and tool not in allow:
-            raise McpError(McpErrorKind.DENIED,
-                           f"tool not allowed: {tool}")
-        return await client.call_tool(tool, arguments)
+                   arguments: Optional[dict] = None,
+                   run_id: str = "", trace_id: str = "") -> dict:
+        start = time.time()
+        try:
+            client = self._servers.get(server_id)
+            if client is None:
+                raise McpError(McpErrorKind.CONNECTION,
+                               f"unknown server: {server_id}")
+            if tool in self._deny.get(server_id, ()):
+                logger.warning("MCP tool denied by policy: %s/%s",
+                               server_id, tool)
+                raise McpError(McpErrorKind.DENIED, f"tool denied: {tool}")
+            allow = self._allow.get(server_id)
+            if allow and tool not in allow:
+                raise McpError(McpErrorKind.DENIED,
+                               f"tool not allowed: {tool}")
+            result = await client.call_tool(tool, arguments)
+        except McpError as e:
+            trace_recorder.record(
+                event="mcp_call", run_id=run_id, trace_id=trace_id,
+                server_id=server_id, tool=tool, ok=False,
+                error_kind=e.kind.value,
+                latency_ms=round((time.time() - start) * 1000, 1))
+            raise
+        trace_recorder.record(
+            event="mcp_call", run_id=run_id, trace_id=trace_id,
+            server_id=server_id, tool=tool, ok=True,
+            latency_ms=round((time.time() - start) * 1000, 1))
+        return result
 
     async def list_tools(self, server_id: str = "icourse",
                          refresh: bool = False) -> tuple[dict, ...]:
@@ -443,7 +576,8 @@ class UnifiedMCPProvider:
             return mapping[action]   # 显式 None -> 不映射，降级 mock
         return mapping.get("default")
 
-    async def execute(self, capability, arguments: dict):
+    async def execute(self, capability, arguments: dict,
+                      run_id: str = "", trace_id: str = ""):
         tool = self._resolve_tool(arguments or {})
         if tool is None or not self._registry.ready(self._server_id):
             return await self._mock.execute(capability, arguments)
@@ -451,7 +585,8 @@ class UnifiedMCPProvider:
                     if k != "action"}
         try:
             result = await self._registry.call(
-                self._server_id, tool, svc_args)
+                self._server_id, tool, svc_args,
+                run_id=run_id, trace_id=trace_id)
             data, is_error = extract_mcp_result(result)
             if is_error:
                 logger.warning("MCP %s returned error -> mock fallback", tool)
@@ -507,6 +642,10 @@ def create_unified_provider_factory(
       DUDUDA_MCP_RETRIES    重试次数（默认 2）
       DUDUDA_MCP_BREAKER    熔断阈值（默认 5）
       DUDUDA_MCP_AUDIT      调用审计 JSONL 路径（默认关闭）
+      DUDUDA_MCP_EXPORT_ROOT 副作用工具允许的导出根目录（默认关闭校验）
+      DUDUDA_MCP_DATA_DIR    {data_dir} 占位符解析目录（默认 <cwd>/data）
+      DUDUDA_MCP_CRAWL_LIMIT crawl* 每分钟调用上限（默认 0 = 不限）
+      DUDUDA_MCP_CRAWL_STEPS crawl* 步数/页数上限（默认 0 = 不限）
     """
     env = env if env is not None else os.environ
     cmd = env.get("ICOURSE_MCP_CMD", "") or "python3 -m icourse_mcp"
@@ -524,10 +663,22 @@ def create_unified_provider_factory(
     except ValueError:
         breaker = 5
     audit = env.get("DUDUDA_MCP_AUDIT", "") or None
+    export_root = env.get("DUDUDA_MCP_EXPORT_ROOT", "") or None
+    data_dir = env.get("DUDUDA_MCP_DATA_DIR", "") or None
+    try:
+        crawl_limit = int(env.get("DUDUDA_MCP_CRAWL_LIMIT", "0"))
+    except ValueError:
+        crawl_limit = 0
+    try:
+        crawl_steps = int(env.get("DUDUDA_MCP_CRAWL_STEPS", "0"))
+    except ValueError:
+        crawl_steps = 0
 
     client = UnifiedMCPClient(
         cmd=cmd, args=args, timeout=timeout, max_retries=retries,
-        breaker_failures=breaker, audit_path=audit)
+        breaker_failures=breaker, audit_path=audit,
+        export_root=export_root, data_dir=data_dir,
+        crawl_limit=crawl_limit, crawl_max_steps=crawl_steps)
     registry = McpServerRegistry()
     registry.register("icourse", client,
                       allow=_ICOURSE_ALLOW_TOOLS,

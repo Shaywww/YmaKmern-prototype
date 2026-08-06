@@ -23,6 +23,7 @@ from packages.mcp.client import (
     _ICOURSE_ALLOW_TOOLS, _ICOURSE_DENY_TOOLS, _CAP_TOOL_MAP,
 )
 from packages.mcp.registry import register_all_mcp_services, MCPProvider
+from packages.core.trace_recorder import trace_recorder
 from packages.core.capability import CapabilityRegistry, ToolObservation
 
 
@@ -529,6 +530,210 @@ class TestFactory:
             for tool in mapping.values():
                 if tool is not None:
                     assert tool not in _ICOURSE_DENY_TOOLS
+
+
+# ---- 2.5.6: export root / crawl 限频 / trace 审计 ----
+
+class TestExportRootSecurity:
+    @pytest.mark.asyncio
+    async def test_side_effect_path_inside_root_ok(self, tmp_path):
+        root = tmp_path / "export"
+        root.mkdir()
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            export_root=str(root))
+        await c.call_tool("export_dataset", {"path": str(root / "out.json")})
+        assert t.requests[-1][1]["arguments"]["path"] == str(root / "out.json")
+
+    @pytest.mark.asyncio
+    async def test_absolute_path_outside_root_denied(self, tmp_path):
+        root = tmp_path / "export"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        c, t = _client(export_root=str(root))
+        with pytest.raises(McpError) as ei:
+            await c.call_tool("export_dataset",
+                              {"path": str(outside / "x.json")})
+        assert ei.value.kind == McpErrorKind.DENIED
+        assert t.request_count == 0
+
+    @pytest.mark.asyncio
+    async def test_placeholder_export_root_rendered(self, tmp_path):
+        root = tmp_path / "export"
+        root.mkdir()
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            export_root=str(root))
+        await c.call_tool("export_dataset", {"path": "{export_root}/out.json"})
+        assert t.requests[-1][1]["arguments"]["path"] == str(root / "out.json")
+
+    @pytest.mark.asyncio
+    async def test_placeholder_without_root_denied(self):
+        c, t = _client()
+        with pytest.raises(McpError) as ei:
+            await c.call_tool("export_dataset", {"path": "{export_root}/x"})
+        assert ei.value.kind == McpErrorKind.DENIED
+        assert t.request_count == 0
+
+    @pytest.mark.asyncio
+    async def test_no_export_root_denies_absolute(self):
+        c, t = _client()
+        with pytest.raises(McpError) as ei:
+            await c.call_tool("export_dataset", {"path": "/tmp/x.json"})
+        assert ei.value.kind == McpErrorKind.DENIED
+
+    @pytest.mark.asyncio
+    async def test_data_dir_placeholder_rendered(self, tmp_path):
+        root = tmp_path / "export"
+        root.mkdir()
+        dd = tmp_path / "data"
+        dd.mkdir()
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            export_root=str(root), data_dir=str(dd))
+        await c.call_tool("crawl_course", {"output": "{data_dir}/c.json"})
+        assert t.requests[-1][1]["arguments"]["output"] == str(dd / "c.json")
+
+    @pytest.mark.asyncio
+    async def test_query_tool_keyword_not_checked(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}})
+        await c.call_tool("search_courses", {"keyword": "AI/ML 入门"})
+        assert t.request_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dotdot_escape_denied(self, tmp_path):
+        root = tmp_path / "export"
+        root.mkdir()
+        c, t = _client(export_root=str(root))
+        with pytest.raises(McpError) as ei:
+            await c.call_tool("export_dataset", {"path": "../escape.json"})
+        assert ei.value.kind == McpErrorKind.DENIED
+
+
+class TestCrawlQuota:
+    @pytest.mark.asyncio
+    async def test_limit_enforced(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            crawl_limit=2)
+        assert (await c.call_tool("crawl_course", {"course_id": "1"}))["content"]
+        assert (await c.call_tool("crawl_course", {"course_id": "2"}))["content"]
+        with pytest.raises(McpError) as ei:
+            await c.call_tool("crawl_course", {"course_id": "3"})
+        assert ei.value.kind == McpErrorKind.DENIED
+        assert "rate limit" in ei.value.message
+        assert t.request_count == 2
+
+    @pytest.mark.asyncio
+    async def test_window_resets(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            crawl_limit=1)
+        assert await c.call_tool("crawl_course", {})
+        with pytest.raises(McpError):
+            await c.call_tool("crawl_course", {})
+        c._crawl_window_start = 0.0
+        assert await c.call_tool("crawl_course", {})
+        assert t.request_count == 2
+
+    @pytest.mark.asyncio
+    async def test_non_crawl_unlimited(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            crawl_limit=1)
+        for _i in range(5):
+            await c.call_tool("search_courses", {"keyword": "x"})
+        assert t.request_count == 5
+
+    @pytest.mark.asyncio
+    async def test_max_steps_clamped(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            crawl_max_steps=3)
+        await c.call_tool("crawl_courses", {"limit": 10, "pages": 5, "depth": 2})
+        args = t.requests[-1][1]["arguments"]
+        assert args["limit"] == 3
+        assert args["pages"] == 3
+        assert args["depth"] == 2
+
+    @pytest.mark.asyncio
+    async def test_quota_denied_audited(self, tmp_path):
+        audit = tmp_path / "audit.jsonl"
+        c, _t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}},
+            crawl_limit=1, audit_path=str(audit))
+        await c.call_tool("crawl_course", {})
+        with pytest.raises(McpError):
+            await c.call_tool("crawl_course", {})
+        events = [json.loads(l)["event"]
+                  for l in audit.read_text(encoding="utf-8").splitlines()]
+        assert "crawl_quota" in events
+
+
+class TestMcpCallTrace:
+    @pytest.mark.asyncio
+    async def test_registry_call_records_trace_with_run_id(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}})
+        reg = McpServerRegistry()
+        reg.register("s", c, allow=("ok_tool",))
+        await reg.call("s", "ok_tool", {"k": "v"},
+                       run_id="run-mcp-1", trace_id="tr-mcp-1")
+        lines = [x for x in trace_recorder.lines_for()
+                 if x.get("event") == "mcp_call"
+                 and x.get("run_id") == "run-mcp-1"]
+        assert len(lines) == 1
+        rec = lines[0]
+        assert rec["ok"] is True
+        assert rec["server_id"] == "s"
+        assert rec["tool"] == "ok_tool"
+        assert rec["trace_id"] == "tr-mcp-1"
+        assert rec["latency_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_registry_denied_records_trace_error(self):
+        c, _t = _client()
+        reg = McpServerRegistry()
+        reg.register("s", c, allow=("ok_tool",))
+        with pytest.raises(McpError):
+            await reg.call("s", "other", run_id="run-mcp-2")
+        lines = [x for x in trace_recorder.lines_for()
+                 if x.get("event") == "mcp_call"
+                 and x.get("run_id") == "run-mcp-2"]
+        assert len(lines) == 1
+        rec = lines[0]
+        assert rec["ok"] is False
+        assert rec["error_kind"] == "denied"
+        assert rec["tool"] == "other"
+
+    @pytest.mark.asyncio
+    async def test_provider_execute_passes_run_id(self):
+        c, t = _client(
+            responses={"tools/call": {"content": [{"type": "text", "text": "ok"}]}})
+        reg = McpServerRegistry()
+        reg.register("s", c, allow=("ok_tool",))
+        mock = _FakeMock()
+        prov = UnifiedMCPProvider(reg, "s", "cap.x", mock,
+                                  {"default": "ok_tool"})
+        obs = await prov.execute(None, {"k": "v"},
+                                 run_id="run-mcp-3", trace_id="tr-mcp-3")
+        assert obs.success
+        lines = [x for x in trace_recorder.lines_for()
+                 if x.get("event") == "mcp_call"
+                 and x.get("run_id") == "run-mcp-3"]
+        assert len(lines) == 1 and lines[0]["tool"] == "ok_tool"
+
+    def test_factory_env_256_security_options(self):
+        factory = create_unified_provider_factory({
+            "DUDUDA_MCP_EXPORT_ROOT": "/data/export",
+            "DUDUDA_MCP_CRAWL_LIMIT": "3",
+            "DUDUDA_MCP_CRAWL_STEPS": "5",
+        })
+        assert factory.client._export_root == "/data/export"
+        assert factory.client._crawl_limit == 3
+        assert factory.client._crawl_max_steps == 5
 
 
 # ---- 真实 stdio 子进程（仅服务器/Linux） ----
