@@ -110,6 +110,42 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                     "expected_output": "Top ranked web results with titles, links and snippets"}]},
     )
 
+    # 天气（mcp.weather）：城市由生产 _enrich_plan_args 提取，默认合肥
+    planner.register_pattern(
+        ("天气", "气温", "温度", "下雨", "下雪", "多云", "晴", "预报",
+         "冷不冷", "热不热", "weather", "forecast"),
+        {"name": "weather_lookup", "goal": "Get current weather and 3-day forecast for a city",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.weather",
+                     "arguments": {"action": "search", "q": "{query}"},
+                     "purpose": "Get weather",
+                     "expected_output": "Current weather and forecast"}]},
+    )
+    planner.register_pattern(
+        ("新闻", "资讯", "热点", "热搜", "报道", "消息"),
+        {"name": "news_lookup", "goal": "Get latest news aggregation",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.news",
+                     "arguments": {"action": "search", "q": "{query}"},
+                     "purpose": "Get latest news",
+                     "expected_output": "Recent news items with titles and links"}]},
+    )
+    planner.register_pattern(
+        ("翻译", "译成", "translate"),
+        {"name": "translate_lookup", "goal": "Translate text between Chinese and English",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.translate",
+                     "arguments": {"action": "search", "text": "{query}"},
+                     "purpose": "Translate text",
+                     "expected_output": "Translation result"}]},
+    )
+    # 百科/名词查询（招生/录取/是什么…）-> 联网搜索
+    planner.register_pattern(
+        ("招生", "录取", "百科", "是什么", "什么是", "啥是", "啥叫"),
+        {"name": "definition_lookup", "goal": "Look up facts about a noun or topic",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.web_search",
+                     "arguments": {"action": "search", "q": "{query}"},
+                     "purpose": "Search the web for facts",
+                     "expected_output": "Top ranked web results with titles and snippets"}]},
+    )
+
     return ToolChainIntegration(planner, executor, recovery, capability_registry)
 
 class ToolChainIntegration:

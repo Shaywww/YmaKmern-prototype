@@ -238,3 +238,54 @@ class TestToolChainIntegration:
             permissions=(), budget=type("B", (), {"max_tool_steps": 4, "deadline_seconds": 30})(),
         )
         assert result["success_count"] >= 0
+
+
+class TestNewSkillPatterns:
+    """天气/新闻/翻译/百科查询 -> 对应 MCP 服务（生产工具链路由）。"""
+
+    def _plan(self, text, extra_cids):
+        from dududa.planner.planner import PlanningContext
+        reg = _make_registry()
+        for cid in extra_cids:
+            cap = Capability(capability_id=cid, name=cid,
+                             description=f"Mock {cid}", provider=ProviderType.MCP)
+            reg.register(cap, StubProvider())
+        integration = integrate_with_orchestrator(None, reg)
+        cands = reg.filter_candidates(())
+        return integration.planner.plan(PlanningContext(
+            user_intent=text, available_capabilities=cands,
+            max_steps=4, permissions=()))
+
+    def test_weather_query_plans_weather(self):
+        plan = self._plan("今天天气怎么样", ("mcp.weather",))
+        assert plan is not None and plan.steps
+        assert plan.steps[0].capability_id == "mcp.weather"
+        assert plan.steps[0].arguments.get("action") == "search"
+
+    def test_weather_with_city_plans_weather(self):
+        plan = self._plan("临泽县今天天气怎么样", ("mcp.weather",))
+        assert plan.steps[0].capability_id == "mcp.weather"
+
+    def test_news_query_plans_news(self):
+        plan = self._plan("有什么新闻", ("mcp.news",))
+        assert plan.steps[0].capability_id == "mcp.news"
+
+    def test_news_with_topic_plans_news(self):
+        plan = self._plan("科技方面有什么新闻", ("mcp.news",))
+        assert plan.steps[0].capability_id == "mcp.news"
+
+    def test_translate_plans_translate(self):
+        plan = self._plan("翻译一下 hello world", ("mcp.translate",))
+        assert plan.steps[0].capability_id == "mcp.translate"
+
+    def test_definition_query_plans_web_search(self):
+        plan = self._plan("USTC今年招生怎么样", ("mcp.web_search",))
+        assert plan.steps[0].capability_id == "mcp.web_search"
+
+    def test_course_pattern_still_priority_over_definition(self):
+        plan = self._plan("课表是什么", ("mcp.course_schedule",))
+        assert plan.steps[0].capability_id == "mcp.course_schedule"
+
+    def test_time_pattern_still_priority_over_definition(self):
+        plan = self._plan("现在是什么时间", ("mcp.clock",))
+        assert plan.steps[0].capability_id == "mcp.clock"

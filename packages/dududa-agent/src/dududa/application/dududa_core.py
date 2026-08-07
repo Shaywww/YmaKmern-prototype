@@ -401,14 +401,18 @@ class DududaCore:
                     "竞赛": "activity", "社团": "activity", "第二课堂": "activity",
                     "培养方案": "training", "毕业要求": "training", "选课": "training",
                     "新闻": "news", "资讯": "news", "热点": "news", "热搜": "news",
-                    "学分": "training", "绩点": "grade", "分数": "grade"}
+                    "学分": "training", "绩点": "grade", "分数": "grade",
+                    "翻译": "translate", "翻译成": "translate", "译成": "translate",
+                    "招生": "websearch", "录取": "websearch", "百科": "websearch",
+                    "是什么": "websearch", "什么是": "websearch",
+                    "啥是": "websearch", "啥叫": "websearch"}
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
         intents = list(topics) if topics else ["chitchat"]
         needs_tools = any(t in ("course", "exam", "grade", "weather", "time",
                                       "notice", "activity", "calendar", "training",
-                                      "news") for t in topics)
+                                      "news", "translate", "websearch") for t in topics)
         has_command = any(a.act_type == "command" for a in acts)
         # 联网搜索：显式「搜/百度」命令也触发工具链（web_search）
         if has_command and any(k in combined for k in
@@ -568,7 +572,10 @@ class DududaCore:
                 logger.warning("Primary LLM (%s) failed: %s, trying fallback...", self._cfg["MODEL"], e)
         # Fallback: MHCoding GPT-5.5 via httpx
         try:
-            _fb_base = str(self._cfg.get("FALLBACK_BASE", "") or "").strip().rstrip("/")
+            try:
+                _fb_base = str(self._cfg["FALLBACK_BASE"] or "").strip().rstrip("/")
+            except (KeyError, TypeError, AttributeError):
+                _fb_base = ""
             if _fb_base and _fb_base.count("/") == 2:
                 _fb_base += "/v1"  # OpenAI 兼容网关 API 路径在 /v1 下
             async with httpx.AsyncClient(timeout=60) as c:
@@ -585,7 +592,7 @@ class DududaCore:
                 except Exception:
                     logger.error(
                         "Fallback non-JSON response from %s: %.150s",
-                        self._cfg.get("FALLBACK_BASE", ""),
+                        _fb_base,
                         (r.text or "")[:150])
                     raise
             if not skip_render:

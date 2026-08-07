@@ -225,13 +225,31 @@ class TestProdOrchestrator:
         assert obs.success and obs.data
 
     @pytest.mark.asyncio
-    async def test_no_pattern_falls_back_to_plain_chat(self):
+    @pytest.mark.asyncio
+    async def test_weather_query_runs_weather_tool(self):
         orch, plugin, memory, reg = _make_orchestrator()
         event = _FakeEvent("今天天气怎么样")
         result = await orch.run(
             _make_envelope("今天天气怎么样"),
-            budget=RuntimeBudget(deadline_seconds=20),
+            budget=RuntimeBudget(max_tool_steps=4, deadline_seconds=20),
             perception=PerceptionResult(needs_tools=True, topics=("weather",)),
+            event=event,
+        )
+        assert result.final_response and result.final_response.text == plugin.llm_reply
+        assert "[工具 mcp.weather]" in plugin.last_user_msg
+        assert len(orch._last_state.tool_observations) >= 1
+        obs = orch._last_state.tool_observations[0]
+        assert obs.capability_id == "mcp.weather"
+        assert obs.success and obs.data
+
+    @pytest.mark.asyncio
+    async def test_no_pattern_falls_back_to_plain_chat(self):
+        orch, plugin, memory, reg = _make_orchestrator()
+        event = _FakeEvent("帮我写一首诗")
+        result = await orch.run(
+            _make_envelope("帮我写一首诗"),
+            budget=RuntimeBudget(deadline_seconds=20),
+            perception=PerceptionResult(needs_tools=True, topics=("general",)),
             event=event,
         )
         # 无 Planner 模式命中 -> 不执行工具，走纯 LLM 对话

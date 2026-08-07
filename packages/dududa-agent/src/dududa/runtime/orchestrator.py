@@ -243,7 +243,10 @@ class RuntimeOrchestrator:
             needs_tools=("查" in text or "搜" in text or "/" in text
                          or any(k in text for k in
                                 ("几点", "时间", "几号", "星期几", "日期",
-                                 "什么时候了", "现在是", "现在几"))),
+                                 "什么时候了", "现在是", "现在几",
+                                 "天气", "气温", "预报", "新闻", "资讯",
+                                 "翻译", "译成", "招生", "录取", "百科",
+                                 "是什么", "什么是"))),
             target_users=envelope.mentions or (),
             resolved_references={"text": text},
             speech_acts=speech_acts,
@@ -555,11 +558,17 @@ class RuntimeOrchestrator:
     def _extract_fact_anchors(state: RuntimeState) -> tuple[FactAnchor, ...]:
         anchors: list[FactAnchor] = []
         for obs in state.tool_observations:
-            if obs.success and obs.data is not None:
-                anchors.append(FactAnchor(
-                    field=obs.capability_id,
-                    value=str(_REDACTOR.redact(obs.data)[0]),
-                    source=obs.source))
+            if obs.success and obs.data is None:
+                continue
+            value = str(_REDACTOR.redact(obs.data)[0])
+            # 结构化工具结果（dict/list repr）不做不可变锚点：
+            # hybrid 渲染会强制逐字保留原始 JSON，污染回复。
+            if len(value) > 80 or value.lstrip().startswith(("{", "[")):
+                continue
+            anchors.append(FactAnchor(
+                field=obs.capability_id,
+                value=value,
+                source=obs.source))
         return tuple(anchors)
 
     # ---- 记忆候选（文档 2.3.16：只产生候选，投递确认后过 Write Gate） ----

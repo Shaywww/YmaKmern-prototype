@@ -265,15 +265,60 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     def _enrich_plan_args(plan, intent):
         """把用户意图中的关键词注入计划参数，让 MCP 能真正查到数据。"""
         import re
-        kw = re.sub(
-            r"^(?:帮我|请|麻烦你|查一下|查查|搜一下|搜搜|找一下|找找|看看|看一下|查|搜|找)+",
-            "", intent or "")
-        kw = re.sub(r"(课程|课|信息|成绩|时间|安排|情况|资料)+$", "", kw).strip()
-        kw = re.sub(r"[，。！？、\s]+$", "", kw)
+        raw = intent or ""
         steps = []
         for s in plan.steps:
+            cap_id = getattr(s, "capability_id", "")
             args = dict(s.arguments or {})
-            if args.get("action") == "search" and not args.get("keyword"):
+            if cap_id == "mcp.weather" and args.get("action") == "search":
+                # 城市提取：剔除天气词/时间词/语气词，兜底合肥
+                city = re.sub(
+                    r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+", "", raw)
+                city = re.sub(
+                    r"(天气|气温|温度|预报|怎么样|怎样|如何|今天|明天|后天|"
+                    r"现在|目前|是什么|多少|度|会不会|下不下雨|冷不冷|热不热|"
+                    r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
+                city = re.sub(r"@\S+", "", city).strip()
+                city = re.sub(r"[，。！、\s]+$", "", city)
+                args["q"] = city or "合肥"
+            elif cap_id == "mcp.news" and args.get("action") == "search":
+                # 新闻关键词：去掉新闻类填充词，保留「科技/体育/国际」等话题词
+                kw = re.sub(
+                    r"^(?:帮我|请|麻烦你|给我|帮我看看|帮我查查|帮我搜搜)+", "", raw)
+                kw = re.sub(
+                    r"(新闻|资讯|热点|热搜|消息|报道|有什么|最近|今天|"
+                    r"方面|关于|讲讲|看看|一下|都有|啥|什么|的|啊|呀|呢|吧|吗|么|哦)+$",
+                    "", kw)
+                kw = re.sub(r"@\S+", "", kw).strip()
+                kw = re.sub(r"[，。！？、\s]+$", "", kw)
+                args["q"] = kw
+            elif cap_id == "mcp.translate" and args.get("action") == "search":
+                # 翻译文本提取：兼容「把X翻译成Y」与「翻译一下X」
+                text = re.sub(
+                    r"^(?:帮我|请|麻烦你|给我|帮我翻译)+", "", raw)
+                m = re.match(r"^把(.+?)翻译成(.+?)(?:[，。！？、\s]*)$", text)
+                if m:
+                    args["text"] = m.group(1).strip()
+                    tgt = m.group(2).strip()
+                    if "中文" in tgt or "汉语" in tgt or tgt == "汉":
+                        args["target"] = "zh"
+                    elif "英文" in tgt or "英语" in tgt or tgt == "英":
+                        args["target"] = "en"
+                    else:
+                        args["target"] = tgt
+                else:
+                    text = re.sub(
+                        r"^(?:翻译一下|翻译成|翻译|译成|把|怎么翻译|如何翻译|"
+                        r"帮我翻译|请翻译)+", "", text).strip()
+                    text = re.sub(r"[，。！？、\s]+$", "", text)
+                    args["text"] = text or raw
+            elif args.get("action") == "search" and not args.get("keyword"):
+                kw = re.sub(
+                    r"^(?:帮我|请|麻烦你|查一下|查查|搜一下|搜搜|找一下|找找|"
+                    r"看看|看一下|查|搜|找)+",
+                    "", raw)
+                kw = re.sub(r"(课程|课|信息|成绩|时间|安排|情况|资料)+$", "", kw).strip()
+                kw = re.sub(r"[，。！？、\s]+$", "", kw)
                 args["keyword"] = kw
             steps.append(type(s)(**{**s.__dict__, "arguments": args}))
         return type(plan)(**{**plan.__dict__, "steps": tuple(steps)})
@@ -428,14 +473,25 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     @staticmethod
     def _prod_anchors(state):
+        """工具结果 -> 不可变事实锚点。
+
+        仅对短标量/短字符串建锚（渲染阶段要求逐字保留）；
+        结构化结果（dict/list 的 repr，如 mcp.weather={...}）跳过——
+        否则 hybrid 渲染会强制把原始 JSON 逐字塞进回复。事实由
+        compose 系统提示要求模型转述，渲染不再背负原始数据。
+        """
         anchors = []
         for obs in state.tool_observations:
-            if obs.success and obs.data is not None:
-                anchors.append(FactAnchor(
-                    field=obs.capability_id,
-                    value=str(obs.data)[:60],
-                    source=obs.source,
-                ))
+            if obs.success and obs.data is None:
+                continue
+            value = str(obs.data)
+            if len(value) > 80 or value.lstrip().startswith(("{", "[")):
+                continue
+            anchors.append(FactAnchor(
+                field=obs.capability_id,
+                value=value,
+                source=obs.source,
+            ))
         return tuple(anchors)
 
     def _build_memory_candidates(self, state):
