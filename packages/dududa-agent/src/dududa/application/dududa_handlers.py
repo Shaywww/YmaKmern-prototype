@@ -6,6 +6,7 @@ Main 只做事件适配与结果发送。
 """
 import logging
 import random
+import re
 import time
 from uuid import uuid4
 
@@ -312,6 +313,24 @@ async def _perceive_with_model(plugin, event):
         return rule
 
 
+def _strip_tool_leak(text: str) -> str:
+    """兜底清洗：回复若泄漏工具名/原始数据（LLM 偶发照抄），从泄漏点截断。
+
+    覆盖形态：mcp.web_search: [{'title': ...、[工具 mcp.xxx]: {...、
+    [{'title': '...', 等（对话中正常内容几乎不含这些标记）。
+    """
+    if not text:
+        return text
+    m = re.search(
+        r"(?:mcp\.[a-zA-Z_0-9]+\s*:\s*[\[{]"
+        r"|\[工具[^\]]*\]\s*:\s*\n?\s*[\[{]"
+        r"|\[?\{\s*['\"][a-zA-Z_0-9]+['\"]\s*:)"
+        , text)
+    if m:
+        text = text[:m.start()].rstrip(" ~～~^.,!;:，。！；： \t\n")
+    return text
+
+
 def _dedupe_message(plugin, event, msg_id) -> bool:
     # Connector 幂等键 (platform, bot_id, message_id) 判重。
     # 生产插件带 MessageIdempotencyRegistry（TTL 有界）时走注册表；
@@ -391,6 +410,7 @@ async def run_message_flow(plugin, event) -> str | None:
     try:
         reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
+        reply = _strip_tool_leak(reply)
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               reply=(reply or "")[:200])

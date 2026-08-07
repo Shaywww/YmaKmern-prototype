@@ -117,6 +117,54 @@ class TestWebSearchService:
         assert data[0]["link"].startswith("https://")
 
 
+class TestLeakCleanup:
+    """回复泄漏兜底：工具名/原始 JSON 必须被截断。"""
+
+    @staticmethod
+    def _strip(text):
+        from dududa.application import dududa_handlers as h
+        return h._strip_tool_leak(text)
+
+    def test_mcp_name_with_raw_dict(self):
+        out = self._strip(
+            "搜到啦！USTC就是中科大～ ^^ mcp.web_search: "
+            "[{'title': '中国科学技术大学', 'link': 'https://www.ustc.edu.cn/'}]")
+        assert "mcp.web_search" not in out
+        assert "搜到啦" in out
+        assert not out.rstrip().endswith("^")
+
+    def test_tool_prefix_block(self):
+        out = self._strip(
+            "答案如下。\n[工具 mcp.course_schedule]:\n[{'course_id': 'CS2001'}]")
+        assert "[工具" not in out
+        assert "CS2001" not in out
+        assert out.strip() == "答案如下"
+
+    def test_bare_raw_dict(self):
+        out = self._strip("参考：[{'title': 'x', 'link': 'y'}] 没了")
+        assert "{'title'" not in out
+        assert out.strip() == "参考"
+
+    def test_normal_reply_untouched(self):
+        text = "嘿嘿，USTC就是中国科学技术大学哦～在安徽合肥，1958年创办的！"
+        assert self._strip(text) == text
+
+
+class TestFormatToolData:
+    def test_list_of_dicts_readable(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        data = [{"title": "中国科学技术大学", "link": "https://www.ustc.edu.cn/",
+                 "snippet": "官方主页"}]
+        out = _ProdOrchestrator._format_tool_data(data)
+        assert "中国科学技术大学" in out
+        assert "https://www.ustc.edu.cn/" in out
+        assert "{'title'" not in out
+
+    def test_non_list_fallback(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        assert _ProdOrchestrator._format_tool_data("plain") == "plain"
+
+
 class TestRegistryIntegration:
     def test_service_registered_in_registry(self):
         svcs = create_all_services()
