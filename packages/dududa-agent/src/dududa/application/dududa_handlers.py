@@ -316,21 +316,27 @@ async def _perceive_with_model(plugin, event):
 def _strip_tool_leak(text: str) -> str:
     """兜底清洗：回复若泄漏工具名/原始数据（LLM 偶发照抄），从泄漏点截断。
 
-    覆盖形态：mcp.web_search: [{'title': ...、[工具 mcp.xxx]: {...、
+    覆盖形态：mcp.web_search: [{'title': ...、mcp.web_search=[{...、
+    mcp.web_search:{'title': ...、[工具 mcp.xxx]: {...、
     [{'title': '...', 等（对话中正常内容几乎不含这些标记）。
     """
     if not text:
         return text
     m = re.search(
-        r"(?:mcp\.[a-zA-Z_0-9]+\s*:\s*[\[{]"
+        r"(?:mcp\.[a-zA-Z_0-9]+\s*(?:[=:]\s*)?[\[{]"
+        r"|mcp\.[a-zA-Z_0-9]+\s*[=:]\s*\{"
         r"|\[工具[^\]]*\]\s*:\s*\n?\s*[\[{]"
         r"|\[?\{\s*['\"][a-zA-Z_0-9]+['\"]\s*:)"
         , text)
     if m:
         text = text[:m.start()]
-        # 去掉悬空引子（LLM 常写「（来源：」后接原始数据再被截断）
-        text = re.sub(r"[（(]\s*来源[:：]?\s*$", "", text)
-        text = re.sub(r"来源[:：]?\s*$", "", text)
+        # 去掉悬空引子（LLM 常写「来源：mcp.xxx=[{...」或「（来源：」后接原始数据再被截断）
+        text = re.sub(
+            r"[（(]\s*来源\s*[:：]?\s*(?:mcp\.[a-zA-Z_0-9]+\s*[=:]?\s*)?$",
+            "", text)
+        text = re.sub(
+            r"来源\s*[:：]?\s*(?:mcp\.[a-zA-Z_0-9]+\s*[=:]?\s*)?$",
+            "", text)
         text = re.sub(r"[（(]\s*[:：]?\s*$", "", text)
         text = text.rstrip(" ~～~^.,!;:，。！；： \t\n")
     return text

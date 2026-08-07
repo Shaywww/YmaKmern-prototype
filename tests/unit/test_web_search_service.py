@@ -153,6 +153,44 @@ class TestLeakCleanup:
         assert "来源" not in out
         assert out.rstrip().endswith("超实用的")
 
+    def test_mcp_name_equals_json(self):
+        out = self._strip(
+            "搜到啦～ ^^ 来源：mcp.web_search=[{'title': '中国科学技术大学',"
+            " 'link': 'https://www.ustc.edu.cn/'}]")
+        assert "mcp.web_search" not in out
+        assert "{" not in out
+        assert "来源" not in out
+        assert out == "搜到啦"
+
+    def test_dangling_source_with_tool_name(self):
+        out = self._strip(
+            "嗯嗯，就是这样～ （来源：mcp.web_search=[{'title': 'x', 'link': 'y'}]")
+        assert "mcp.web_search" not in out
+        assert "来源" not in out
+        assert out == "嗯嗯，就是这样"
+
+    def test_source_intro_with_equals_and_space(self):
+        out = self._strip(
+            "查到了：\n\n来源：mcp.web_search = [{'title': 'x', 'link': 'y'}]")
+        assert "mcp.web_search" not in out
+        assert "来源" not in out
+        assert "{" not in out
+        assert out == "查到了"
+
+    def test_mcp_dict_form(self):
+        out = self._strip(
+            "结果：mcp.web_search:{'title': 'x', 'link': 'y'}")
+        assert "mcp.web_search" not in out
+        assert "{" not in out
+        assert out == "结果"
+
+    def test_direct_bracket_after_tool_name(self):
+        out = self._strip(
+            "给你看：mcp.web_search[{'title': 'x', 'link': 'y'}]")
+        assert "mcp.web_search" not in out
+        assert "{" not in out
+        assert out == "给你看"
+
     def test_normal_reply_untouched(self):
         text = "嘿嘿，USTC就是中国科学技术大学哦～在安徽合肥，1958年创办的！"
         assert self._strip(text) == text
