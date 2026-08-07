@@ -22,7 +22,7 @@ from dududa.core.envelope import (
     MessageEnvelope, Actor, Platform, MessageKind, ConversationRef,
 )
 from dududa.core.perception import PerceptionResult
-from dududa.core.state import RuntimeBudget
+from dududa.core.state import RuntimeBudget, RuntimeState
 from dududa.core.memory import InMemoryRepository, MemoryType, MemoryScope
 from dududa.core.delivery import DeliveryReceipt, DeliveryStatus
 from dududa.core.renderer import Persona
@@ -84,7 +84,8 @@ class _FakePlugin:
         self.last_user_msg = ""
         self.llm_reply = "测试回复 (・ω・)"
 
-    async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5):
+    async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
+                        run_id="", trace_id="", skip_render=False):
         self.last_user_msg = user_msg
         return self.llm_reply
 
@@ -308,3 +309,84 @@ class TestProdOrchestrator:
         await orch.acknowledge_delivery(receipt)
         epis = memory.query(plugin._make_scope(event, msg_type="file"), limit=10)
         assert any(r.scope.bot_id == "bot1" and r.source == "tool" for r in epis)
+
+
+class TestLLMPlanning:
+    """LLM 自主规划：规则未命中时模型选工具（结构化输出 + fail-closed）。"""
+
+    def _orch(self):
+        orch, plugin, memory, reg = _make_orchestrator()
+        return orch, plugin
+
+    async def _llm_plan(self, reply, text="明天适合出门吗"):
+        orch, plugin = self._orch()
+        plugin.llm_reply = reply
+        reg = orch._capability_registry
+        cands = reg.filter_candidates(permissions=(), max_count=24)
+        state = RuntimeState(
+            envelope=_make_envelope(text),
+            budget=RuntimeBudget(max_tool_steps=4))
+        return await orch._llm_plan(state, cands, 4, ())
+
+    @pytest.mark.asyncio
+    async def test_llm_plans_weather(self):
+        plan = await self._llm_plan(
+            '{"steps":[{"capability_id":"mcp.weather","arguments":{"q":"合肥"}}]}')
+        assert plan is not None and plan.steps
+        assert plan.steps[0].capability_id == "mcp.weather"
+        assert plan.steps[0].arguments["q"] == "合肥"
+        assert plan.steps[0].arguments.get("action") == "search"
+
+    @pytest.mark.asyncio
+    async def test_llm_no_tools_empty_plan(self):
+        plan = await self._llm_plan('{"steps":[]}')
+        assert plan is not None and not plan.steps
+
+    @pytest.mark.asyncio
+    async def test_llm_invalid_capability_rejected(self):
+        plan = await self._llm_plan(
+            '{"steps":[{"capability_id":"mcp.hack","arguments":{"q":"x"}},'
+            '{"capability_id":"mcp.news","arguments":{"q":"科技"}}]}')
+        assert plan is not None and plan.steps
+        assert all(s.capability_id != "mcp.hack" for s in plan.steps)
+
+    @pytest.mark.asyncio
+    async def test_llm_bad_action_rejected(self):
+        plan = await self._llm_plan(
+            '{"steps":[{"capability_id":"mcp.weather",'
+            '"arguments":{"action":"exec","q":"x"}}]}')
+        # 非法 action 被白名单拒绝，回退默认 search（与执行器一致）
+        assert plan is not None and plan.steps
+        assert plan.steps[0].arguments.get("action") == "search"
+        assert "exec" not in str(plan.steps[0].arguments)
+
+    @pytest.mark.asyncio
+    async def test_llm_garbage_returns_none(self):
+        assert await self._llm_plan("这不是JSON") is None
+
+    @pytest.mark.asyncio
+    async def test_llm_fenced_json_parsed(self):
+        plan = await self._llm_plan(
+            '```json\n{"steps":[{"capability_id":"mcp.translate",'
+            '"arguments":{"text":"hello"}}]}\n```')
+        assert plan is not None and plan.steps
+        assert plan.steps[0].capability_id == "mcp.translate"
+        assert plan.steps[0].arguments["text"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_rule_miss_then_llm_plan_runs_tool(self):
+        orch, plugin, memory, reg = _make_orchestrator()
+        plugin.llm_reply = (
+            '{"steps":[{"capability_id":"mcp.weather",'
+            '"arguments":{"q":"合肥"}}]}')
+        event = _FakeEvent("明天适合出门吗")
+        result = await orch.run(
+            _make_envelope("明天适合出门吗"),
+            budget=RuntimeBudget(max_tool_steps=4, deadline_seconds=20),
+            perception=PerceptionResult(needs_tools=True, topics=("weather",)),
+            event=event,
+        )
+        assert result.final_response and result.final_response.text == plugin.llm_reply
+        assert "[工具 mcp.weather]" in plugin.last_user_msg
+        obs = orch._last_state.tool_observations
+        assert obs and obs[0].success

@@ -13,6 +13,7 @@ from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionR
 from dududa.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
 from dududa.runtime.orchestrator import RuntimeOrchestrator
 from dududa.core.perception_store import record_state_perception
+from dududa.core.trace_recorder import trace_recorder
 from uuid import uuid4
 
 from dududa.application.dududa_utils import (
@@ -260,6 +261,123 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             except Exception:
                 pass
         return None
+
+    async def _llm_plan(self, state, candidates, max_steps, permissions):
+        """规则未命中时：LLM 自主选工具（结构化输出，fail-closed，文档 2.5.x）。
+
+        模型输出仅作工具选择建议：capability_id 必须在候选内、action 必须
+        匹配 schema enum、参数键必须白名单；任何非法 -> 丢弃该步。
+        模型明确不需要工具（steps=[]）-> 返回空计划（调用方直接成功）。
+        调用失败 / 输出非法 -> None（保持原降级行为，安全）。
+        """
+        plugin = getattr(self, "_plugin", None)
+        if plugin is None or not hasattr(plugin, "_call_llm"):
+            return None
+        if not candidates:
+            return None
+        try:
+            intent = self._intent_of(state)
+            lines = []
+            for cand in list(candidates)[:max_steps + 6]:
+                cap = cand.capability
+                props = ((cap.schema.input_schema or {}).get("properties") or {})
+                param_str = ", ".join(sorted(props)) if props else "action"
+                lines.append(
+                    f"- {cap.capability_id} | {cap.name} | "
+                    f"{cap.description[:120]} | 参数: {param_str}")
+            system = (
+                "你是工具规划器。根据用户消息从「可用工具」中选择要调用的工具，"
+                "只输出严格 JSON，不要任何其他文字。\n"
+                "输出格式: {\"steps\":[{\"capability_id\":\"工具id\","
+                "\"arguments\":{\"参数名\":\"值\"}}]}\n"
+                "- 用户消息需要查实时信息/外部数据/执行操作时才选工具；"
+                "普通闲聊、问候、纯观点问题输出 {\"steps\":[]}\n"
+                "- arguments 只能使用该工具列出的参数名；action 不填时默认 search\n"
+                f"- 一次最多选 {max_steps} 个工具，按重要程度排序")
+            user = f"用户消息: {intent}\n\n可用工具:\n" + "\n".join(lines)
+            reply = await plugin._call_llm(
+                system, user, max_tokens=1024, temperature=0.0,
+                run_id=state.run_id, trace_id=state.trace_id, skip_render=True)
+            plan = self._parse_llm_plan(reply, candidates, max_steps)
+            if plan is not None:
+                logger.info(
+                    "LLM plan | run_id=%s trace_id=%s steps=%d %s",
+                    state.run_id, state.trace_id, len(plan.steps),
+                    [s.capability_id for s in plan.steps][:max_steps])
+                trace_recorder.record(
+                    event="llm_plan", run_id=state.run_id,
+                    trace_id=state.trace_id,
+                    steps=[s.capability_id for s in plan.steps][:max_steps],
+                    rationale=getattr(plan, "rationale", ""))
+            return plan
+        except Exception as e:
+            logger.warning("LLM plan failed: %s", e)
+            return None
+
+    @staticmethod
+    def _parse_llm_plan(reply, candidates, max_steps):
+        """解析并白名单校验 LLM 规划输出。
+
+        返回 GeneratedPlan（含步骤）/ 空计划（模型明确不需要工具）/ None（非法）。
+        """
+        import json as _json
+        from dududa.planner.planner import GeneratedPlan, PlannedStep
+        if not reply or not reply.strip():
+            return None
+        text = reply.strip()
+        try:
+            data = _json.loads(text)
+        except (ValueError, TypeError):
+            start, end = text.find("{"), text.rfind("}")
+            if start < 0 or end <= start:
+                return None
+            try:
+                data = _json.loads(text[start:end + 1])
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(data, dict):
+            return None
+        steps_raw = data.get("steps")
+        if not isinstance(steps_raw, list):
+            return None
+        if not steps_raw:
+            return GeneratedPlan(
+                goal="llm-no-tools", steps=(),
+                rationale="LLM: no tools needed")
+        allowed = {c.capability.capability_id: c.capability for c in candidates}
+        steps = []
+        for i, sr in enumerate(steps_raw[:max_steps]):
+            if not isinstance(sr, dict):
+                continue
+            cid = str(sr.get("capability_id", "")).strip()
+            cap = allowed.get(cid)
+            if cap is None:
+                continue
+            props = ((cap.schema.input_schema or {}).get("properties") or {})
+            raw_args = sr.get("arguments") or {}
+            if not isinstance(raw_args, dict):
+                raw_args = {}
+            args = {}
+            for k, v in raw_args.items():
+                if k not in props:
+                    continue
+                if k == "action":
+                    enum = (props["action"].get("enum") or [])
+                    if enum and str(v) not in enum:
+                        continue
+                    args["action"] = str(v)
+                elif isinstance(v, (str, int, float, bool)):
+                    args[k] = v
+            if "action" not in args and "action" in props:
+                args["action"] = "search"
+            steps.append(PlannedStep(
+                step_id=f"l{i + 1}", capability_id=cid,
+                arguments=args, purpose=cap.description[:80]))
+        if not steps:
+            return None
+        return GeneratedPlan(
+            goal="llm-plan", steps=tuple(steps),
+            rationale="LLM: structured tool selection")
 
     @staticmethod
     def _enrich_plan_args(plan, intent):

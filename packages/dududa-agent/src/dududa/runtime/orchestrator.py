@@ -314,8 +314,14 @@ class RuntimeOrchestrator:
                                     tool_observations=(), errors=("No capabilities",),
                                     outcome=RunOutcome.DEGRADED)
 
-        # 1) 规划：优先 Planner 模式；无集成或空计划时退化为直连 Top-K
+        # 1) 规划：规则 Planner 模式优先；未命中时交给 LLM 自主规划（prod 覆盖）。
+        #    LLM 明确表示不需要工具（空计划）-> 直接成功，不执行、不降级。
         plan = self._plan(state, candidates, max_steps, permissions)
+        if plan is None:
+            plan = await self._llm_plan(state, candidates, max_steps, permissions)
+        if plan is not None and not getattr(plan, "steps", ()):
+            return state.transition(RuntimePhase.VALIDATED_TOOLS,
+                                    outcome=RunOutcome.SUCCEEDED)
         if plan is None:
             return state.transition(RuntimePhase.VALIDATED_TOOLS,
                                     tool_observations=(), errors=("No plan",),
@@ -427,6 +433,13 @@ class RuntimeOrchestrator:
         if not steps:
             return None
         return GeneratedPlan(goal="fallback", steps=tuple(steps), rationale="direct fallback")
+
+    async def _llm_plan(self, state, candidates, max_steps, permissions):
+        """LLM 自主规划入口（生产覆盖，文档 2.5.x）。
+
+        基类无模型集成 -> 不参与，保持规则行为不变。
+        """
+        return None
 
     async def _execute(self, state: RuntimeState, plan, max_steps, permissions):
         budget = state.budget
