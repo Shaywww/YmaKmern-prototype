@@ -11,7 +11,7 @@
 并明确：**若后续通过 ADR 采纳 Control Plane，其权限与 Policy 门禁必须另行进入正式计划；
 当前不能把它算作 Phase 8–10 的既定退出条件。**
 
-本仓库已存在一个最小控制台原型（`packages/control_plane/app.py`，FastAPI，约 330 行），
+本仓库已存在一个最小控制台原型（`packages/dududa-agent/src/dududa/control_plane/app.py`，FastAPI，约 330 行），
 提供 `/health`、`/personas`（CRUD + overrides + activate）、`/mcp/services`（health/query）、
 `/traces`、`/runtime/state` 与 HTML Dashboard，并有 20+ 测试（`tests/test_control_plane.py`）。
 它目前**没有鉴权、权限、审计、脱敏与 Scope 过滤**，且 `run_server` 未接生产 systemd/ops 链路。
@@ -41,7 +41,7 @@
 7. **写操作边界**：CP 可管理 Persona/配置，但不得绕过写门禁（WriteGate）写 Memory，
    不得触发有副作用工具，不得修改权限/审计自身。
 
-## 3. 现状差距表（`packages/control_plane/app.py` → 目标）
+## 3. 现状差距表（`packages/dududa-agent/src/dududa/control_plane/app.py` → 目标）
 
 | 维度 | 现状 | CP-P0 目标 |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ CP 退出门禁：
 ```bash
 cd /opt/dududa20-prototype
 python3.12 -m pytest tests/test_control_plane_cp_p0.py -q   # CP-P0 门禁测试全绿
-bash scripts/exit_gate_check.sh 2>&1 | tail -1              # 含 CP 段全 PASS
+bash ops/exit_gate_check.sh 2>&1 | tail -1              # 含 CP 段全 PASS
 ```
 
 ## 8. 参考

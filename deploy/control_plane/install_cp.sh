@@ -21,5 +21,5 @@ cp "$SRC/dududa-cp.service" "$UNIT"
 systemctl daemon-reload
 systemctl enable dududa-cp >/dev/null 2>&1 || true
 systemctl restart dududa-cp
-bash "$PROTO/scripts/dududa-fw.sh"
+bash "$PROTO/ops/dududa-fw.sh"
 echo "dududa-cp: $(systemctl is-active dududa-cp)"

@@ -10,14 +10,14 @@ Dududa 2.0 - AstrBot 生产版插件
 """
 from astrbot.api.all import *
 
-from packages.adapters.astrbot.input_adapter import AstrBotInputAdapter, ActorMappingConfig
-from packages.adapters.astrbot.output_adapter import AstrBotOutputAdapter
-from packages.core.delivery import DeliveryManager
-from packages.core.envelope import Platform
-from packages.runtime.orchestrator import RuntimeOrchestrator
-from packages.core.persona.registry import PersonaRegistry
-from packages.core.capability import CapabilityRegistry
-from packages.mcp.registry import register_all_mcp_services
+from dududa.adapters.astrbot.input_adapter import AstrBotInputAdapter, ActorMappingConfig
+from dududa.adapters.astrbot.output_adapter import AstrBotOutputAdapter
+from dududa.core.delivery import DeliveryManager
+from dududa.core.envelope import Platform
+from dududa.runtime.orchestrator import RuntimeOrchestrator
+from dududa.core.persona.registry import PersonaRegistry
+from dududa.core.capability import CapabilityRegistry
+from dududa.mcp.registry import register_all_mcp_services
 
 import logging
 logger = logging.getLogger("dududa20")

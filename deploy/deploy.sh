@@ -103,7 +103,7 @@ fi
 
 # Copy Dududa plugin
 rm -rf ~/.astrbot/plugins/dududa20 2>/dev/null || true
-cp -r ../packages/adapters/astrbot ~/.astrbot/plugins/dududa20
+cp -r ../packages/dududa-agent/src/dududa/adapters/astrbot ~/.astrbot/plugins/dududa20
 
 # Copy config
 cp astrbot/config.yaml ~/.astrbot/config.yaml

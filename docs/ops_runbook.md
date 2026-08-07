@@ -16,17 +16,17 @@ journalctl -u astrbot --no-pager -n 200 # 最近 200 行日志
 #   MCP capabilities registered: 8
 ```
 
-## 1. 运维脚本 `scripts/ops.sh`
+## 1. 运维脚本 `ops/ops.sh`
 
 只读为主（`backup` 除外），输出目录默认 `/root/data/ops`，可用环境变量 `OPS_OUT` 覆盖（便于测试/临时快照）。
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/ops.sh health              # 健康快照
-bash scripts/ops.sh manifest            # 供应链 manifest v2
-bash scripts/ops.sh smoke               # 完整 smoke（含关键 pytest）
-bash scripts/ops.sh smoke --fast        # 快速 smoke（跳过 pytest）
-bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root/manage.sh backup
+bash ops/ops.sh health              # 健康快照
+bash ops/ops.sh manifest            # 供应链 manifest v2
+bash ops/ops.sh smoke               # 完整 smoke（含关键 pytest）
+bash ops/ops.sh smoke --fast        # 快速 smoke（跳过 pytest）
+bash ops/ops.sh backup              # 先写 health 快照，再委托 /root/manage.sh backup
 ```
 
 | 子命令 | 产物 | 关键字段 |
@@ -42,14 +42,14 @@ bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root
 - `supply_chain_manifest.json` 的 `ok == true`：两仓库 commit 可解析 + napcat 镜像 digest 可解析。
 - `smoke` 退出码：全部 PASS 为 0，任一 FAIL 为 1。
 
-## 2. 退出门禁 `scripts/exit_gate_check.sh`
+## 2. 退出门禁 `ops/exit_gate_check.sh`
 
 部署/发布前逐项核对 P0/P1/P2 证据，只读。完整模式跑门禁相关 pytest（约 1-2 分钟），`--fast` 只做静态检查（约 10 秒）。
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/exit_gate_check.sh         # 完整 43 项（含 CP gate）
-bash scripts/exit_gate_check.sh --fast  # 静态 38 项
+bash ops/exit_gate_check.sh         # 完整 43 项（含 CP gate）
+bash ops/exit_gate_check.sh --fast  # 静态 38 项
 ```
 
 覆盖内容：
@@ -60,13 +60,13 @@ bash scripts/exit_gate_check.sh --fast  # 静态 38 项
 
 退出码：全部 PASS 为 0；任一 FAIL 为 1。末尾输出 `summary: 门禁检查 N 项, PASS=... FAIL=...`。
 
-## 3. 全量门禁 `scripts/eval_gate.sh`
+## 3. 全量门禁 `ops/eval_gate.sh`
 
 Phase 9 Eval 门禁：语法编译（全部 packages/tests）→ 全量 pytest → 版本化 Eval，全绿才输出 `ALL GATES PASS`。
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/eval_gate.sh
+bash ops/eval_gate.sh
 ```
 
 ## 4. 备份/恢复 `manage.sh`
@@ -90,9 +90,9 @@ bash scripts/eval_gate.sh
 cd /opt/dududa20-prototype
 git log --oneline -3                        # 期望的提交链
 git status --short                          # 工作区干净（无输出）
-bash scripts/exit_gate_check.sh             # 43 项全 PASS
-bash scripts/eval_gate.sh                   # ALL GATES PASS
-bash scripts/ops.sh health && bash scripts/ops.sh manifest   # 两 JSON 的 ok 均为 true
+bash ops/exit_gate_check.sh             # 50 项全 PASS
+bash ops/eval_gate.sh                   # ALL GATES PASS
+bash ops/ops.sh health && bash ops/ops.sh manifest   # 两 JSON 的 ok 均为 true
 systemctl is-active astrbot                 # active
 ```
 
@@ -122,8 +122,8 @@ systemctl is-active astrbot                 # active
 
 验证：
 
-    grep -n "ICOURSE_SERVICE_IDS" packages/mcp/access.py
-    grep -n "ServerCircuitBreaker" packages/mcp/registry.py
+    grep -n "ICOURSE_SERVICE_IDS" packages/dududa-agent/src/dududa/mcp/access.py
+    grep -n "ServerCircuitBreaker" packages/dududa-agent/src/dududa/mcp/registry.py
     python3.12 -m pytest tests/test_mcp_access_breaker.py -q   # 预期全绿
     # QQ 发 /dududa_mcp 查看访问策略与熔断状态
 
@@ -142,11 +142,31 @@ systemctl is-active astrbot                 # active
 
 验证：
 
-    grep -n "class ProfileStore" packages/core/profile.py
+    grep -n "class ProfileStore" packages/dududa-agent/src/dududa/core/profile.py
     python3.12 -m pytest tests/test_profile_session_p0.py -q   # 预期全绿
     # QQ @机器人 发：叫我XX / 我喜欢XX -> 检查 data/profiles.json
 
-## 8. Dashboard 收敛（文档清单第 7 项）
+## 8. Phase 8 目录迁移（文档 2.5.11）
+
+权威源码布局（git mv 迁移，根入口兼容）：
+
+    /opt/dududa20-prototype/packages/dududa-agent/src/dududa/   # 权威源码（core/runtime/router/...)
+    /opt/dududa20-prototype/ops/                                # 运维脚本（exit_gate/ops/eval_gate/smoke_net）
+    /opt/dududa20-prototype/tests/{unit,contracts,integration,evals,fixtures,smoke}/
+    /root/manage.sh                                             # 根运维入口
+
+Python 导入从 `packages.*` 切换为 `dududa.*`；插件薄壳 main.py 的 sys.path 指向
+`/opt/dududa20-prototype/packages/dududa-agent/src`。
+
+完整部署生命周期（P2 门禁覆盖）：
+
+    bash /root/manage.sh backup               # 快照（自动保留 5 份）
+    bash /root/manage.sh upgrade [tarball]    # 备份→health 门禁→更新→全量测试→重启；失败自动 rollback
+    bash /root/manage.sh bootstrap [tarball]  # 全新部署：前置检查→源码/插件→systemd→启动验证
+    bash /root/manage.sh rollback             # 回到最近备份
+
+
+## 9. Dashboard 收敛（文档清单第 7 项）
 
 管理面端口 6185（AstrBot Dashboard）、3001/6099（NapCat OneBot / WebUI）仅放行受信来源：
 本机回环、私网（10/8、172.16/12、192.168/16）、CGNAT（100.64/10）、运维公网 IP；其余一律 DROP。
@@ -171,32 +191,32 @@ systemctl is-active astrbot                 # active
     grep -F autoLogin /opt/napcat/config/webui.json                       # 3823883634
 
 
-## 9. Phase 10 兼容清理（legacy 清零）
+## 10. Phase 10 兼容清理（legacy 清零）
 
 目标（文档 2.5.11 Phase 10）：生产入口、测试、文档、旧 import/path 消费者与 rollback 清单全部满足；legacy 移除清单为零。
 
-清理口径（`scripts/exit_gate_check.sh` P10 段静态检查，`--fast` 也执行）：
+清理口径（`ops/exit_gate_check.sh` P10 段静态检查，`--fast` 也执行）：
 - 原型仓库与插件仓库工作区必须干净（`git status --porcelain` 为空）。
 - 两仓库不得存在 legacy 代码副本：`*.bak*`、`*.swp`/`*.swo`、`main.py.final`/`main.py.stable*`/`main.py.v2.final`。
   缓存（`__pycache__`、`.pytest_cache`）与运行数据（`data/`、`deploy/.env*`）不在清单内。
-- `packages/` 不得引用插件旧入口路径 `/root/data/plugins/dududa20/main.py`；测试与运维脚本加载薄壳是预期行为，不算 legacy。
-- 生产入口 = 插件薄壳 `main.py`（< 500 行），业务逻辑在 `/opt/dududa20-prototype/packages/`。
+- `packages/dududa-agent/src/dududa/` 不得引用插件旧入口路径 `/root/data/plugins/dududa20/main.py`；测试与运维脚本加载薄壳是预期行为，不算 legacy。
+- 生产入口 = 插件薄壳 `main.py`（< 500 行），业务逻辑在 `/opt/dududa20-prototype/packages/dududa-agent/src/dududa/`。
 
 回滚路径（rollback 清单）：
 - 代码回滚：两仓库均以 git 为唯一事实源，历史提交即回滚证据；按需 `git revert` 或 `git checkout <rev>`。
 - 数据回滚：`/root/manage.sh rollback`（自动取最新 `dududa20_*.tar.gz` 恢复）；`/root/manage.sh restore <file>` 指定备份。
-- 发布前必须全绿：`bash scripts/exit_gate_check.sh`（P0/P1/P2/CP/P10）+ `bash scripts/eval_gate.sh` + `bash scripts/ops.sh smoke-net`。
+- 发布前必须全绿：`bash ops/exit_gate_check.sh`（P0/P1/P2/CP/P10）+ `bash ops/eval_gate.sh` + `bash ops/ops.sh smoke-net`。
 
 验证：
 
-    bash scripts/exit_gate_check.sh        # summary 43 项 PASS=43 FAIL=0
+    bash ops/exit_gate_check.sh        # summary 50 项 PASS=50 FAIL=0
     find /opt/dududa20-prototype -name '*.bak*' -not -path '*/.git/*' | wc -l   # 0
     find /root/data/plugins/dududa20 -name '*.bak*' | wc -l                    # 0
     cd /opt/dududa20-prototype && git status --porcelain                       # 空
 
 
 
-## 10. Control Plane 运维（ADR-0001）
+## 11. Control Plane 运维（ADR-0001）
 
 独立管理面（FastAPI，默认 127.0.0.1:8000），不参与 QQ 消息同步链路。
 
@@ -214,8 +234,8 @@ systemctl is-active astrbot                 # active
 
     bash /opt/dududa20-prototype/deploy/control_plane/install_cp.sh   # 安装 systemd 单元 + cp.env（随机 token）+ 防火墙白名单
     systemctl status dududa-cp                                        # 服务状态
-    bash /opt/dududa20-prototype/scripts/ops.sh cp status             # token 配置/监听/审计行数/单元状态
-    bash /opt/dududa20-prototype/scripts/ops.sh cp restart            # 重启
+    bash /opt/dududa20-prototype/ops/ops.sh cp status             # token 配置/监听/审计行数/单元状态
+    bash /opt/dududa20-prototype/ops/ops.sh cp restart            # 重启
     curl -s http://127.0.0.1:8000/health                              # 存活探针（无 token 豁免）
     curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/personas
 

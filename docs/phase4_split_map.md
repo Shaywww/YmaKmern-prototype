@@ -9,7 +9,7 @@
 
 | 生产 main.py 职责 | 原型目标模块 | 说明 |
 | --- | --- | --- |
-| `_make_scope` / 事件身份 | `packages/adapters/astrbot/input_adapter.py` + `core/envelope.py` | `to_preprocessed()` 产出 `PreprocessedEnvelope`；`Actor(role/deny_flags)` 承载权限 |
+| `_make_scope` / 事件身份 | `packages/dududa-agent/src/dududa/adapters/astrbot/input_adapter.py` + `core/envelope.py` | `to_preprocessed()` 产出 `PreprocessedEnvelope`；`Actor(role/deny_flags)` 承载权限 |
 | `_store_memory` / `_read_memory` | `core/memory.py` | `WriteGate` 评审 `MemoryCandidate` 后 `MemoryRepository.write`；跨类型召回改用 `ScopeSelector` |
 | `_is_self_message` / `_get_bot_id` | `input_adapter.py`（`Actor.bot_id`）+ `core/envelope.py` | 每事件动态 bot_id，多机器人隔离 |
 | `_social_decision` | `core/decision.py` `SocialDecisionEngine` | 六动作 + `DecisionReason` 稳定 reason code |

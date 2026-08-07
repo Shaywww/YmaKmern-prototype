@@ -5,7 +5,7 @@
 默认 pytest 收集时会被排除（pyproject addopts 含 -m "not net"）；
 仅显式 -m net 时运行：
     cd /opt/dududa20-prototype
-    bash scripts/smoke_net.sh    # 推荐：自动从 systemd 注入生产密钥
+    bash ops/smoke_net.sh    # 推荐：自动从 systemd 注入生产密钥
     python3.12 -m pytest tests/smoke -m net -q --tb=short
 """
 import asyncio
@@ -21,7 +21,7 @@ import pytest
 
 pytestmark = pytest.mark.net
 
-PROTO = Path("/opt/dududa20-prototype")
+PROTO = Path("/opt/dududa20-prototype/packages/dududa-agent/src")
 PLUGIN = Path("/root/data/plugins/dududa20")
 
 
@@ -48,7 +48,7 @@ def _has_keys() -> bool:
 def test_gateway_reachable_deepseek():
     """主网关 HTTPS 可达（真实网络）。"""
     if not _has_keys():
-        pytest.skip("DEEPSEEK_API_KEY 未注入（请用 scripts/smoke_net.sh 运行）")
+        pytest.skip("DEEPSEEK_API_KEY 未注入（请用 ops/smoke_net.sh 运行）")
     r = httpx.get("https://api.deepseek.com", timeout=8)
     assert r.status_code < 500, f"主网关异常: HTTP {r.status_code}"
 
@@ -63,7 +63,7 @@ def test_gateway_reachable_fallback():
 def test_production_llm_roundtrip():
     """生产 Router 真实 LLM 往返：deepseek 主路径，非空回复 + 限时。"""
     if not _has_keys():
-        pytest.skip("DEEPSEEK_API_KEY 未注入（请用 scripts/smoke_net.sh 运行）")
+        pytest.skip("DEEPSEEK_API_KEY 未注入（请用 ops/smoke_net.sh 运行）")
     main_mod, p = _load_plugin()
     assert p._model_router is not None, "生产 Router 未装配"
 

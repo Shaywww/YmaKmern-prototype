@@ -15,7 +15,7 @@ os.environ.setdefault(
     str(Path(__file__).resolve().parents[2] / "data" / "traces-eval"),
 )
 
-sys.path.insert(0, "/opt/dududa20-prototype")
+sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 sys.path.insert(0, "/root/data/plugins/dududa20")
 
 from tests.evals import evals

@@ -29,7 +29,7 @@ python -m pytest tests/ -q
 ## 项目结构
 
 `
-packages/
+packages/dududa-agent/src/dududa/
 ├── core/             # 领域模型（消息/状态/记忆/人格/渲染）
 │   └── persona/      # OC 人格系统（4 套预设）
 ├── runtime/          # 控制中枢（13 阶段 Pipeline）
@@ -40,11 +40,14 @@ packages/
 ├── planner/          # 多步骤工具编排
 ├── control_plane/    # Web 控制台（FastAPI + 仪表盘）
 └── adapters/astrbot/ # QQ 机器人适配层
+
+ops/                  # 运维脚本（exit_gate / ops / eval_gate / smoke_net）
+tests/                # 分层测试：unit / contracts / integration / evals / fixtures / smoke
 `
 
 ## 对接 QQ
 
-详见 packages/adapters/astrbot/plugin.py，需额外安装 AstrBot：
+详见 packages/dududa-agent/src/dududa/adapters/astrbot/plugin.py，需额外安装 AstrBot：
 
 `ash
 pip install astrbot

@@ -35,7 +35,7 @@ After=network.target
 Type=simple
 User=admin
 WorkingDirectory=/opt/dududa20-prototype
-ExecStart=/usr/local/bin/python3.12 -c "from packages.control_plane import run_server; run_server(host='127.0.0.1', port=8000)"
+ExecStart=/usr/local/bin/python3.12 -c "from dududa.control_plane import run_server; run_server(host='127.0.0.1', port=8000)"
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -70,7 +70,7 @@ echo "[6/6] QQ bot (AstrBot)..."
 sudo pip3.12 install astrbot
 mkdir -p /home/admin/.astrbot
 rm -rf /home/admin/.astrbot/plugins/dududa20 2>/dev/null || true
-cp -r /opt/dududa20-prototype/packages/adapters/astrbot /home/admin/.astrbot/plugins/dududa20
+cp -r /opt/dududa20-prototype/packages/dududa-agent/src/dududa/adapters/astrbot /home/admin/.astrbot/plugins/dududa20
 cp /opt/dududa20-prototype/deploy/astrbot/metadata.yaml /home/admin/.astrbot/plugins/dududa20/
 
 echo ""

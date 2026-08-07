@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """版本化 Eval：五组件 fixture + 阈值（文档 2.5.10 / Phase 9 前半）。"""
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype")
+sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 sys.path.insert(0, "/root/data/plugins/dududa20")
 
 import pytest

@@ -10,7 +10,7 @@ import tempfile
 import types
 from pathlib import Path
 
-sys.path.insert(0, "/opt/dududa20-prototype")
+sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 sys.path.insert(0, "/root/data/plugins/dududa20")
 
 _EVAL_DIR = Path(__file__).resolve().parent
@@ -184,15 +184,15 @@ def run_social_decision_policy() -> dict:
 
 
 async def run_tool_runtime() -> dict:
-    from packages.core.capability import (
+    from dududa.core.capability import (
         Capability, CapabilityRegistry, CapabilityRisk, ProviderType,
         CapProvider, ToolObservation,
     )
-    from packages.core.memory import InMemoryRepository
-    from packages.core.state import RuntimeBudget, RunOutcome, RuntimeState
-    from packages.planner.executor import ToolExecutor, ExecutionContext
-    from packages.planner.planner import PlannedStep, GeneratedPlan
-    from packages.runtime.orchestrator import RuntimeOrchestrator
+    from dududa.core.memory import InMemoryRepository
+    from dududa.core.state import RuntimeBudget, RunOutcome, RuntimeState
+    from dududa.planner.executor import ToolExecutor, ExecutionContext
+    from dududa.planner.planner import PlannedStep, GeneratedPlan
+    from dududa.runtime.orchestrator import RuntimeOrchestrator
 
     def cap(cid, idempotent=False):
         return Capability(
@@ -296,12 +296,12 @@ def run_capability_retrieval() -> dict:
     - wrong_exposure_rate：越权/禁止副作用/不健康等不应出现的能力泄漏率；
     - arg_accuracy：ToolPlanValidator 对合法/缺参/未知/超预算计划的判定正确率。
     """
-    from packages.core.capability import (
+    from dududa.core.capability import (
         Capability, CapabilityRegistry, CapabilityQuery, CapabilityRisk,
         CapabilitySchema, ProviderType, ToolPlanValidator,
     )
-    from packages.core.state import RuntimeBudget
-    from packages.planner.planner import GeneratedPlan, PlannedStep
+    from dududa.core.state import RuntimeBudget
+    from dududa.planner.planner import GeneratedPlan, PlannedStep
 
     fx = load_fixture("capability_retrieval_cases.json")
 
@@ -397,7 +397,7 @@ def run_capability_retrieval() -> dict:
 
 
 def run_memory_writegate() -> dict:
-    from packages.core.memory import (
+    from dududa.core.memory import (
         InMemoryRepository, MemoryRecord, MemoryScope, MemoryType,
         MemoryCandidate, WriteGate, WriteGateDecision,
     )
@@ -452,7 +452,7 @@ def run_memory_writegate() -> dict:
 
 
 def run_oc_render() -> dict:
-    from packages.core.renderer import OCRenderer, DraftResponse, FactAnchor
+    from dududa.core.renderer import OCRenderer, DraftResponse, FactAnchor
     fx = load_fixture("oc_render_cases.json")
     renderer = OCRenderer()
     total = passed = 0
