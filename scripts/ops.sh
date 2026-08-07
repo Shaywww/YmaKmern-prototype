@@ -3,6 +3,7 @@
 #   health   - 生成 health_status.json（服务/banner/MCP/错误/备份新鲜度）
 #   manifest - 生成供应链 manifest v2（仓库 commit + 工作区干净 + 镜像 digest + 最小挂载）
 #   smoke    - 一次性 bootstrap smoke（语法 + 插件 import [+ 关键 pytest] + 服务状态）
+#   smoke-net - 真实网络 smoke（网关可达性 + 生产 LLM 往返，与阻塞 CI 分开）
 #   backup   - 先写 health 快照，再委托 /root/manage.sh backup
 # 所有命令只读（backup 除外），输出目录用 OPS_OUT 覆盖（默认 /root/data/ops）。
 set -euo pipefail
@@ -125,6 +126,11 @@ cmd_smoke() {
     [ "$fail" -eq 0 ]
 }
 
+# ---------- real-network smoke（Phase 9：与阻塞 CI 分开） ----------
+cmd_smoke_net() {
+    bash "$PROTO/scripts/smoke_net.sh"
+}
+
 # ---------- backup（先写 health 快照，再委托 manage.sh） ----------
 cmd_backup() {
     OPS_OUT=/tmp cmd_health >/dev/null
@@ -135,6 +141,7 @@ case "${1:-}" in
     health) cmd_health ;;
     manifest) cmd_manifest ;;
     smoke) cmd_smoke "${2:-}" ;;
+    smoke-net) cmd_smoke_net ;;
     backup) cmd_backup ;;
     *) echo "usage: $0 {health|manifest|smoke [--fast]|backup}" >&2; exit 1 ;;
 esac

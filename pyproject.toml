@@ -20,7 +20,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-v", "--tb=short"]
+addopts = ["-v", "--tb=short", "-m", "not net"]
+markers = [
+    "net: real-network smoke（需要真实 API key，仅显式 -m net 运行）",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
