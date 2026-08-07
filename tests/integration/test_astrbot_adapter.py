@@ -56,6 +56,22 @@ class TestInputAdapter:
         e = _evt(); e._components = [Image(url='http://x.com/a.jpg')]
         assert a.to_envelope(e).has_attachment('image')
 
+    def test_message_id_fallback_prefers_message_obj(self):
+        # 回归：真实 astrbot 的 AstrMessageEvent 没有 message_id 属性，
+        # 只有 message_obj.message_id。若回退到 session_id 会导致同一
+        # 会话 600s 内所有消息共用幂等键而被去重（文档 2.4.1）。
+        a = AstrBotInputAdapter()
+        e = _evt(priv=True)
+        try:
+            del e.message_id
+        except AttributeError:
+            pass
+        class _MO:
+            message_id = "M-REAL-42"
+        e.message_obj = _MO()
+        env = a.to_envelope(e)
+        assert env.platform_message_id == "M-REAL-42"
+
     def test_preprocessed(self):
         pp = AstrBotInputAdapter().to_preprocessed(_evt(text='hey'))
         assert pp.validated and pp.envelope.text == 'hey'

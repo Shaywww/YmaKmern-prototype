@@ -86,7 +86,7 @@ class AstrBotInputAdapter:
             text=event.message_str,
             attachments=tuple(attachments),
             mentions=tuple(mentions),
-            platform_message_id=getattr(event, "message_id", "") or getattr(event, "session_id", "") or None,
+            platform_message_id=getattr(event, "message_id", "") or getattr(getattr(event, "message_obj", None), "message_id", "") or None,
             received_at=datetime.now(timezone.utc),
             reply_to=self._extract_reply(event),
         )
