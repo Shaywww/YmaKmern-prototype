@@ -1,11 +1,24 @@
-﻿import pytest
+﻿import os
+
+import pytest
 from fastapi.testclient import TestClient
 from packages.control_plane.app import create_app
 
+
 @pytest.fixture
-def client():
+def client(tmp_path):
+    """CP-P0（ADR-0001）：所有请求带管理 token；审计落 tmp。"""
+    os.environ["DUDUDA_CP_TOKEN"] = "cp-test-token"
+    os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
+    # MCP access 隔离：指向不存在的路径 -> legacy allow（生产 default deny 不干扰测试）
+    os.environ.setdefault("DUDUDA_MCP_ACCESS", "/tmp/dududa-cp-test-access-absent.json")
     app = create_app()
-    return TestClient(app)
+    c = TestClient(app)
+    c.headers.update({"Authorization": "Bearer cp-test-token"})
+    yield c
+    os.environ.pop("DUDUDA_MCP_ACCESS", None)
+    os.environ.pop("DUDUDA_CP_TOKEN", None)
+    os.environ.pop("DUDUDA_CP_AUDIT", None)
 
 class TestHealth:
     def test_health_ok(self, client):

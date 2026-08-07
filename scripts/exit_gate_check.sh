@@ -81,6 +81,17 @@ if [ "$FAST" != "--fast" ]; then
     fi
     rm -rf "$tmp"
 fi
+echo "== CP gate（ADR-0001 控制面安全基线）=="
+static "CP security 模块存在" test -f "$PROTO/packages/control_plane/security.py"
+static "CP token fail closed（未配置 -> 401）" grep -q 'def token_ok' "$PROTO/packages/control_plane/security.py"
+static "CP 写操作权限（manage_config, 非 owner 403）" bash -c "grep -q 'require_write' '$PROTO/packages/control_plane/security.py' && grep -q 'manage_config' '$PROTO/packages/control_plane/security.py'"
+static "CP MCP query 走 CapabilityRegistry + access 策略" bash -c "grep -q 'cap_registry.get' '$PROTO/packages/control_plane/app.py' && grep -q 'mcp_access.is_allowed' '$PROTO/packages/control_plane/app.py'"
+static "CP 审计 JSONL（AuditLogger）" grep -q 'class AuditLogger' "$PROTO/packages/control_plane/security.py"
+static "CP 脱敏走共享 Redactor" grep -q 'Redactor' "$PROTO/packages/control_plane/security.py"
+if [ "$FAST" != "--fast" ]; then
+    run_tests "CP-P0 安全基线（鉴权/权限/审计/脱敏/Scope/MCP 入口）"         tests/test_control_plane.py tests/test_control_plane_cp_p0.py
+fi
+
 echo "== P10 gate（Phase 10 兼容清理 + legacy 清零）=="
 static "P10 原型仓库无 legacy 副本" bash -c "! find '$PROTO' -path '$PROTO/.git' -prune -o -type f \( -name '*.bak*' -o -name '*.swp' -o -name '*.swo' \) -print | grep -q ."
 static "P10 插件仓库无 legacy 副本" bash -c "! find '$PLUGIN' -path '$PLUGIN/.git' -prune -o -type f \( -name '*.bak*' -o -name 'main.py.final' -o -name 'main.py.stable*' -o -name 'main.py.v2.final' \) -print | grep -q ."

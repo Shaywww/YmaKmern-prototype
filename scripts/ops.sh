@@ -5,6 +5,7 @@
 #   smoke    - 一次性 bootstrap smoke（语法 + 插件 import [+ 关键 pytest] + 服务状态）
 #   smoke-net - 真实网络 smoke（网关可达性 + 生产 LLM 往返，与阻塞 CI 分开）
 #   backup   - 先写 health 快照，再委托 /root/manage.sh backup
+#   cp       - Control Plane 状态/启停（ADR-0001 CP-P0，鉴权访问）
 # 所有命令只读（backup 除外），输出目录用 OPS_OUT 覆盖（默认 /root/data/ops）。
 set -euo pipefail
 
@@ -131,6 +132,30 @@ cmd_smoke_net() {
     bash "$PROTO/scripts/smoke_net.sh"
 }
 
+# ---------- Control Plane（ADR-0001 CP-P0） ----------
+cmd_cp() {
+    local action="${1:-status}"
+    case "$action" in
+        status)
+            local tok
+            tok=$(systemctl show "$SERVICE" -p Environment 2>/dev/null | grep -o 'DUDUDA_CP_TOKEN=[^ ]*' || true)
+            echo "cp token configured: $([ -n "$tok" ] && echo yes || echo no)"
+            if command -v ss >/dev/null 2>&1; then
+                ss -ltn 2>/dev/null | grep -q ':8000 '                     && echo "cp listener: 127.0.0.1:8000 (listening)"                     || echo "cp listener: not listening"
+            fi
+            local audit="$PROTO/data/cp_audit.jsonl"
+            echo "cp audit: $([ -f "$audit" ] && wc -l < "$audit" || echo 0) lines"
+            ;;
+        start|stop|restart)
+            echo "manage via: systemctl start|stop|restart dududa-cp（systemd 单元 ADR-0001 CP-P2 部署）"
+            ;;
+        *)
+            echo "usage: ops.sh cp {status|start|stop|restart}" >&2
+            return 2
+            ;;
+    esac
+}
+
 # ---------- backup（先写 health 快照，再委托 manage.sh） ----------
 cmd_backup() {
     OPS_OUT=/tmp cmd_health >/dev/null
@@ -142,6 +167,7 @@ case "${1:-}" in
     manifest) cmd_manifest ;;
     smoke) cmd_smoke "${2:-}" ;;
     smoke-net) cmd_smoke_net ;;
+    cp) cmd_cp "${2:-status}" ;;
     backup) cmd_backup ;;
     *) echo "usage: $0 {health|manifest|smoke [--fast]|backup}" >&2; exit 1 ;;
 esac

@@ -48,8 +48,8 @@ bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/exit_gate_check.sh         # 完整 24 项
-bash scripts/exit_gate_check.sh --fast  # 静态 22 项
+bash scripts/exit_gate_check.sh         # 完整 31 项（含 CP gate）
+bash scripts/exit_gate_check.sh --fast  # 静态 28 项
 ```
 
 覆盖内容：
@@ -90,7 +90,7 @@ bash scripts/eval_gate.sh
 cd /opt/dududa20-prototype
 git log --oneline -3                        # 期望的提交链
 git status --short                          # 工作区干净（无输出）
-bash scripts/exit_gate_check.sh             # 18 项全 PASS
+bash scripts/exit_gate_check.sh             # 31 项全 PASS
 bash scripts/eval_gate.sh                   # ALL GATES PASS
 bash scripts/ops.sh health && bash scripts/ops.sh manifest   # 两 JSON 的 ok 均为 true
 systemctl is-active astrbot                 # active
@@ -185,11 +185,11 @@ systemctl is-active astrbot                 # active
 回滚路径（rollback 清单）：
 - 代码回滚：两仓库均以 git 为唯一事实源，历史提交即回滚证据；按需 `git revert` 或 `git checkout <rev>`。
 - 数据回滚：`/root/manage.sh rollback`（自动取最新 `dududa20_*.tar.gz` 恢复）；`/root/manage.sh restore <file>` 指定备份。
-- 发布前必须全绿：`bash scripts/exit_gate_check.sh`（P0/P1/P2/P10）+ `bash scripts/eval_gate.sh` + `bash scripts/ops.sh smoke-net`。
+- 发布前必须全绿：`bash scripts/exit_gate_check.sh`（P0/P1/P2/CP/P10）+ `bash scripts/eval_gate.sh` + `bash scripts/ops.sh smoke-net`。
 
 验证：
 
-    bash scripts/exit_gate_check.sh        # summary 24 项 PASS=24 FAIL=0
+    bash scripts/exit_gate_check.sh        # summary 31 项 PASS=31 FAIL=0
     find /opt/dududa20-prototype -name '*.bak*' -not -path '*/.git/*' | wc -l   # 0
     find /root/data/plugins/dududa20 -name '*.bak*' | wc -l                    # 0
     cd /opt/dududa20-prototype && git status --porcelain                       # 空

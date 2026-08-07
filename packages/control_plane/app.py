@@ -3,12 +3,19 @@ from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
 from typing import Any
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from ..core.persona.templates import PersonaTemplate, PersonaTraits, ToneConfig, FormalityLevel, PlayfulnessLevel, EmojiStyle
 from ..core.persona.registry import PersonaRegistry
-from ..mcp.registry import create_all_services
+from ..mcp.registry import create_all_services, register_all_mcp_services
+from ..core.capability import CapabilityRegistry, CapabilityRisk
+from ..safeguards.security import PermissionEngine, Redactor
+from ..mcp import access as mcp_access
+from .security import (
+    AuditLogger, cp_auth_middleware, get_operator, redact_value,
+    require_write, scope_filter_events,
+)
 from ..observability.observability import Tracer, InMemoryTraceSink, TraceEvent
 
 _registry = PersonaRegistry()
@@ -50,36 +57,6 @@ def _event_to_dict(e: TraceEvent) -> dict:
     }
 
 class PersonaCreate(BaseModel):
-    persona_id: str; name: str = ""; display_name: str = ""
-    description: str = ""; traits: dict[str, float] = {}
-    tone: dict[str, Any] = {}; speaking_style: str = ""
-    first_person: str = "I"; response_length: str = "medium"
-
-class OverrideSet(BaseModel):
-    persona_id: str
-
-class MCPQuery(BaseModel):
-    action: str; keyword: str = ""; course_id: str = ""
-    department: str = ""; semester: str = ""; student_id: str = ""
-    major_id: str = ""; category: str = ""; source: str = ""; days: int | None = None
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    _tracer.record(TraceEvent(level="phase", phase="control_plane_startup",
-        metadata={"services": list(_services.keys()), "personas": list(_registry.list_all())}))
-    yield
-    _tracer.record(TraceEvent(level="phase", phase="control_plane_shutdown"))
-
-def create_app() -> FastAPI:
-    app = FastAPI(title="嘟嘟哒 2.0 控制台", version="0.1.0", lifespan=lifespan)
-    app.state.registry = _registry
-    app.state.services = _services
-    app.state.tracer = _tracer
-    app.state.trace_sink = _trace_sink
-    _register_routes(app)
-    return app
-
-class PersonaCreate(BaseModel):
     persona_id: str
     name: str = ''
     display_name: str = ''
@@ -104,6 +81,7 @@ class MCPQuery(BaseModel):
     category: str = ''
     source: str = ''
     days: int | None = None
+    token: str = ''
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -117,6 +95,15 @@ def create_app() -> FastAPI:
     app.state.services = _services
     app.state.tracer = _tracer
     app.state.trace_sink = _trace_sink
+    # CP-P0 安全基线（ADR-0001）：权限 / 脱敏 / 审计 / Capability 入口 / access 策略
+    app.state.permission_engine = PermissionEngine()
+    app.state.redactor = Redactor()
+    app.state.audit_logger = AuditLogger()
+    cap_registry = CapabilityRegistry()
+    register_all_mcp_services(cap_registry)
+    app.state.cap_registry = cap_registry
+    app.state.mcp_access = mcp_access.MCPAccessPolicy()
+    app.middleware('http')(cp_auth_middleware)
     _register_routes(app)
     return app
 
@@ -141,22 +128,26 @@ def _register_routes(app: FastAPI):
         return {'groups': dict(app.state.registry._group_overrides), 'users': dict(app.state.registry._user_overrides)}
 
     @app.put('/personas/overrides/groups/{group_id}')
-    async def set_group_override(group_id: str, body: OverrideSet):
+    async def set_group_override(group_id: str, body: OverrideSet, request: Request):
+        require_write(request, app)
         app.state.registry.set_group_override(group_id, body.persona_id)
         return {'group': group_id, 'persona': body.persona_id}
 
     @app.delete('/personas/overrides/groups/{group_id}')
-    async def clear_group_override(group_id: str):
+    async def clear_group_override(group_id: str, request: Request):
+        require_write(request, app)
         app.state.registry.set_group_override(group_id, None)
         return {'group': group_id, 'cleared': True}
 
     @app.put('/personas/overrides/users/{user_id}')
-    async def set_user_override(user_id: str, body: OverrideSet):
+    async def set_user_override(user_id: str, body: OverrideSet, request: Request):
+        require_write(request, app)
         app.state.registry.set_user_override(user_id, body.persona_id)
         return {'user': user_id, 'persona': body.persona_id}
 
     @app.delete('/personas/overrides/users/{user_id}')
-    async def clear_user_override(user_id: str):
+    async def clear_user_override(user_id: str, request: Request):
+        require_write(request, app)
         app.state.registry.set_user_override(user_id, None)
         return {'user': user_id, 'cleared': True}
 
@@ -167,13 +158,15 @@ def _register_routes(app: FastAPI):
         return _persona_to_dict(p)
 
     @app.post('/personas/{persona_id}/activate')
-    async def activate_persona(persona_id: str):
+    async def activate_persona(persona_id: str, request: Request):
+        require_write(request, app)
         if not app.state.registry.switch(persona_id):
             raise HTTPException(404, f'Persona {persona_id!r} not found')
         return {'active': persona_id}
 
     @app.put('/personas')
-    async def create_persona(body: PersonaCreate):
+    async def create_persona(body: PersonaCreate, request: Request):
+        require_write(request, app)
         if body.persona_id in app.state.registry.list_all():
             raise HTTPException(409, f'Persona {body.persona_id!r} already exists')
         p = PersonaTemplate(
@@ -187,7 +180,8 @@ def _register_routes(app: FastAPI):
         return {'created': body.persona_id}
 
     @app.delete('/personas/{persona_id}')
-    async def delete_persona(persona_id: str):
+    async def delete_persona(persona_id: str, request: Request):
+        require_write(request, app)
         if not app.state.registry.unregister(persona_id):
             raise HTTPException(400, f'Cannot delete {persona_id!r} (protected or not found)')
         return {'deleted': persona_id}
@@ -206,34 +200,58 @@ def _register_routes(app: FastAPI):
         return {'service': service_id, 'health': svc.check_health().value}
 
     @app.post('/mcp/services/{service_id}/query')
-    async def query_mcp_service(service_id: str, body: MCPQuery):
-        svc = app.state.services.get(service_id)
-        if not svc: raise HTTPException(404, f'MCP service {service_id!r} not found')
-        args = {k: v for k, v in body.model_dump().items() if k != 'action' and v is not None and (not isinstance(v, str) or v)}
+    async def query_mcp_service(service_id: str, body: MCPQuery, request: Request):
+        # CP-P0（ADR-0001）：不直连 service，经 CapabilityRegistry + access 策略 + 熔断
+        op = get_operator(request)
+        cap_id = f"mcp.{service_id}"
+        cap = app.state.cap_registry.get(cap_id)
+        if cap is None:
+            raise HTTPException(404, f'MCP service {service_id!r} not found')
+        if cap.risk == CapabilityRisk.DANGEROUS:
+            raise HTTPException(403, f'dangerous capability not allowed via CP: {cap_id}')
+        if not app.state.mcp_access.is_allowed(cap_id, "", op.actor_id):
+            raise HTTPException(403, f'access policy denied: {cap_id}')
+        provider = app.state.cap_registry.get_provider(cap_id)
+        if provider is None:
+            raise HTTPException(500, f'no provider for {cap_id}')
+        args = {k: v for k, v in body.model_dump().items()
+                if v is not None and (not isinstance(v, str) or v)}
         try:
-            method = getattr(svc, body.action, None)
-            if method is None:
-                raise HTTPException(400, f'Unknown action {body.action!r} for {service_id!r}')
-            result = await method(**args)
-            return {'success':result.success,'data':result.data if result.success else None,'error':result.error,'source':result.source,'cached':result.cached}
+            obs = await provider.execute(cap, args)
+            if (not obs.success) and obs.error and obs.error.startswith("Unknown action"):
+                raise HTTPException(400, obs.error)
+            data = redact_value(app.state.redactor, obs.data) if obs.success else None
+            return {'success': obs.success, 'data': data,
+                    'error': obs.error, 'source': obs.source, 'cached': obs.cached}
         except HTTPException: raise
         except Exception as e: raise HTTPException(500, str(e))
 
+    def _visible_events(events, op, limit=None):
+        """Scope 过滤 + Redactor 脱敏（CP-P0）。"""
+        events = scope_filter_events(events, op)
+        if limit is not None:
+            events = events[-limit:]
+        return [redact_value(app.state.redactor, _event_to_dict(e))
+                for e in events]
+
     @app.get('/traces')
-    async def list_traces(limit: int = Query(50, ge=1, le=500)):
-        events = app.state.trace_sink.events[-limit:]
-        return {'events': [_event_to_dict(e) for e in events], 'count': len(events)}
+    async def list_traces(request: Request, limit: int = Query(50, ge=1, le=500)):
+        op = get_operator(request)
+        events = _visible_events(app.state.trace_sink.events, op, limit)
+        return {'events': events, 'count': len(events)}
 
     @app.get('/traces/{trace_id}')
-    async def get_trace(trace_id: str):
-        events = app.state.trace_sink.by_trace(trace_id)
+    async def get_trace(trace_id: str, request: Request):
+        op = get_operator(request)
+        events = _visible_events(app.state.trace_sink.by_trace(trace_id), op)
         if not events: raise HTTPException(404, f'Trace {trace_id!r} not found')
-        return {'trace_id': trace_id, 'events': [_event_to_dict(e) for e in events]}
+        return {'trace_id': trace_id, 'events': events}
 
     @app.get('/traces/runs/{run_id}')
-    async def get_run_traces(run_id: str):
-        events = app.state.trace_sink.by_run(run_id)
-        return {'run_id': run_id, 'events': [_event_to_dict(e) for e in events], 'count': len(events)}
+    async def get_run_traces(run_id: str, request: Request):
+        op = get_operator(request)
+        events = _visible_events(app.state.trace_sink.by_run(run_id), op)
+        return {'run_id': run_id, 'events': events, 'count': len(events)}
 
     @app.get('/runtime/state')
     async def runtime_state():

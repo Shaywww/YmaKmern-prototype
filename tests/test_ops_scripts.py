@@ -14,6 +14,14 @@ def _run(*args, out_dir=None):
         ["bash", str(OPS), *args], capture_output=True, text=True, env=env)
 
 
+def test_cp_status_runs():
+    """ADR-0001 CP-P0：ops.sh cp status 可执行且输出关键项。"""
+    r = _run("cp", "status")
+    assert r.returncode == 0, r.stderr
+    assert "cp token configured" in r.stdout
+    assert "cp audit" in r.stdout
+
+
 def test_syntax():
     r = subprocess.run(["bash", "-n", str(OPS)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
