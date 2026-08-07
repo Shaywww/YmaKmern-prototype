@@ -93,7 +93,7 @@ class TestShortNounDecision:
         plugin = _plugin(monkeypatch, tmp_path)
         action, _ = plugin._social_decision(
             _FakeEvent("@bot USTC是什么", group="g1", user="u1"))
-        assert action == SocialAction.DIRECT_REPLY
+        assert action == SocialAction.USE_TOOLS
 
 
 class TestPerceptionNounQuery:

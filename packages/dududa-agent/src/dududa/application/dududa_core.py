@@ -299,6 +299,10 @@ class DududaCore:
         except Exception:
             return None
 
+    _TOOL_KW = ("帮我", "查", "搜", "算", "翻译", "了解", "介绍",
+                 "是什么", "怎么样", "多少", "招生", "分数线", "排名",
+                 "查询", "查查", "百度", "搜索", "找一下")
+
     def _social_decision(self, event) -> tuple:
         try:
             return self._social_decision_impl(event)
@@ -314,6 +318,9 @@ class DududaCore:
             return SocialAction.ANSWER, "fallback"
         is_group = bool(getattr(event.message_obj, "group", None))
         if not is_group:
+            clean_0 = re.sub(r"@\S+", "", combined).strip()
+            if any(kw in clean_0 for kw in self._TOOL_KW):
+                return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
             return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
         # 群策略（文档 2.5.2/2.5.4）：mode / reply_rate / meme_rate 落地到回复策略
         policy = self._group_policy_for(event)
@@ -334,7 +341,7 @@ class DududaCore:
             return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()
         # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）
-        if any(kw in clean for kw in ("帮我", "查", "搜", "算", "翻译")):
+        if any(kw in clean for kw in self._TOOL_KW):
             return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
         # 纯问候/单表情 -> REACT（同会话 10s 冷却，文档 2.5.4 速率冷却）
         # meme_rate 控制表情回复比例；未命中回退文本回复（保证 @ 必回）。
@@ -369,7 +376,7 @@ class DududaCore:
         acts = []
         if any(combined.endswith(q) for q in ("?", "？", "吗", "呢", "嘛", "么")):
             acts.append(SpeechAct(act_type="question", confidence=0.8))
-        if combined.startswith("/") or any(kw in combined for kw in ("帮我", "查", "搜", "算", "翻译")):
+        if combined.startswith("/") or any(kw in combined for kw in self._TOOL_KW):
             acts.append(SpeechAct(act_type="command", confidence=0.7))
         if not acts:
             if _is_greeting_text(combined):

@@ -245,7 +245,7 @@ class TestProdGroupPolicy:
         # 未配置：@ 必回、未 @ 忽略（现状不变）
         action, reason = plugin._social_decision(
             _FakeEvent("@bot 今天天气怎么样？", group="g1"))
-        assert action == SocialAction.DIRECT_REPLY
+        assert action == SocialAction.USE_TOOLS
         action, reason = plugin._social_decision(
             _FakeEvent("大家好", group="g1", at=False))
         assert action == SocialAction.IGNORE

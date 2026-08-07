@@ -9,7 +9,7 @@ import httpx
 
 from .base import BaseMCPService, CachePolicy, MCPServiceConfig, ServiceResult
 
-_BING_RSS_URL = "https://cn.bing.com/search"
+_BING_HOSTS = ("cn.bing.com", "www.bing.com")  # 主备源：cn 间歇降级时换国际版
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -38,37 +38,65 @@ class WebSearchService(BaseMCPService):
             mock_mode=False,
         ))
 
+    def _looks_relevant(self, results: list[dict], q: str) -> bool:
+        """结果与 query 是否相关（启发式）：query 核心词出现在任一结果里。"""
+        toks = _re.findall(r"[A-Za-z]{2,}", q)
+        cjk = [c[:4] for c in _re.findall(r"[\u4e00-\u9fff]{2,}", q)]
+        if not toks and not cjk:
+            return True
+        hay = " ".join(
+            (r.get("title") or "") + " " + (r.get("snippet") or "")
+            for r in results).upper()
+        return any(t.upper() in hay for t in toks) or any(c in hay for c in cjk)
+
     async def _fetch_live(self, **kwargs) -> list[dict]:
         q = str(kwargs.get("q", "")).strip()
         max_results = max(1, min(int(kwargs.get("max_results", 5)), _MAX_RESULTS))
         if not q:
             return []
-        async with httpx.AsyncClient(timeout=self.config.timeout_seconds,
-                                     follow_redirects=True) as client:
-            resp = await client.get(
-                _BING_RSS_URL,
-                params={"q": q, "format": "rss"},
-                headers={"User-Agent": _USER_AGENT,
-                         "Accept": "application/rss+xml, application/xml, */*"},
-            )
-            resp.raise_for_status()
-            payload = resp.text
-        root = ET.fromstring(payload)
-        results = []
-        for item in root.iter("item"):
-            title = _strip_html(item.findtext("title"))
-            link = (item.findtext("link") or "").strip()
-            snippet = _strip_html(item.findtext("description"))
-            if not title and not link:
+        last_results: list[dict] = []
+        last_err: Exception | None = None
+        for host in _BING_HOSTS:
+            try:
+                async with httpx.AsyncClient(
+                        timeout=self.config.timeout_seconds,
+                        follow_redirects=True) as client:
+                    resp = await client.get(
+                        f"https://{host}/search",
+                        params={"q": q, "format": "rss"},
+                        headers={"User-Agent": _USER_AGENT,
+                                 "Accept": "application/rss+xml, application/xml, */*"},
+                    )
+                    resp.raise_for_status()
+                    payload = resp.text
+                root = ET.fromstring(payload)
+                results = []
+                for item in root.iter("item"):
+                    title = _strip_html(item.findtext("title"))
+                    link = (item.findtext("link") or "").strip()
+                    snippet = _strip_html(item.findtext("description"))
+                    if not title and not link:
+                        continue
+                    results.append({
+                        "title": title[:_TITLE_LIMIT],
+                        "link": link,
+                        "snippet": snippet[:_SNIPPET_LIMIT],
+                    })
+                    if len(results) >= max_results:
+                        break
+                if not results:
+                    continue
+                if self._looks_relevant(results, q) or host == _BING_HOSTS[-1]:
+                    return results
+                last_results = results
+            except Exception as exc:  # 单源失败/超时换备用源
+                last_err = exc
                 continue
-            results.append({
-                "title": title[:_TITLE_LIMIT],
-                "link": link,
-                "snippet": snippet[:_SNIPPET_LIMIT],
-            })
-            if len(results) >= max_results:
-                break
-        return results
+        if last_results:
+            return last_results
+        if last_err is not None:
+            raise last_err
+        return []
 
     def _get_mock(self, **kwargs) -> list[dict]:
         q = str(kwargs.get("q", "")).strip() or "dududa"

@@ -470,6 +470,7 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
     if _cross_session_reply_dropped(plugin, event):
         return None
     if _is_at_only(event, msgs):
+        _mark_at_only_ts(event)
         # 纯@：优先配对同人 60s 内刚发的图（QQ 拆条），没图才回通用短句
         _at_paired = _take_paired_media(plugin, event)
         if _at_paired:
@@ -487,6 +488,14 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
         logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
                     run_id, trace_id, _r[:80])
         return _r
+    if (not getattr(event, "is_at_or_wake_command", False)
+            and _recent_at_only(event)):
+        # QQ 把 @ 与文本拆成两条消息：窗口内文本补上被 @ 语义
+        try:
+            event.is_at_or_wake_command = True
+            logger.info("Flow at-pair: text in at-only window -> mentioned")
+        except Exception:
+            pass
     if plugin._should_ignore(event): return None
     if _stash_group_media(plugin, event, msgs):
         return None
@@ -610,6 +619,27 @@ _AT_ONLY_REPLIES = (
     "来啦来啦～想聊什么都可以哦～(≧▽≦)",
     "在的在的～要帮忙还是唠嗑呀？(◕‿◕)",
 )
+
+
+# QQ 拆条 @ 窗口：at-only 消息后紧随的文本视为被 @（OneBot v11 配对）
+_AT_ONLY_TS: dict = {}
+_AT_ONLY_WINDOW_SECONDS = 5.0
+
+
+def _mark_at_only_ts(event) -> None:
+    try:
+        _AT_ONLY_TS[str(event.get_session_id())] = time.time()
+    except Exception:
+        pass
+
+
+def _recent_at_only(event) -> bool:
+    try:
+        return (time.time()
+                - _AT_ONLY_TS.get(str(event.get_session_id()), 0.0)
+                < _AT_ONLY_WINDOW_SECONDS)
+    except Exception:
+        return False
 
 
 def _is_at_only(event, msgs) -> bool:

@@ -75,8 +75,8 @@ class TestSocialDecisionAlignment:
         plugin = _plugin(monkeypatch, tmp_path)
         action, reason = plugin._social_decision(
             _FakeEvent("@bot 今天天气怎么样？", group="g1", user="u1"))
-        assert action == SocialAction.DIRECT_REPLY
-        assert reason == DecisionReason.DIRECT_MENTION.value
+        assert action == SocialAction.USE_TOOLS
+        assert reason == DecisionReason.EXPLICIT_COMMAND.value
 
     def test_greeting_react(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
