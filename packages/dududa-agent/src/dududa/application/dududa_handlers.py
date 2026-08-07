@@ -301,7 +301,7 @@ async def _perceive_with_model(plugin, event):
             return rule
         if rule.needs_tools or len(text) <= 2:
             return rule  # 快速路径：规则关键词/超短文本不调模型感知
-        raw = await fn(text, _capability_ids(plugin))
+        raw = await fn(text, _capability_lines(plugin))
         if raw is None:
             return rule
         merged, used = merge_perception_with_model(rule, raw)
@@ -316,8 +316,8 @@ async def _perceive_with_model(plugin, event):
         return rule
 
 
-def _capability_ids(plugin, limit: int = 20) -> tuple:
-    """生产能力清单（供感知提示词选择合法工具 id）；异常返回空元组。"""
+def _capability_lines(plugin, limit: int = 20) -> tuple:
+    """生产能力清单（含参数名，供感知提示词选合法工具+参数）；异常返回空元组。"""
     reg = getattr(plugin, "cap_registry", None)
     if reg is None:
         return ()
@@ -325,7 +325,13 @@ def _capability_ids(plugin, limit: int = 20) -> tuple:
         cands = reg.filter_candidates(permissions=(), max_count=limit)
     except Exception:
         return ()
-    return tuple(c.capability.capability_id for c in cands)
+    lines = []
+    for c in cands:
+        cap = c.capability
+        props = ((cap.schema.input_schema or {}).get("properties") or {})
+        param_str = ", ".join(sorted(props)) if props else "action"
+        lines.append(f"{cap.capability_id} | 参数: {param_str}")
+    return tuple(lines)
 
 
 def _strip_tool_leak(text: str) -> str:

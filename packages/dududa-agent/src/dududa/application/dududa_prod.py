@@ -278,11 +278,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if not candidates:
             return None
         try:
+            intent = self._intent_of(state)
             perception = getattr(state, "perception", None)
             tool_plan = getattr(perception, "tool_plan", None) if perception else None
             if tool_plan:
                 plan = self._parse_llm_plan(tool_plan, candidates, max_steps)
                 if plan is not None:
+                    plan = self._ensure_step_args(plan, intent, candidates)
                     logger.info(
                         "LLM plan (perception) | run_id=%s trace_id=%s steps=%d %s",
                         state.run_id, state.trace_id, len(plan.steps),
@@ -293,7 +295,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                         steps=[s.capability_id for s in plan.steps][:max_steps],
                         rationale="perception-tool-plan")
                     return plan
-            intent = self._intent_of(state)
             lines = []
             for cand in list(candidates)[:max_steps + 6]:
                 cap = cand.capability
@@ -317,6 +318,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 run_id=state.run_id, trace_id=state.trace_id, skip_render=True)
             plan = self._parse_llm_plan(reply, candidates, max_steps)
             if plan is not None:
+                plan = self._ensure_step_args(plan, intent, candidates)
                 logger.info(
                     "LLM plan | run_id=%s trace_id=%s steps=%d %s",
                     state.run_id, state.trace_id, len(plan.steps),
@@ -330,6 +332,45 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         except Exception as e:
             logger.warning("LLM plan failed: %s", e)
             return None
+
+    @staticmethod
+    def _ensure_step_args(plan, intent, candidates):
+        """LLM 计划参数兜底：模型漏填/填错参数时，用意图文本补白名单键 q。
+
+        仅当步骤参数为空且工具 schema 有 q 时注入（防空参执行失败）；
+        不覆盖模型已给的合法参数。
+        """
+        from dududa.planner.planner import GeneratedPlan, PlannedStep
+        if plan is None or not getattr(plan, "steps", ()):
+            return plan
+        import re
+        allowed = {c.capability.capability_id: c.capability for c in candidates}
+        steps = []
+        for s in plan.steps:
+            args = dict(s.arguments or {})
+            cap = allowed.get(s.capability_id)
+            if cap is not None:
+                props = ((cap.schema.input_schema or {}).get("properties") or {})
+                if "q" in props and "q" not in args:
+                    args["q"] = str(intent)[:120]
+                if cap.capability_id == "mcp.weather" and str(
+                        args.get("city") or "") in (
+                        "", "unknown", "默认", "用户默认位置", "current", "any"):
+                    # 城市兜底：意图里有「X市/县/区」或时间词前的地名则用，否则合肥
+                    m = re.search(
+                        r"([\u4e00-\u9fff]{2,6}(?:市|县|区))", str(intent) or "")
+                    if m is None:
+                        m = re.match(
+                            r"^([\u4e00-\u9fff]{2,4}?)(?=今天|明天|后天|"
+                            r"现在|天气|气温|冷不冷|热不热|预报)",
+                            str(intent) or "")
+                    args["city"] = m.group(1) if m else "合肥"
+            steps.append(PlannedStep(
+                step_id=s.step_id, capability_id=s.capability_id,
+                arguments=args, purpose=s.purpose))
+        return GeneratedPlan(
+            goal=getattr(plan, "goal", "llm-plan"),
+            steps=tuple(steps), rationale=getattr(plan, "rationale", ""))
 
     @staticmethod
     def _parse_llm_plan(reply, candidates, max_steps):
