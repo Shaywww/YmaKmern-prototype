@@ -93,9 +93,15 @@ static "CP-P1 Eval 报告只读路由" grep -q "'/eval/reports'" "$PROTO/package
 static "CP-P1 测试存在" test -f "$PROTO/tests/test_control_plane_cp_p1.py"
 static "CP 部署单元模板存在" test -f "$PROTO/deploy/control_plane/dududa-cp.service"
 static "CP 防火墙白名单含 8000" grep -q '6185,3001,6099,8000' "$PROTO/scripts/dududa-fw.sh"
+static "CP-P2 Playground 沙箱路由" grep -q "'/playground/run'" "$PROTO/packages/control_plane/app.py"
+static "CP-P2 成本/性能面板" grep -q "'/metrics/costs'" "$PROTO/packages/control_plane/app.py"
+static "CP-P2 自动告警" grep -q "'/alerts'" "$PROTO/packages/control_plane/app.py"
+static "CP-P2 日志检索" grep -q "'/logs'" "$PROTO/packages/control_plane/app.py"
+static "CP-P2 测试存在" test -f "$PROTO/tests/test_control_plane_cp_p2.py"
 if [ "$FAST" != "--fast" ]; then
     run_tests "CP-P0 安全基线（鉴权/权限/审计/脱敏/Scope/MCP 入口）"         tests/test_control_plane.py tests/test_control_plane_cp_p0.py
     run_tests "CP-P1 只读面板（Memory/Eval/Trace）" tests/test_control_plane_cp_p1.py
+    run_tests "CP-P2 高级能力（Playground/Metrics/Alerts/Logs）" tests/test_control_plane_cp_p2.py
 fi
 
 echo "== P10 gate（Phase 10 兼容清理 + legacy 清零）=="

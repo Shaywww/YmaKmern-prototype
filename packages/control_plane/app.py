@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any
@@ -89,6 +90,13 @@ class MCPQuery(BaseModel):
     days: int | None = None
     token: str = ''
 
+
+class PlaygroundRun(BaseModel):
+    message: str
+    actor_id: str = "playground_user"
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _trace_sink.write(TraceEvent(level="phase",phase="control_plane_startup"))
@@ -113,12 +121,110 @@ def create_app() -> FastAPI:
     app.state.memory_repo = JSONMemoryRepository(
         path=os.environ.get("DUDUDA_MEMORY_FILE") or str(
             Path(__file__).resolve().parents[2] / "data" / "memory.json"))
+    app.state.trace_dir = Path(
+        os.environ.get("DUDUDA_CP_TRACE_DIR") or str(
+            Path(__file__).resolve().parents[2] / "data" / "traces"))
+    app.state.playground = _PlaygroundSandbox()
     app.state.eval_dir = Path(
         os.environ.get("DUDUDA_EVAL_DIR") or str(
             Path(__file__).resolve().parents[2] / "data" / "traces-eval"))
     app.middleware('http')(cp_auth_middleware)
     _register_routes(app)
     return app
+
+def _load_trace_events(trace_dir, files: int = 5) -> list:
+    """读取最近的 trace JSONL 事件（生产 TraceRecorder 格式，CP-P2 只读聚合）。"""
+    events: list = []
+    if not trace_dir.is_dir():
+        return events
+    for p in sorted(trace_dir.glob('*.jsonl'))[-files:]:
+        try:
+            for line in p.open(encoding='utf-8'):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    continue
+        except OSError:
+            continue
+    return events
+
+
+def _playground_llm_cb():
+    """Playground LLM 回调：有 key 走 OpenAI 兼容接口；无 key 离线占位（不调真实模型）。"""
+    api_key = (os.environ.get("DUDUDA_CP_LLM_KEY")
+               or os.environ.get("DEEPSEEK_API_KEY")
+               or os.environ.get("OPENAI_API_KEY") or "")
+    model = os.environ.get("DUDUDA_CP_LLM_MODEL", "deepseek-chat")
+    base = os.environ.get("DUDUDA_CP_LLM_BASE", "https://api.deepseek.com/v1")
+    if not api_key:
+        return None
+
+    from ..router.openai_provider import OpenAIProvider
+    from ..router.router import ModelConfig, ModelRole
+
+    provider = OpenAIProvider(api_key=api_key, base_url=base)
+
+    async def cb(prompt: str, run_id: str = "", trace_id: str = "", **kw) -> str:
+        config = ModelConfig(
+            role=ModelRole.DIRECT_CHAT, model_id=model,
+            max_tokens=int(kw.get("max_tokens", 1024)),
+            temperature=float(kw.get("temperature", 0.7)),
+        )
+        return await provider.complete(model, [
+            {"role": "system", "content": "你是嘟嘟哒（Dududa），请直接回答问题。"},
+            {"role": "user", "content": prompt},
+        ], config)
+
+    return cb
+
+
+class _PlaygroundSandbox:
+    """Agent Playground 沙箱（ADR-0001 CP-P2）：
+    - 独立 InMemoryRepository / TraceSink / NoOp 投递：不写生产 Memory、不投递消息；
+    - DANGEROUS 风险能力从沙箱注册表移除：沙箱内不得执行危险工具；
+    - LLM 未配置时离线占位（rule-based 决策 + 确定性渲染）。
+    """
+
+    def __init__(self):
+        from ..core.memory import InMemoryRepository
+        from ..core.renderer import OCRenderer, Persona as OCPersona
+        from ..core.delivery import DeliveryManager, NoOpOutputAdapter
+        from ..runtime.orchestrator import RuntimeOrchestrator
+
+        self.memory = InMemoryRepository()
+        self.trace_sink = InMemoryTraceSink()
+        self.tracer = Tracer(sink=self.trace_sink)
+        cap_registry = CapabilityRegistry()
+        register_all_mcp_services(cap_registry)
+        for cap in list(cap_registry.list_enabled()):
+            if cap.risk == CapabilityRisk.DANGEROUS:
+                cap_registry.unregister(cap.capability_id)
+        self.cap_registry = cap_registry
+        persona = OCPersona(persona_id="playground", version="1.0", name="嘟嘟哒")
+        self.orchestrator = RuntimeOrchestrator(
+            memory_repo=self.memory,
+            capability_registry=cap_registry,
+            renderer=OCRenderer(persona=persona, llm=_playground_llm_cb()),
+            delivery_manager=DeliveryManager(NoOpOutputAdapter()),
+        )
+
+    async def run(self, text: str, actor_id: str = "playground_user"):
+        from ..core.envelope import (
+            Actor, ConversationRef, MessageEnvelope, MessageKind, Platform,
+        )
+        env = MessageEnvelope(
+            text=text,
+            sender=Actor(actor_id=actor_id, platform=Platform.QQ,
+                         display_name="playground"),
+            conversation=ConversationRef(
+                conversation_id="playground", platform=Platform.QQ,
+                kind=MessageKind.PRIVATE),
+        )
+        return await self.orchestrator.run(env)
+
 
 def run_server(host: str = '127.0.0.1', port: int = 8000, reload: bool = False):
     import uvicorn
@@ -370,6 +476,114 @@ def _register_routes(app: FastAPI):
                     app.state.redactor, line[:2000])})
         return {'report': name, 'entries': entries, 'count': len(entries),
                 'truncated': len(lines) > 500}
+
+    # ---------- CP-P2 高级能力（ADR-0001）：Playground / 成本性能 / 告警 / 日志检索 ----------
+    @app.post('/playground/run')
+    async def playground_run(body: PlaygroundRun, request: Request):
+        require_write(request, app)  # 高级能力仅 owner；沙箱内运行，写操作边界见 ADR 第 2.7 条
+        if not body.message.strip():
+            raise HTTPException(400, 'message is empty')
+        if len(body.message) > 4000:
+            raise HTTPException(400, 'message too long (max 4000 chars)')
+        result = await app.state.playground.run(body.message, body.actor_id)
+        reply = ""
+        if result.final_response is not None:
+            reply = result.final_response.text or ""
+        elif result.reaction:
+            reply = result.reaction
+        return {
+            'run_id': result.run_id,
+            'trace_id': result.trace_id,
+            'outcome': result.outcome.value,
+            'reply': redact_value(app.state.redactor, reply),
+            'reason_codes': list(result.reason_codes),
+            'tool_steps': int(result.trace_summary.get('tool_steps', 0)),
+            'phases_visited': int(result.trace_summary.get('phases_visited', 0)),
+            'sandboxed': True,
+        }
+
+    @app.get('/metrics/costs')
+    async def metrics_costs():
+        events = _load_trace_events(app.state.trace_dir)
+        calls = [e for e in events if e.get('event') == 'model_response']
+        return {
+            'window_events': len(calls),
+            'calls_by_role': dict(Counter(e.get('role', '?') for e in calls)),
+            'calls_by_model': dict(Counter(e.get('model_id', '?') for e in calls)),
+            'degraded': sum(1 for e in calls if e.get('degraded')),
+            'errors': sum(1 for e in calls if e.get('error_kind')),
+            'estimate': True,
+        }
+
+    @app.get('/metrics/performance')
+    async def metrics_performance():
+        events = _load_trace_events(app.state.trace_dir)
+        calls = [e for e in events if e.get('event') == 'model_response']
+        latencies = [float(e['latency_ms']) for e in calls
+                     if isinstance(e.get('latency_ms'), (int, float))]
+        latencies.sort()
+        n = len(latencies)
+        p50 = latencies[n // 2] if n else 0.0
+        p95 = latencies[int(n * 0.95) - 1] if n else 0.0
+        errors = sum(1 for e in calls if e.get('error_kind'))
+        return {
+            'calls': n,
+            'latency_ms_avg': (sum(latencies) / n) if n else 0.0,
+            'latency_ms_p50': p50,
+            'latency_ms_p95': p95,
+            'error_rate': (errors / n) if n else 0.0,
+        }
+
+    @app.get('/alerts')
+    async def alerts():
+        events = _load_trace_events(app.state.trace_dir)
+        now_ms = time.time() * 1000
+        recent = [e for e in events
+                  if now_ms - float(e.get('ts_ms', 0)) <= 600000]
+        out = []
+        resp = [e for e in recent if e.get('event') == 'model_response']
+        if resp:
+            degraded = sum(1 for e in resp if e.get('degraded'))
+            if degraded / len(resp) > 0.5:
+                out.append({'severity': 'warn', 'rule': 'model_degraded_ratio',
+                            'detail': f'{degraded}/{len(resp)} degraded'})
+            errs = [e for e in resp if e.get('error_kind')]
+            if len(errs) >= 3:
+                out.append({'severity': 'critical', 'rule': 'model_errors',
+                            'detail': f'{len(errs)} errors in window'})
+        for sid, svc in app.state.services.items():
+            if svc.check_health().value != 'healthy':
+                out.append({'severity': 'warn', 'rule': 'mcp_unhealthy',
+                            'detail': sid})
+        gates = [e for e in recent if e.get('event') == 'memory_gate']
+        rejects = [e for e in gates if e.get('decision') in (
+            'reject', 'defer_for_conflict_resolution')]
+        if len(rejects) >= 5:
+            out.append({'severity': 'info', 'rule': 'memory_gate_pressure',
+                        'detail': f'{len(rejects)} non-allow decisions'})
+        return {'alerts': out, 'count': len(out), 'window_seconds': 600}
+
+    @app.get('/logs')
+    async def logs(request: Request, level: str = '', query: str = '',
+                   source: str = 'traces',
+                   limit: int = Query(100, ge=1, le=500)):
+        op = get_operator(request)
+        rows = []
+        if source in ('traces', 'all'):
+            events = _load_trace_events(app.state.trace_dir)
+            rows = [dict(e, source='trace') for e in events]
+        if source in ('audit', 'all'):
+            for line in app.state.audit_logger.lines():
+                rows.append(dict(line, source='audit'))
+        if level:
+            rows = [r for r in rows if str(r.get('level', '')) == level
+                    or r.get('event') == level]
+        if query:
+            rows = [r for r in rows
+                    if query in json.dumps(r, ensure_ascii=False)]
+        rows = rows[-limit:]
+        return {'logs': [redact_value(app.state.redactor, r) for r in rows],
+                'count': len(rows), 'source': source}
 
     @app.get('/runtime/state')
     async def runtime_state():

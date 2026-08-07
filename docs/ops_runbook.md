@@ -48,8 +48,8 @@ bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/exit_gate_check.sh         # 完整 37 项（含 CP gate）
-bash scripts/exit_gate_check.sh --fast  # 静态 33 项
+bash scripts/exit_gate_check.sh         # 完整 43 项（含 CP gate）
+bash scripts/exit_gate_check.sh --fast  # 静态 38 项
 ```
 
 覆盖内容：
@@ -90,7 +90,7 @@ bash scripts/eval_gate.sh
 cd /opt/dududa20-prototype
 git log --oneline -3                        # 期望的提交链
 git status --short                          # 工作区干净（无输出）
-bash scripts/exit_gate_check.sh             # 37 项全 PASS
+bash scripts/exit_gate_check.sh             # 43 项全 PASS
 bash scripts/eval_gate.sh                   # ALL GATES PASS
 bash scripts/ops.sh health && bash scripts/ops.sh manifest   # 两 JSON 的 ok 均为 true
 systemctl is-active astrbot                 # active
@@ -189,7 +189,7 @@ systemctl is-active astrbot                 # active
 
 验证：
 
-    bash scripts/exit_gate_check.sh        # summary 37 项 PASS=37 FAIL=0
+    bash scripts/exit_gate_check.sh        # summary 43 项 PASS=43 FAIL=0
     find /opt/dududa20-prototype -name '*.bak*' -not -path '*/.git/*' | wc -l   # 0
     find /root/data/plugins/dududa20 -name '*.bak*' | wc -l                    # 0
     cd /opt/dududa20-prototype && git status --porcelain                       # 空
@@ -205,7 +205,10 @@ systemctl is-active astrbot                 # active
 - CP-P1 只读面板：Trace Viewer（/traces[/{trace_id}|/runs/{run_id}]）、Memory Explorer（/memory，
   经 JSONMemoryRepository，RESTRICTED 永不召回 / PRIVATE 仅本人）、Eval 报告（/eval/reports）、
   MCP Health（/mcp/services）。全部只读，无写路由。
-- CP-P2 预留：Agent Playground（沙箱）、成本/性能面板、自动故障告警、日志检索。
+- CP-P2 高级能力：Agent Playground（POST /playground/run，沙箱内：独立 Memory/Trace/NoOp 投递、
+  DANGEROUS 能力移除、无 LLM key 时离线占位，仅 owner）、成本/性能面板（/metrics/costs、
+  /metrics/performance，聚合 data/traces JSONL）、自动告警（/alerts：模型降级率/连续错误/MCP 健康/
+  Memory gate 压力，10 分钟窗口）、日志检索（/logs?level=&query=&source=traces|audit|all，脱敏出参）。
 
 部署与日常：
 
