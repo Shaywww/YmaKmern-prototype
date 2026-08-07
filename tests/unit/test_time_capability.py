@@ -92,7 +92,7 @@ class TestCandidateCutoff:
                            risk=CapabilityRisk.READ_ONLY),
                 _StubProvider())
         register_all_mcp_services(reg)
-        assert len(reg.list_enabled()) == 12
+        assert len(reg.list_enabled()) == 15
         orch = RuntimeOrchestrator(
             decision_engine=_ForceToolsEngine(),
             capability_registry=reg,
@@ -137,7 +137,7 @@ class TestClockCapability:
         assert "clock" in services
         reg = CapabilityRegistry()
         n = register_all_mcp_services(reg)
-        assert n == 9
+        assert n == 12
         assert reg.get("mcp.clock") is not None
 
     @pytest.mark.asyncio

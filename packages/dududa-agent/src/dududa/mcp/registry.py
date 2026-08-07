@@ -11,6 +11,9 @@ from .campus_notice import CampusNoticeService
 from .clock_service import ClockService
 from .academic_affairs import AcademicAffairsService
 from .web_search_service import WebSearchService
+from .weather_service import WeatherService
+from .news_service import NewsService
+from .translate_service import TranslateService
 import time
 import os
 from typing import Any, Optional
@@ -106,6 +109,9 @@ def create_all_services() -> dict:
         "academic_affairs": AcademicAffairsService(),
         "clock": ClockService(),
         "web_search": WebSearchService(),
+        "weather": WeatherService(),
+        "news": NewsService(),
+        "translate": TranslateService(),
     }
     return _SERVICES
 
@@ -171,6 +177,9 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
         "campus_notice": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_pinned","get_recent"]},"keyword":{"type":"string"},"source":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
         "clock": {"type":"object","properties":{"action":{"type":"string","enum":["get_now","get_date","get_time"]},"fmt":{"type":"string"}}},
         "academic_affairs": {"type":"object","properties":{"action":{"type":"string","enum":["get_student_info","get_grade","get_credits_summary","get_graduation_requirements"]},"student_id":{"type":"string"},"semester":{"type":"string"},"major_id":{"type":"string"},"token":{"type":"string"}}},
+        "weather": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"city":{"type":"string"},"q":{"type":"string"}}},
+        "news": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"limit":{"type":"integer"}}},
+        "translate": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"text":{"type":"string"},"q":{"type":"string"},"target":{"type":"string"}}},
     }
 
     count = 0

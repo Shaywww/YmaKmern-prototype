@@ -228,7 +228,7 @@ class TestRegistryHealthWiring:
         from dududa.mcp import registry as reg
         reg2 = CapabilityRegistry()
         n = register_all_mcp_services(reg2)
-        assert n == 9
+        assert n == 12
         try:
             for _ in range(3):
                 reg.breaker.record_failure("course_schedule")
@@ -324,7 +324,9 @@ class TestOrchestratorScopeGating:
             reg = CapabilityRegistry()
             register_all_mcp_services(reg)
             reg.unregister("mcp.clock")
-            reg.unregister("mcp.web_search")  # 只留 iCourse 服务，便于断言
+            reg.unregister("mcp.web_search")
+            for _g in ("mcp.weather", "mcp.news", "mcp.translate"):
+                reg.unregister(_g)  # 只留 iCourse 服务，便于断言
             monkeypatch.setattr(orch_mod, "mcp_access",
                                 MCPAccessPolicy(config_path=policy_path))
             return RuntimeOrchestrator(

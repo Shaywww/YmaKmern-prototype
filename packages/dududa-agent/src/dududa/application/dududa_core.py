@@ -301,7 +301,8 @@ class DududaCore:
 
     _TOOL_KW = ("帮我", "查", "搜", "算", "翻译", "了解", "介绍",
                  "是什么", "怎么样", "多少", "招生", "分数线", "排名",
-                 "查询", "查查", "百度", "搜索", "找一下")
+                 "查询", "查查", "百度", "搜索", "找一下",
+                 "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下")
 
     def _social_decision(self, event) -> tuple:
         try:
@@ -399,13 +400,15 @@ class DududaCore:
                     "节假日": "calendar", "学期": "calendar", "活动": "activity", "讲座": "activity",
                     "竞赛": "activity", "社团": "activity", "第二课堂": "activity",
                     "培养方案": "training", "毕业要求": "training", "选课": "training",
+                    "新闻": "news", "资讯": "news", "热点": "news", "热搜": "news",
                     "学分": "training", "绩点": "grade", "分数": "grade"}
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
         intents = list(topics) if topics else ["chitchat"]
         needs_tools = any(t in ("course", "exam", "grade", "weather", "time",
-                                      "notice", "activity", "calendar", "training") for t in topics)
+                                      "notice", "activity", "calendar", "training",
+                                      "news") for t in topics)
         has_command = any(a.act_type == "command" for a in acts)
         # 联网搜索：显式「搜/百度」命令也触发工具链（web_search）
         if has_command and any(k in combined for k in

@@ -92,6 +92,8 @@ class TestToolChainRealExecution:
         from dududa.planner.integration import integrate_with_orchestrator
         reg = CapabilityRegistry()
         register_all_mcp_services(reg)
+        for _g in ("mcp.weather", "mcp.news", "mcp.translate"):
+            reg.unregister(_g)  # 保持工具链核心测试隔离（不依赖新服务网络）
         orch = RuntimeOrchestrator(
             decision_engine=SocialDecisionEngine(keywords={"查"}),
             capability_registry=reg,
