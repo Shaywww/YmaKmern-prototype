@@ -222,7 +222,8 @@ systemctl is-active astrbot                 # active
 安全要点：
 - token 在 /root/data/cp.env（systemd EnvironmentFile），仅 root 可读；ops.sh cp status 只显示是否已配置，不打印明文。
 - 防火墙 dududa-fw.sh 已将 8000 纳入受信来源白名单（纵深防御；默认只绑 loopback）。
-- 运维坑：历史上 8000 曾被旧原型进程（run_server 无鉴权版）长期占用导致 systemd 单元起不来，
-  若 `systemctl is-active dududa-cp` 反复 restart 且日志报 address already in use，
-  用 `ss -ltnp | grep ':8000 '` 定位旧进程并清理后再 restart。
+- 运维坑：历史上 8000 曾被旧 systemd 单元 `dududa20.service`（run_server 无鉴权版，User=admin，
+  Restart=always）长期占用，kill 进程后会被自动拉起，导致 dududa-cp 反复 restart 失败。
+  处理：`systemctl disable --now dududa20.service`（ADR-0001 正式单元为 dududa-cp）后再 restart。
+  若仍有占用，用 `ss -ltnp | grep ':8000 '` 定位并清理。
 - CP 备份已纳入 /root/manage.sh backup（dududa-cp.service + cp.env + packages）。
