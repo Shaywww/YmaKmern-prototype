@@ -21,6 +21,11 @@ from .perception import (
 from .decision import (
     DecisionReason, SocialDecision, SocialDecisionEngine,
 )
+from .structured_output import (
+    StructuredOutputValidator, PerceptionMerger,
+    merge_perception_with_model, decision_from_signal,
+    KNOWN_SPEECH_ACTS,
+)
 from .capability import (
     CapabilityRisk, ProviderType, CapabilitySchema, Capability,
     CapabilityQuery, CapabilityCandidate, ToolObservation, ValidatorAction,
@@ -68,6 +73,10 @@ __all__ = [
     "EntityRef", "SpeechAct", "PerceptionResult",
     # decision
     "DecisionReason", "SocialDecision", "SocialDecisionEngine",
+    # structured output
+    "StructuredOutputValidator", "PerceptionMerger",
+    "merge_perception_with_model", "decision_from_signal",
+    "KNOWN_SPEECH_ACTS",
     # capability
     "CapabilityRisk", "ProviderType", "CapabilitySchema", "Capability",
     "CapabilityQuery", "CapabilityCandidate", "ToolObservation", "ValidatorAction",

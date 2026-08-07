@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from packages.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
 from packages.core.delivery import DeliveryReceipt, DeliveryStatus
+from packages.core.structured_output import merge_perception_with_model
 from packages.core.trace_recorder import trace_recorder
 
 from packages.application.dududa_utils import (
@@ -204,7 +205,7 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
         if _contains_restricted(preprocessed.combined_text):
             logger.warning("Restricted content blocked from LLM/memory")
             return "这类敏感信息我不能处理哦，请不要发送密码、Token、Cookie 或登录凭证。"
-        perception = plugin._perceive(event)
+        perception = await _perceive_with_model(plugin, event)
         try:
             envelope = plugin.input_adapter.to_envelope(event)
         except Exception:
@@ -277,6 +278,36 @@ def _group_policy_view(plugin, event):
         return fn(event)
     except Exception:
         return None
+
+
+async def _perceive_with_model(plugin, event):
+    """规则感知 + 可选模型信号（文档 2.5.4 Structured Output）。
+
+    模型未装配 / 调用失败 / 输出非法 / 置信度不足 -> 只用规则结果
+    （安全降级：模型失败时减少主动回复，不挑字段继续执行）。
+    """
+    rule = plugin._perceive(event)
+    fn = getattr(plugin, "_perception_signal", None)
+    if fn is None:
+        return rule
+    try:
+        pre = plugin.input_adapter.to_preprocessed(event)
+        text = pre.combined_text.strip() if pre and pre.combined_text else ""
+        if not text:
+            return rule
+        raw = await fn(text)
+        if raw is None:
+            return rule
+        merged, used = merge_perception_with_model(rule, raw)
+        if used:
+            model_conf = raw.get("confidence", 0.0) if isinstance(raw, dict) else 0.0
+            logger.debug(
+                "Perception merged | model_conf=%.2f acts=%d topics=%s",
+                model_conf, len(merged.speech_acts), list(merged.topics)[:5])
+        return merged
+    except Exception as e:
+        logger.warning("Perception model failed, rule-only: %s", e)
+        return rule
 
 
 def _dedupe_message(plugin, event, msg_id) -> bool:
@@ -417,7 +448,7 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
                              social_decision=action,
                              decision_reason=reason)
     state = state.transition(RuntimePhase.VALIDATED)
-    perception = plugin._perceive(event)
+    perception = await _perceive_with_model(plugin, event)
     state = state.transition(RuntimePhase.PERCEIVED, perception=perception)
     try:
         envelope = plugin.input_adapter.to_envelope(event)

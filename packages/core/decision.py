@@ -120,10 +120,13 @@ class SocialDecisionEngine:
         perception: Optional[Any] = None,
         context: Optional[Any] = None,
         now: Optional[float] = None,
+        model_decision: Optional[Any] = None,
     ) -> SocialDecision:
         """做出社交决策。
 
         确定性规则优先：@ -> 回复 -> 命令 -> 关键词 -> 权限 -> 冷却。
+        model_decision（文档 2.5.4 Structured Output）：规则静默时，
+        已校验的模型决策优先于随机概率；BLOCK 等安全动作不接受。
         """
         import time
         now = now or time.time()
@@ -234,6 +237,16 @@ class SocialDecisionEngine:
                 action=SocialAction.IGNORE,
                 reason_codes=(DecisionReason.LOW_RELEVANCE,),
             )
+        # 9.0 模型决策（Structured Output，文档 2.5.4）：规则静默时优先于随机；
+        # 安全动作（BLOCK）不接受，必须由规则安全检查产生
+        if model_decision is not None:
+            md_action = getattr(model_decision, "action", None)
+            if md_action in (
+                SocialAction.DIRECT_REPLY, SocialAction.REACT,
+                SocialAction.IGNORE, SocialAction.USE_TOOLS,
+                SocialAction.ASK_CLARIFICATION, SocialAction.DEFER,
+            ):
+                return model_decision
         if random.random() >= rate:
             return SocialDecision(
                 action=SocialAction.IGNORE,
