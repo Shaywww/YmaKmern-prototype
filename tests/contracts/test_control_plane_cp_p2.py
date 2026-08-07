@@ -62,6 +62,30 @@ def cp(tmp_path):
         os.environ.pop(k, None)
 
 
+
+def _write_tool_traces(trace_dir):
+    """额外写入含 tool_result 的 trace（工具面板聚合用）。"""
+    lines = [
+        {"ts": "2026-08-08T10:00:00", "ts_ms": 1786000000000,
+         "event": "tool_result", "run_id": "tr1", "trace_id": "tt1",
+         "step_id": "s1", "capability_id": "mcp.clock",
+         "success": True, "latency_ms": 12.3, "retries_used": 0},
+        {"ts": "2026-08-08T10:01:00", "ts_ms": 1786000060000,
+         "event": "tool_result", "run_id": "tr1", "trace_id": "tt1",
+         "step_id": "s2", "capability_id": "mcp.clock",
+         "success": True, "latency_ms": 8.1, "retries_used": 0},
+        {"ts": "2026-08-08T10:02:00", "ts_ms": 1786000120000,
+         "event": "tool_result", "run_id": "tr2", "trace_id": "tt2",
+         "step_id": "s1", "capability_id": "mcp.web_search",
+         "success": False, "latency_ms": 150.0, "retries_used": 2},
+        {"ts": "2026-08-09T10:00:00", "ts_ms": 1786086400000,
+         "event": "tool_result", "run_id": "tr3", "trace_id": "tt3",
+         "step_id": "s1", "capability_id": "mcp.clock",
+         "success": True, "latency_ms": 9.9, "retries_used": 0},
+    ]
+    (trace_dir / "2026-08-08.jsonl").write_text(
+        "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+
 def _auth(**extra):
     h = {"Authorization": f"Bearer {TOKEN}"}
     h.update(extra)
@@ -118,6 +142,59 @@ class TestMetricsCosts:
         assert data["degraded"] == 3
         assert data["errors"] == 3
         assert data["estimate"] is True
+
+
+class TestMetricsTools:
+    def test_tools_aggregation(self, cp, tmp_path):
+        app, client = cp
+        _write_tool_traces(tmp_path / "traces")
+        r = client.get("/metrics/tools")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["window_calls"] == 4
+        assert data["window_failures"] == 1
+        assert data["window_fail_rate"] == 0.25
+        tools = {t["capability_id"]: t for t in data["by_tool"]}
+        assert tools["mcp.clock"]["calls"] == 3
+        assert tools["mcp.clock"]["failures"] == 0
+        assert tools["mcp.clock"]["avg_latency_ms"] == 10.1
+        assert tools["mcp.web_search"]["calls"] == 1
+        assert tools["mcp.web_search"]["failures"] == 1
+        assert tools["mcp.web_search"]["fail_rate"] == 1.0
+        assert tools["mcp.web_search"]["retries_used"] == 2
+        assert data["by_tool"][0]["capability_id"] == "mcp.clock"  # 按调用量降序
+        assert [d["day"] for d in data["by_day"]] == [
+            "2026-08-08", "2026-08-09"]
+        assert data["by_day"][0]["fail_rate"] == round(1 / 3, 4)
+
+    def test_tools_empty(self, cp):
+        app, client = cp
+        r = client.get("/metrics/tools")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["window_calls"] == 0
+        assert data["window_failures"] == 0
+        assert data["window_fail_rate"] == 0.0
+        assert data["by_tool"] == []
+        assert data["by_day"] == []
+
+
+class TestCostsWeekly:
+    def test_costs_weekly_report(self, cp):
+        app, client = cp
+        r = client.get("/metrics/costs")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["estimate"] is True
+        assert data["est_cost_yuan"] > 0
+        assert isinstance(data["weekly"], list) and data["weekly"]
+        w = data["weekly"][0]
+        assert w["week"] and w["start"]
+        assert w["calls"] == 5
+        assert w["degraded"] == 3
+        assert w["errors"] == 3
+        assert w["est_cost_yuan"] > 0
+        assert w["by_model"]["deepseek-chat"] == 5
 
 
 class TestMetricsPerformance:

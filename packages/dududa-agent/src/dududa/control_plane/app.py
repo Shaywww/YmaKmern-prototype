@@ -30,6 +30,23 @@ _services = create_all_services()
 _trace_sink = InMemoryTraceSink()
 _tracer = Tracer(sink=_trace_sink)
 
+# ---- P3 trace 可视化：成本估算（trace 无 token 计数，按角色估算 token/调用 × 模型单价） ----
+# 元 / 1K tokens（估算单价；中转网关实际价格不同，仅作量级参考）
+_MODEL_PRICE_YUAN = {
+    "deepseek-chat": (0.001, 0.002),
+    "claude-haiku-4-5-20251001": (0.006, 0.03),
+    "gpt-5.5": (0.02, 0.08),
+}
+_DEFAULT_PRICE_YUAN = (0.01, 0.02)
+# 每角色单次调用估算 token（输入, 输出）
+_ROLE_TOKEN_EST = {
+    "perception": (512, 256), "social_decision": (512, 128),
+    "tool_planning": (1024, 512), "direct_chat": (1024, 512),
+    "response_composition": (1024, 512), "memory_summary": (512, 256),
+    "image_understanding": (800, 400), "image_generation": (800, 400),
+}
+_DEFAULT_TOKEN_EST = (512, 256)
+
 
 def _persona_to_dict(p: PersonaTemplate) -> dict:
     return {
@@ -150,6 +167,51 @@ def _load_trace_events(trace_dir, files: int = 5) -> list:
         except OSError:
             continue
     return events
+
+
+def _estimate_call_cost(role: str, model_id: str) -> float:
+    """单次模型调用的估算成本（元）：估算 token × 模型单价。"""
+    in_tok, out_tok = _ROLE_TOKEN_EST.get(role, _DEFAULT_TOKEN_EST)
+    in_p, out_p = _MODEL_PRICE_YUAN.get(model_id, _DEFAULT_PRICE_YUAN)
+    return (in_tok / 1000.0) * in_p + (out_tok / 1000.0) * out_p
+
+
+def _estimate_cost(events: list) -> float:
+    return round(sum(
+        _estimate_call_cost(e.get('role', ''), e.get('model_id', ''))
+        for e in events), 4)
+
+
+def _weekly_cost_report(events: list, weeks: int = 8) -> list:
+    """按 ISO 周聚合 model_response：调用量 / 降级 / 错误 / 估算成本（最新在前）。"""
+    import datetime as _dt
+    buckets: dict = {}
+    for e in events:
+        try:
+            ts = float(e.get('ts_ms', 0)) / 1000.0
+            d = _dt.datetime.fromtimestamp(ts)
+        except (TypeError, ValueError, OSError):
+            continue
+        iso = "%d-W%02d" % (d.isocalendar()[0], d.isocalendar()[1])
+        monday = (d - _dt.timedelta(days=d.weekday())).strftime('%Y-%m-%d')
+        b = buckets.setdefault(iso, {
+            'week': iso, 'start': monday, 'calls': 0, 'degraded': 0,
+            'errors': 0, 'est_cost_yuan': 0.0,
+            'by_model': Counter(), 'by_role': Counter()})
+        b['calls'] += 1
+        b['degraded'] += 1 if e.get('degraded') else 0
+        b['errors'] += 1 if e.get('error_kind') else 0
+        b['est_cost_yuan'] = round(b['est_cost_yuan'] + _estimate_call_cost(
+            e.get('role', ''), e.get('model_id', '')), 4)
+        b['by_model'][e.get('model_id', '?')] += 1
+        b['by_role'][e.get('role', '?')] += 1
+    out = [{'week': b['week'], 'start': b['start'], 'calls': b['calls'],
+            'degraded': b['degraded'], 'errors': b['errors'],
+            'est_cost_yuan': b['est_cost_yuan'],
+            'by_model': dict(b['by_model']), 'by_role': dict(b['by_role'])}
+           for b in buckets.values()]
+    out.sort(key=lambda x: x['start'], reverse=True)
+    return out[:weeks]
 
 
 def _playground_llm_cb():
@@ -513,6 +575,8 @@ def _register_routes(app: FastAPI):
             'degraded': sum(1 for e in calls if e.get('degraded')),
             'errors': sum(1 for e in calls if e.get('error_kind')),
             'estimate': True,
+            'est_cost_yuan': _estimate_cost(calls),
+            'weekly': _weekly_cost_report(calls),
         }
 
     @app.get('/metrics/performance')
@@ -532,6 +596,50 @@ def _register_routes(app: FastAPI):
             'latency_ms_p50': p50,
             'latency_ms_p95': p95,
             'error_rate': (errors / n) if n else 0.0,
+        }
+
+    @app.get('/metrics/tools')
+    async def metrics_tools():
+        """P3 trace 可视化：工具使用率 / 失败率（按工具 + 按天，只读）。"""
+        events = _load_trace_events(app.state.trace_dir)
+        results = [e for e in events if e.get('event') == 'tool_result']
+        by_tool: dict = {}
+        by_day: dict = {}
+        for e in results:
+            cid = str(e.get('capability_id', '?'))
+            ok = bool(e.get('success'))
+            t = by_tool.setdefault(cid, {'calls': 0, 'failures': 0,
+                                         'lat_sum': 0.0, 'retries_used': 0})
+            t['calls'] += 1
+            t['failures'] += 0 if ok else 1
+            t['lat_sum'] += float(e.get('latency_ms', 0) or 0)
+            t['retries_used'] += int(e.get('retries_used', 0) or 0)
+            day = str(e.get('ts', ''))[:10] or '?'
+            d = by_day.setdefault(day, {'calls': 0, 'failures': 0})
+            d['calls'] += 1
+            d['failures'] += 0 if ok else 1
+        tools = []
+        for cid, t in by_tool.items():
+            tools.append({
+                'capability_id': cid,
+                'calls': t['calls'],
+                'failures': t['failures'],
+                'fail_rate': round(t['failures'] / t['calls'], 4) if t['calls'] else 0.0,
+                'avg_latency_ms': round(t['lat_sum'] / t['calls'], 1) if t['calls'] else 0.0,
+                'retries_used': t['retries_used'],
+            })
+        tools.sort(key=lambda x: -x['calls'])
+        days = [{'day': day, 'calls': d['calls'], 'failures': d['failures'],
+                 'fail_rate': round(d['failures'] / d['calls'], 4) if d['calls'] else 0.0}
+                for day, d in sorted(by_day.items(), key=lambda x: x[0])]
+        total_calls = sum(t['calls'] for t in tools)
+        total_fail = sum(t['failures'] for t in tools)
+        return {
+            'window_calls': total_calls,
+            'window_failures': total_fail,
+            'window_fail_rate': round(total_fail / total_calls, 4) if total_calls else 0.0,
+            'by_tool': tools,
+            'by_day': days,
         }
 
     @app.get('/alerts')
@@ -660,6 +768,12 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <div class="card">
 <h2>最近追踪</h2><div id="tl">加载中...</div>
 </div>
+<div class="card">
+<h2>工具使用率</h2><div id="tool">加载中...</div>
+</div>
+<div class="card">
+<h2>成本周报</h2><div id="cost">加载中...</div>
+</div>
 <div class="card" style="grid-column:span 2">
 <h2>MCP 查询</h2>
 <div class="fr"><div><label>服务</label><select id="qs"></select></div><div><label>操作</label><select id="qa"><option>search</option></select></div><div><label>关键词</label><input id="qk"></div></div>
@@ -670,7 +784,7 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <footer>Dududa 2.0 Agent 运行状态 - v0.1.0</footer>
 <script>
 const A="";async function api(u,o){const r=await fetch(A+u,o);if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()}
-async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}
+async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th;const tw=await api("/metrics/tools");let toh='<div class="row"><span>窗口调用</span><strong>'+tw.window_calls+'</strong></div><div class="row"><span>失败率</span><strong>'+(tw.window_fail_rate*100).toFixed(1)+'%</strong></div>';if(!tw.by_tool.length)toh="<em>暂无工具调用</em>";for(const t of tw.by_tool.slice(0,6)){toh+='<div class="row"><span>'+escapeHtml(t.capability_id)+'</span><span>'+t.calls+' 次 · 失败 '+(t.fail_rate*100).toFixed(1)+'%</span></div>'}document.getElementById("tool").innerHTML=toh;const cw=await api("/metrics/costs");let coh='<div class="row"><span>窗口调用</span><strong>'+cw.window_events+'</strong></div><div class="row"><span>估算成本</span><strong>¥'+cw.est_cost_yuan.toFixed(4)+'</strong></div>';if(!cw.weekly.length)coh+="<em>暂无模型调用</em>";for(const w of cw.weekly.slice(0,6)){coh+='<div class="row"><span>'+escapeHtml(w.week)+'</span><span>'+w.calls+' 次 · ¥'+w.est_cost_yuan.toFixed(4)+'</span></div>'}document.getElementById("cost").innerHTML=coh}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}
 function showForm(){document.getElementById("pf").style.display="block"}
 function hideForm(){document.getElementById("pf").style.display="none"}
 async function createP(){const id=document.getElementById("nid").value,nm=document.getElementById("nnm").value,dc=document.getElementById("ndc").value;if(!id)return alert("Need persona_id");try{await api("/personas",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({persona_id:id,name:nm,display_name:nm,description:dc})});hideForm();rf()}catch(e){alert(e.message)}}
