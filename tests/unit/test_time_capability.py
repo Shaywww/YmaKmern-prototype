@@ -82,7 +82,7 @@ class _StubProvider:
 class TestCandidateCutoff:
     @pytest.mark.asyncio
     async def test_production_shape_keeps_clock_in_candidates(self):
-        """生产注册表（3 内置 + 8 MCP = 11 项）超过默认 top_k=8 时，
+        """生产注册表（3 内置 + 9 MCP = 12 项）超过默认 top_k=8 时，
         mcp.clock 不得被候选截断（曾导致「现在几点」降级为闲聊）。"""
         reg = CapabilityRegistry()
         for i in range(3):
@@ -92,7 +92,7 @@ class TestCandidateCutoff:
                            risk=CapabilityRisk.READ_ONLY),
                 _StubProvider())
         register_all_mcp_services(reg)
-        assert len(reg.list_enabled()) == 11
+        assert len(reg.list_enabled()) == 12
         orch = RuntimeOrchestrator(
             decision_engine=_ForceToolsEngine(),
             capability_registry=reg,
@@ -137,7 +137,7 @@ class TestClockCapability:
         assert "clock" in services
         reg = CapabilityRegistry()
         n = register_all_mcp_services(reg)
-        assert n == 8
+        assert n == 9
         assert reg.get("mcp.clock") is not None
 
     @pytest.mark.asyncio

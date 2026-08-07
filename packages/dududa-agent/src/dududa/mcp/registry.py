@@ -10,6 +10,7 @@ from .second_classroom import SecondClassroomService
 from .campus_notice import CampusNoticeService
 from .clock_service import ClockService
 from .academic_affairs import AcademicAffairsService
+from .web_search_service import WebSearchService
 import time
 import os
 from typing import Any, Optional
@@ -104,6 +105,7 @@ def create_all_services() -> dict:
         "campus_notice": CampusNoticeService(),
         "academic_affairs": AcademicAffairsService(),
         "clock": ClockService(),
+        "web_search": WebSearchService(),
     }
     return _SERVICES
 

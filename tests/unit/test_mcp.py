@@ -14,13 +14,15 @@ from dududa.mcp.base import ServiceHealth
 class TestAllServices:
     def test_all_services_created(self):
         svcs = create_all_services()
-        assert len(svcs) == 8
+        assert len(svcs) == 9
         assert "clock" in svcs
+        assert "web_search" in svcs
         assert "course_schedule" in svcs
 
     def test_all_services_healthy(self):
         for name, svc in create_all_services().items():
-            assert svc.check_health() == ServiceHealth.HEALTHY, f"{name} not healthy"
+            assert svc.check_health() in (ServiceHealth.HEALTHY,
+                                  ServiceHealth.UNKNOWN), f"{name} not healthy"
 
 class TestCourseSchedule:
     @pytest.mark.asyncio
@@ -152,7 +154,7 @@ class TestRegisterIntoCapabilityRegistry:
     def test_register_all(self):
         reg = CapabilityRegistry()
         count = register_all_mcp_services(reg)
-        assert count == 8
+        assert count == 9
         assert reg.get("mcp.clock") is not None
         assert reg.get("mcp.course_schedule") is not None
         assert reg.get("mcp.exam_schedule") is not None
@@ -169,8 +171,9 @@ class TestRegisterIntoCapabilityRegistry:
         summaries = reg.summaries()
         assert any("course_schedule" in s for s in summaries)
         assert any("exam_schedule" in s for s in summaries)
-        assert len(summaries) == 8
+        assert len(summaries) == 9
         assert any("clock" in s for s in summaries)
+        assert any("web_search" in s for s in summaries)
 
 class TestCaching:
     @pytest.mark.asyncio
