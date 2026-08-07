@@ -347,12 +347,13 @@ def _strip_tool_leak(text: str) -> str:
         text = re.sub(
             r"^[ \t]*(?:参考|来源|出处|数据|结果)[：:]\s*$",
             "", text, flags=re.M)
-        # 去掉悬空引子（LLM 常写「来源：mcp.xxx=[{...」或「（来源：」后接原始数据再被截断）
+        # 去掉悬空引子（LLM 常写「来源：mcp.xxx=[{...」或「（来源：」后接原始数据再被截断；
+        # 截断点前的「来源是」「（数据来源：」「（以下是」等残尾一并清理）
         text = re.sub(
-            r"[（(]\s*来源\s*[:：]?\s*(?:mcp\.[a-zA-Z_0-9]+\s*[=:]?\s*)?$",
+            r"[（(]\s*(?:[数据来源结果工具参考出处以下返回是为：:=.…～、\s])*[）)]?\s*$",
             "", text)
         text = re.sub(
-            r"来源\s*[:：]?\s*(?:mcp\.[a-zA-Z_0-9]+\s*[=:]?\s*)?$",
+            r"(?:数据来源|信息来源|参考|出处|结果|工具结果|来源|数据)\s*(?:是|为)?\s*[:：=]?\s*[.…～]*$",
             "", text)
         text = re.sub(r"[（(]\s*[:：]?\s*$", "", text)
         text = text.rstrip(" ~～~^.,!;:，。！；： \t\n")
@@ -401,6 +402,17 @@ def _cross_session_reply_dropped(plugin, event) -> bool:
     return False
 
 
+def _is_framework_command(event) -> bool:
+    """框架命令（/dududa_xxx、/reset 等）：WakingCheck 已剥掉 wake_prefix 并交由
+    命令处理器回复；chat 流跳过，避免双回复（QQ e2e 实测发现）。"""
+    try:
+        raw = str(getattr(getattr(event, "message_obj", None),
+                          "message_str", "") or "")
+        return raw.lstrip().startswith("/")
+    except Exception:
+        return False
+
+
 async def run_message_flow(plugin, event) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
@@ -408,6 +420,7 @@ async def run_message_flow(plugin, event) -> str | None:
     """
     if not plugin.enabled: return None
     if plugin._is_self_message(event): return None
+    if _is_framework_command(event): return None
     msgs = event.get_messages()
     if not msgs:
         if time.time() - plugin._last_file_ts < 3: return None

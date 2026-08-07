@@ -16,6 +16,49 @@ class _FakeEvent(SimpleNamespace):
     is_at_or_wake_command = True
 
 
+def test_is_framework_command_true():
+    ev = SimpleNamespace(message_obj=SimpleNamespace(message_str="/dududa_health"))
+    assert h._is_framework_command(ev) is True
+
+
+def test_is_framework_command_false_for_chat():
+    ev = SimpleNamespace(message_obj=SimpleNamespace(message_str="帮我查一下课程"))
+    assert h._is_framework_command(ev) is False
+
+
+def test_is_framework_command_false_for_at_message():
+    ev = SimpleNamespace(message_obj=SimpleNamespace(message_str="[At:3823883634] 查一下"))
+    assert h._is_framework_command(ev) is False
+
+
+def test_is_framework_command_tolerates_missing_obj():
+    assert h._is_framework_command(SimpleNamespace(message_obj=None)) is False
+
+
+def test_strip_tool_leak_dangling_source_is():
+    assert h._strip_tool_leak(
+        "对了，来源是 mcp.web_search: [{'title': 'x'}]") == "对了"
+
+
+def test_strip_tool_leak_dangling_data_source_paren():
+    assert h._strip_tool_leak(
+        "（数据来源：mcp.campus_notice=[{'title': 'x'}]") == ""
+
+
+def test_strip_tool_leak_dangling_paren_data():
+    assert h._strip_tool_leak(
+        "查看详情～（数据 mcp.exam_schedule=...") == "查看详情"
+
+
+def test_strip_tool_leak_dangling_xia_mian():
+    assert h._strip_tool_leak(
+        "好嘞～（以下为工具返回 mcp.clock=...") == "好嘞"
+
+
+def test_strip_tool_leak_no_false_positive():
+    assert h._strip_tool_leak("今天天气不错哦～") == "今天天气不错哦～"
+
+
 def test_is_at_only_true_for_bare_at():
     assert h._is_at_only(_FakeEvent(), [_FakeComp("At")]) is True
 
