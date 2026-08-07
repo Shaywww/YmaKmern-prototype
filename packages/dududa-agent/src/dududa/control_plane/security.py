@@ -30,6 +30,8 @@ logger = logging.getLogger("dududa20.control_plane.security")
 TOKEN_ENV = "DUDUDA_CP_TOKEN"
 AUDIT_ENV = "DUDUDA_CP_AUDIT"
 HEALTH_PATH = "/health"
+# 公开路径：健康检查 + 控制台首页 HTML（不含任何数据，数据接口仍须 token）
+PUBLIC_PATHS = {HEALTH_PATH, "/"}
 
 VALID_ROLES = ("owner", "admin", "trusted", "normal")
 
@@ -131,7 +133,7 @@ class AuditLogger:
 
 async def cp_auth_middleware(request: Request, call_next):
     """认证 + 审计中间件：/health 豁免，其余请求缺省拒绝。"""
-    if request.url.path == HEALTH_PATH:
+    if request.url.path in PUBLIC_PATHS:
         return await call_next(request)
     provided = _extract_token(request)
     if not token_ok(provided):

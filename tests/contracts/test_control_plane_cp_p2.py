@@ -144,6 +144,20 @@ class TestMetricsCosts:
         assert data["estimate"] is True
 
 
+class TestDashboard:
+    def test_dashboard_public_html(self, cp):
+        app, client = cp
+        r = client.get("/", headers={"Authorization": ""})
+        assert r.status_code == 200
+        assert "工具使用率" in r.text and "成本周报" in r.text
+        assert "cp_token" in r.text  # 前端登录框（localStorage）
+
+    def test_dashboard_api_still_protected(self, cp):
+        app, client = cp
+        for p in ("/metrics/tools", "/metrics/costs", "/personas"):
+            assert client.get(p, headers={"Authorization": ""}).status_code == 401
+
+
 class TestMetricsTools:
     def test_tools_aggregation(self, cp, tmp_path):
         app, client = cp
