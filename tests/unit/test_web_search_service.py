@@ -96,6 +96,21 @@ class TestWebSearchService:
         assert captured["kwargs"]["q"] == "USTC"
         assert captured["kwargs"]["max_results"] == 3
 
+    @pytest.mark.asyncio
+    async def test_search_keyword_alias(self, monkeypatch):
+        captured = {}
+
+        async def fake_query(cache_key=None, **kwargs):
+            captured["cache_key"] = cache_key
+            captured["kwargs"] = kwargs
+            return ws.ServiceResult.ok([], "live")
+
+        svc = ws.WebSearchService()
+        svc.query = fake_query
+        r = await svc.search(keyword="USTC")
+        assert r.success
+        assert captured["kwargs"]["q"] == "USTC"
+
     def test_mock_placeholder(self):
         svc = ws.WebSearchService()
         data = svc._get_mock(q="ustc")

@@ -4,6 +4,25 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from uuid import uuid4
 
+import re as _re
+
+_COMMAND_STRIP = _re.compile(
+    r"^(?:帮我|请你|麻烦你|麻烦|给我|帮我一下|帮我查|你好|嗨|嘿|bot|机器人)")
+_ACTION_STRIP = _re.compile(
+    r"^(?:搜索一下|搜一搜|搜一下|搜索|搜|查找一下|查一下|查一查|查查|查找|查|"
+    r"百度一下|百度|找一下|找找|找|看看)")
+_TRAIL_STRIP = _re.compile(r"(?:一下|一下下|看看|一查|一找|呗|吧|呀|啊|哦|呢|嘛|的|什么)$")
+
+
+def _clean_query(text: str) -> str:
+    """从自然语言命令中提取搜索词（@/命令前缀/语气词全剔除）。"""
+    q = _re.sub(r"@\S+", " ", text or "")
+    q = _COMMAND_STRIP.sub("", q.strip()).strip()
+    q = _ACTION_STRIP.sub("", q.strip()).strip()
+    q = _TRAIL_STRIP.sub("", q.strip()).strip()
+    return q or (text or "").strip()
+
+
 @dataclass
 class PlanningContext:
     user_intent: str = ""
@@ -139,7 +158,11 @@ class ToolPlanner:
                 steps.append(PlannedStep(
                     step_id=sp.get("step_id", uuid4().hex[:8]),
                     capability_id=cap_id,
-                    arguments=sp.get("arguments", {}),
+                    arguments={
+                        k: (v.replace("{query}", _clean_query(context.user_intent))
+                            if isinstance(v, str) and "{query}" in v else v)
+                        for k, v in (sp.get("arguments", {}) or {}).items()
+                    },
                     purpose=sp.get("purpose", ""),
                     depends_on=tuple(sp.get("depends_on", [])),
                     expected_output=sp.get("expected_output", ""),

@@ -78,8 +78,9 @@ class WebSearchService(BaseMCPService):
             "snippet": "mock placeholder",
         }]
 
-    async def search(self, q: str, max_results: int = 5) -> ServiceResult:
-        q = (q or "").strip()
+    async def search(self, q: str = "", keyword: str = "",
+                   max_results: int = 5) -> ServiceResult:
+        q = (q or keyword or "").strip()
         if not q:
             return ServiceResult.fail("empty query")
         try:

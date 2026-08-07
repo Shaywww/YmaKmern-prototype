@@ -86,6 +86,17 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                      "expected_output": "Current date/time"}]},
     )
 
+    # 联网搜索（mcp.web_search）：通用「搜/查/找」命令；q 由 {query} 占位符填充。
+    # 注册在最后：课表/考试/时间等专属模式优先于通用搜索。
+    planner.register_pattern(
+        ("搜", "百度", "百度一下", "search", "find"),
+        {"name": "web_search", "goal": "Search the web for the requested topic",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.web_search",
+                    "arguments": {"action": "search", "q": "{query}"},
+                    "purpose": "Search the web",
+                    "expected_output": "Top ranked web results with titles, links and snippets"}]},
+    )
+
     return ToolChainIntegration(planner, executor, recovery, capability_registry)
 
 class ToolChainIntegration:

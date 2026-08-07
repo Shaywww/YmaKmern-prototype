@@ -394,6 +394,10 @@ class DududaCore:
         intents = list(topics) if topics else ["chitchat"]
         needs_tools = any(t in ("course", "exam", "grade", "weather", "time") for t in topics)
         has_command = any(a.act_type == "command" for a in acts)
+        # 联网搜索：显式「搜/百度」命令也触发工具链（web_search）
+        if has_command and any(k in combined for k in
+                               ("搜", "百度", "search", "find")):
+            needs_tools = True
         return PerceptionResult(
             speech_acts=tuple(acts),
             topics=tuple(topics),

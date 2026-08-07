@@ -24,6 +24,56 @@ def _make_registry():
         reg.register(cap, StubProvider())
     return reg
 
+class TestWebSearchPattern:
+    """通用「搜/查/找」命令 -> mcp.web_search，q 提取搜索词。"""
+
+    def _reg_with_search(self):
+        reg = _make_registry()
+        cap = Capability(capability_id="mcp.web_search", name="web_search",
+                         description="Web search returning top ranked results",
+                         provider=ProviderType.MCP)
+        reg.register(cap, StubProvider())
+        return reg
+
+    def _plan(self, text):
+        from dududa.planner.planner import PlanningContext
+        reg = self._reg_with_search()
+        integration = integrate_with_orchestrator(None, reg)
+        cands = reg.filter_candidates(())
+        return integration.planner.plan(PlanningContext(
+            user_intent=text, available_capabilities=cands,
+            max_steps=4, permissions=()))
+
+    def test_search_command_plans_web_search(self):
+        plan = self._plan("帮我搜一下USTC")
+        assert plan is not None and plan.steps
+        assert plan.steps[0].capability_id == "mcp.web_search"
+        assert plan.steps[0].arguments.get("action") == "search"
+        assert plan.steps[0].arguments.get("q") == "USTC"
+
+    def test_search_with_mention_and_particles(self):
+        plan = self._plan("@bot 百度一下量子计算呗")
+        assert plan.steps[0].capability_id == "mcp.web_search"
+        assert plan.steps[0].arguments.get("q") == "量子计算"
+
+    def test_chinese_query_extraction(self):
+        plan = self._plan("帮我搜一下数据结构")
+        assert plan.steps[0].capability_id == "mcp.web_search"
+        assert plan.steps[0].arguments.get("q") == "数据结构"
+
+    def test_chacha_not_hijack_course_query(self):
+        plan = self._plan("帮我查一下数据结构")
+        assert plan.steps[0].capability_id == "mcp.course_schedule"
+
+    def test_course_pattern_still_priority(self):
+        plan = self._plan("帮我查一下课表")
+        assert plan.steps[0].capability_id == "mcp.course_schedule"
+
+    def test_exam_pattern_still_priority(self):
+        plan = self._plan("帮我搜一下考试安排")
+        assert plan.steps[0].capability_id == "mcp.exam_schedule"
+
+
 class TestDependencyResolver:
     def test_simple_sort(self):
         from dududa.planner.planner import PlannedStep
