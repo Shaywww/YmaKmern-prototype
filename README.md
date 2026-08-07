@@ -1,58 +1,110 @@
 # Dududa 2.0 Agent Runtime 原型
 
-基于文档 https://docs.mmdustc.top/dududa107/ 开发的 2.0 独立原型。
+基于文档 https://docs.mmdustc.top/dududa107/ 开发的 2.0 独立原型：QQ 机器人（AstrBot 插件）+ Web 控制台 + 运维工具链。
 
 ## 一键安装（不需要装 Python）
 
-双击 setup.bat，全自动：下载 Python → 安装依赖 → 跑测试验证。
+双击 `setup.bat`，全自动：下载 Python → 安装依赖 → 跑测试验证。
 
 ## 手动安装
 
-`ash
+```bash
 pip install -r requirements.txt
-`
+```
 
-## 运行
+## 运行 Web 控制台
 
-`ash
-# 启动 Web 控制台
-python -c "from packages.control_plane import run_server; run_server()"
+```bash
+# 从仓库根目录运行
+export PYTHONPATH=packages/dududa-agent/src:$PYTHONPATH   # Windows: set PYTHONPATH=packages\dududa-agent\src
+python -c "from dududa.control_plane.app import run_server; run_server()"
 # 浏览器打开 http://127.0.0.1:8000
-`
-
-## 运行测试
-
-`ash
-python -m pytest tests/ -q
-`
-
-## 项目结构
-
-`
-packages/dududa-agent/src/dududa/
-├── core/             # 领域模型（消息/状态/记忆/人格/渲染）
-│   └── persona/      # OC 人格系统（4 套预设）
-├── runtime/          # 控制中枢（13 阶段 Pipeline）
-├── router/           # 模型路由
-├── safeguards/       # 安全校验（身份/隐私/预算）
-├── observability/    # Trace 与事件
-├── mcp/              # 校园 MCP 服务（课表/考试/日历/二课/通知）
-├── planner/          # 多步骤工具编排
-├── control_plane/    # Web 控制台（FastAPI + 仪表盘）
-└── adapters/astrbot/ # QQ 机器人适配层
-
-ops/                  # 运维脚本（exit_gate / ops / eval_gate / smoke_net）
-tests/                # 分层测试：unit / contracts / integration / evals / fixtures / smoke
-`
+```
 
 ## 对接 QQ
 
-详见 packages/dududa-agent/src/dududa/adapters/astrbot/plugin.py，需额外安装 AstrBot：
+生产环境以 AstrBot 插件运行：将 `packages/dududa-agent/src/dududa/adapters/astrbot/plugin.py` 部署为 AstrBot 插件（生产装配参考 `/root/data/plugins/dududa20/main.py`），需额外安装 AstrBot：
 
-`ash
+```bash
 pip install astrbot
-`
+```
 
-## 状态
+## 运行测试
 
-238 核心测试 + 26 适配器测试 = 264 tests，0 失败。
+```bash
+python -m pytest tests/ -q
+```
+
+当前 1086 个测试全绿（unit / contracts / integration / evals 分层；smoke 为真实网络层，默认跳过）。
+
+## 项目结构
+
+```
+packages/dududa-agent/src/dududa/
+├── core/             # 领域模型（消息/状态/记忆/人格/渲染/感知/能力）
+│   └── persona/      # OC 人格系统（4 套预设）
+├── runtime/          # 控制中枢（13 阶段 Pipeline）
+├── router/           # 8 角色模型路由（主模型 + 降级）
+├── safeguards/       # 安全校验（身份/隐私/预算/确认/脱敏）
+├── observability/    # Trace 记录与 Eval 工具
+├── mcp/              # MCP 服务（课表/考试/日历/二课/通知/成绩/时钟/天气/新闻/翻译/搜索）
+├── planner/          # 多步骤工具编排（规则模式 + LLM 自主规划）
+├── application/      # 生产编排 / 决策 / 消息流 / 命令
+├── control_plane/    # Web 控制台（FastAPI + 仪表盘）
+└── adapters/astrbot/ # QQ 机器人适配层
+
+ops/                  # 运维脚本（exit_gate / ops / eval_gate / smoke_net / 防火墙）
+tests/                # 分层测试：unit / contracts / integration / evals / fixtures / smoke
+```
+
+## 更新日志
+
+> 按主题分组，最新改动在前。
+
+### 自主规划与联网搜索
+
+- LLM 自主工具规划：规则未命中时模型自主选择工具与参数（结构化输出 + fail-closed 白名单）
+- 感知与规划合并：模型感知信号直接输出 tool_plan，规划阶段优先采用，省一次 LLM 调用；规则关键词命中或超短文本走快速路径，不调感知模型
+- 感知提示词携带可用工具清单（含参数名），模型输出合法工具与参数；参数兜底：漏填 q 时注入意图文本、天气城市默认合肥
+- 新增 MCP 技能：天气、新闻、翻译（改编自 GitHub 热门 skill 模式），接入注册表与决策词
+- 联网搜索：Bing RSS 搜索 + 双网关降级 + 相关性过滤
+- 时钟能力：mcp.clock 回答北京时间/日期（修复「现在几点」被当成闲聊）
+
+### 工具链与运行时
+
+- 工具运行时闭包：并行批内每步硬上限、幂等重试语义、无候选降级（文档 2.5.5）
+- 8 角色 ModelRouter：感知/决策/规划/闲聊/合成/记忆/视觉统一路由，429 自动降级（文档 2.5.7）
+- 工具执行取消 + 每步重新授权（文档 2.5.5 / 2.4.12）
+- 持久化确认：工具执行前 store-backed 确认（文档 2.4.12 / 2.5.9）
+- iCourse MCP 按群/按人开关（fail-closed + 热加载）+ 服务熔断（文档 2.5.6）
+- 成绩查询 MCP：token 门控个人数据、零缓存、只读（文档 2.5.6）
+
+### 感知、决策与记忆
+
+- 结构化输出校验（fail-closed）+ 规则-模型感知合并（文档 2.5.4）
+- 社交决策对齐文档六动作 + 稳定 reason code + react 冷却（文档 2.5.4）
+- 短名词（USTC/AI 等）识别为名词查询而非打招呼
+- 感知记录结构化 JSONL 持久化（文档 2.5.4）
+- 记忆写入全量经 WriteGate + TTL 门控（文档 2.5.3）
+- 工具结果 Redactor 脱敏 + 提示注入负测试（文档 2.5.9）
+- 外部内容「数据非指令」契约（合成/文件/图片提示词，文档 2.5.9）
+- 用户画像：规则提取 + JSON 存储（文档 2.4.6）
+
+### 群策略与用户风格
+
+- 群策略：模式（正常/安静/关闭）/ 回复率 / meme 率应用到回复策略（文档 2.5.2 / 2.5.4）
+- 用户风格四维隔离（平台+机器人+用户+人格），dududa_style 命令（文档 2.5.8）
+
+### 控制台与运维
+
+- Control Plane（ADR-0001）：安全基线（认证/审计/脱敏/作用域/MCP 门控）、只读面板（记忆/评估报告）、高级面板（Playground/成本/告警/日志检索）
+- 运维脚本：健康检查、供应链 manifest、冒烟、退出评估门禁（45 项）
+- 两阶段投递协议：框架发送后真实回执、幂等确认、无输出不伪造回执（文档 2.3.15-2.3.16）
+- 连接器幂等键（平台+机器人+消息 ID，TTL 有界）+ 跨会话回复拒绝
+
+### QQ 实测修复
+
+- 群图片暂存与 @ 配对（OneBot v11 拆分 @ 与图片）
+- 回复泄漏清洗：工具名 / 原始 JSON / 悬空来源行截断
+- 拆 @ 窗口后续文本视为被提及；招生/介绍/是什么等咨询词触发工具链
+- 框架命令跳过聊天流（不双回复）；幂等键使用 message_obj.message_id
