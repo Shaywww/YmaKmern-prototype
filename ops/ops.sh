@@ -144,7 +144,7 @@ cmd_cp() {
                 echo "cp token configured: no"
             fi
             if command -v ss >/dev/null 2>&1; then
-                ss -ltn 2>/dev/null | grep -q ':8000 '                     && echo "cp listener: 127.0.0.1:8000 (listening)"                     || echo "cp listener: not listening"
+                ss -ltn 2>/dev/null | grep -q ':8000 '                     && echo "cp listener: 0.0.0.0:8000 (listening)"                     || echo "cp listener: not listening"
             fi
             local audit="$PROTO/data/cp_audit.jsonl"
             echo "cp audit: $([ -f "$audit" ] && wc -l < "$audit" || echo 0) lines"
