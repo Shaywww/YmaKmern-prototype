@@ -88,8 +88,14 @@ static "CP 写操作权限（manage_config, 非 owner 403）" bash -c "grep -q '
 static "CP MCP query 走 CapabilityRegistry + access 策略" bash -c "grep -q 'cap_registry.get' '$PROTO/packages/control_plane/app.py' && grep -q 'mcp_access.is_allowed' '$PROTO/packages/control_plane/app.py'"
 static "CP 审计 JSONL（AuditLogger）" grep -q 'class AuditLogger' "$PROTO/packages/control_plane/security.py"
 static "CP 脱敏走共享 Redactor" grep -q 'Redactor' "$PROTO/packages/control_plane/security.py"
+static "CP-P1 Memory Explorer 只读路由" bash -c "grep -q "'/memory'" '$PROTO/packages/control_plane/app.py' && grep -q 'JSONMemoryRepository' '$PROTO/packages/control_plane/app.py'"
+static "CP-P1 Eval 报告只读路由" grep -q "'/eval/reports'" "$PROTO/packages/control_plane/app.py"
+static "CP-P1 测试存在" test -f "$PROTO/tests/test_control_plane_cp_p1.py"
+static "CP 部署单元模板存在" test -f "$PROTO/deploy/control_plane/dududa-cp.service"
+static "CP 防火墙白名单含 8000" grep -q '6185,3001,6099,8000' "$PROTO/scripts/dududa-fw.sh"
 if [ "$FAST" != "--fast" ]; then
     run_tests "CP-P0 安全基线（鉴权/权限/审计/脱敏/Scope/MCP 入口）"         tests/test_control_plane.py tests/test_control_plane_cp_p0.py
+    run_tests "CP-P1 只读面板（Memory/Eval/Trace）" tests/test_control_plane_cp_p1.py
 fi
 
 echo "== P10 gate（Phase 10 兼容清理 + legacy 清零）=="

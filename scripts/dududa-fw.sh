@@ -1,6 +1,7 @@
 #!/bin/bash
 # Dududa 管理面防火墙收敛（文档清单第 7 项）：
 #   6185 AstrBot Dashboard（宿主进程，INPUT 链）
+#   8000 dududa-cp（Control Plane，ADR-0001；loopback 默认 + 白名单纵深防御）
 #   3001/6099 NapCat（podman 发布端口，raw PREROUTING 在 DNAT 前拦截，防容器 IP 漂移）
 # 仅放行受信来源：本机回环 / 私网 / CGNAT / 运维公网 IP；其余一律 DROP。
 # 幂等：可重复执行。
@@ -15,8 +16,8 @@ for s in "${TRUSTED[@]}"; do
   iptables -A DUDUDA-INPUT -s "$s" -j ACCEPT
 done
 iptables -A DUDUDA-INPUT -j DROP
-iptables -D INPUT -p tcp -m multiport --dports 6185,3001,6099 -j DUDUDA-INPUT 2>/dev/null
-iptables -I INPUT 1 -p tcp -m multiport --dports 6185,3001,6099 -j DUDUDA-INPUT
+iptables -D INPUT -p tcp -m multiport --dports 6185,3001,6099,8000 -j DUDUDA-INPUT 2>/dev/null
+iptables -I INPUT 1 -p tcp -m multiport --dports 6185,3001,6099,8000 -j DUDUDA-INPUT
 
 # ---------- 2) raw PREROUTING：3001/6099 在 DNAT 之前拦截（nat 表禁 DROP） ----------
 iptables -t raw -N DUDUDA-PRE 2>/dev/null
@@ -40,7 +41,7 @@ for s in "${TRUSTED[@]}" 10.88.0.0/16; do
 done
 iptables -A DUDUDA-FWD -j DROP
 iptables -D FORWARD -p tcp -d 10.88.0.2 -m multiport --dports 3001,6099 -j DUDUDA-FWD 2>/dev/null
-iptables -D FORWARD -p tcp -d 10.88.0.2 -m multiport --dports 6185,3001,6099 -j DUDUDA-FWD 2>/dev/null
+iptables -D FORWARD -p tcp -d 10.88.0.2 -m multiport --dports 6185,3001,6099,8000 -j DUDUDA-FWD 2>/dev/null
 iptables -D FORWARD -p tcp -d 10.88.0.0/16 -m multiport --dports 3001,6099 -j DUDUDA-FWD 2>/dev/null
 iptables -I FORWARD 1 -p tcp -d 10.88.0.0/16 -m multiport --dports 3001,6099 -j DUDUDA-FWD
 

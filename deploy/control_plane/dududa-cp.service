@@ -1,0 +1,15 @@
+[Unit]
+Description=Dududa 2.0 Control Plane (ADR-0001)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/dududa20-prototype
+EnvironmentFile=/root/data/cp.env
+ExecStart=/usr/local/python3.12/bin/python3.12 -m uvicorn packages.control_plane.app:create_app --host 127.0.0.1 --port 8000 --factory
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

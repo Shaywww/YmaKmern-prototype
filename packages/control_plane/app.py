@@ -1,6 +1,9 @@
 """嘟嘟哒 2.0 控制台 - Web Dashboard & API Server."""
 from __future__ import annotations
+import json
+import os
 import time
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -12,6 +15,9 @@ from ..mcp.registry import create_all_services, register_all_mcp_services
 from ..core.capability import CapabilityRegistry, CapabilityRisk
 from ..safeguards.security import PermissionEngine, Redactor
 from ..mcp import access as mcp_access
+from ..core.memory import (
+    JSONMemoryRepository, ScopeSelector, SensitivityLevel, MemoryType,
+)
 from .security import (
     AuditLogger, cp_auth_middleware, get_operator, redact_value,
     require_write, scope_filter_events,
@@ -103,6 +109,13 @@ def create_app() -> FastAPI:
     register_all_mcp_services(cap_registry)
     app.state.cap_registry = cap_registry
     app.state.mcp_access = mcp_access.MCPAccessPolicy()
+    # CP-P1 只读面板（ADR-0001）：Memory Explorer 经 JSONMemoryRepository；Eval 报告只读
+    app.state.memory_repo = JSONMemoryRepository(
+        path=os.environ.get("DUDUDA_MEMORY_FILE") or str(
+            Path(__file__).resolve().parents[2] / "data" / "memory.json"))
+    app.state.eval_dir = Path(
+        os.environ.get("DUDUDA_EVAL_DIR") or str(
+            Path(__file__).resolve().parents[2] / "data" / "traces-eval"))
     app.middleware('http')(cp_auth_middleware)
     _register_routes(app)
     return app
@@ -252,6 +265,111 @@ def _register_routes(app: FastAPI):
         op = get_operator(request)
         events = _visible_events(app.state.trace_sink.by_run(run_id), op)
         return {'run_id': run_id, 'events': events, 'count': len(events)}
+
+    # ---------- CP-P1 只读面板（ADR-0001）：Memory Explorer / Eval 报告 ----------
+    def _memory_visible(records, op):
+        """与 query_visible 语义一致：RESTRICTED 永不召回；PRIVATE 仅本人可见。"""
+        out = []
+        for r in records:
+            if r.sensitivity == SensitivityLevel.RESTRICTED:
+                continue
+            if (r.sensitivity == SensitivityLevel.PRIVATE
+                    and r.scope.actor_id != op.actor_id):
+                continue
+            out.append(r)
+        return out
+
+    def _memory_to_dict(record):
+        s = record.scope
+        return {
+            'record_id': record.record_id,
+            'scope': {
+                'memory_type': s.memory_type.value,
+                'platform': s.platform,
+                'bot_id': s.bot_id,
+                'conversation_id': s.conversation_id,
+                'actor_id': s.actor_id,
+                'persona_id': s.persona_id,
+            },
+            'content': redact_value(app.state.redactor, record.content),
+            'source': record.source,
+            'sensitivity': record.sensitivity.value,
+            'visibility': record.visibility.value,
+            'evidence': [redact_value(app.state.redactor, e)
+                         for e in record.evidence],
+            'created_at': str(record.created_at),
+        }
+
+    @app.get('/memory')
+    async def memory_explore(request: Request, limit: int = Query(50, ge=1, le=200),
+                             actor_id: str = '', conversation_id: str = '',
+                             memory_type: str = ''):
+        op = get_operator(request)
+        if op.role != 'owner':
+            if actor_id and actor_id != op.actor_id:
+                raise HTTPException(403, 'non-owner cannot scope memory to other actors')
+            actor_id = op.actor_id
+        mtype = None
+        if memory_type:
+            try:
+                mtype = MemoryType(memory_type)
+            except ValueError:
+                raise HTTPException(400, f'invalid memory_type: {memory_type}')
+        records = app.state.memory_repo.query_selector(ScopeSelector(
+            actor_id=actor_id or None,
+            conversation_id=conversation_id or None,
+            memory_type=mtype,
+        ), limit=limit * 4)
+        records = _memory_visible(records, op)[:limit]
+        return {'records': [_memory_to_dict(r) for r in records],
+                'count': len(records)}
+
+    @app.get('/memory/{record_id}')
+    async def memory_record(record_id: str, request: Request):
+        op = get_operator(request)
+        record = app.state.memory_repo._records.get(record_id)
+        if record is None or not _memory_visible([record], op):
+            raise HTTPException(404, f'Memory record {record_id!r} not found')
+        return _memory_to_dict(record)
+
+    @app.get('/eval/reports')
+    async def eval_reports():
+        out = []
+        for p in sorted(app.state.eval_dir.glob('*')):
+            if not p.is_file() or p.suffix not in ('.jsonl', '.json'):
+                continue
+            lines = -1
+            if p.suffix == '.jsonl':
+                try:
+                    lines = sum(1 for _ in p.open(encoding='utf-8'))
+                except OSError:
+                    lines = -1
+            out.append({'name': p.name, 'size': p.stat().st_size,
+                        'mtime': p.stat().st_mtime, 'lines': lines})
+        return {'reports': out, 'count': len(out)}
+
+    @app.get('/eval/reports/{name}')
+    async def eval_report(name: str):
+        if Path(name).name != name or not name.endswith(('.jsonl', '.json')):
+            raise HTTPException(400, f'invalid report name: {name}')
+        p = app.state.eval_dir / name
+        if not p.is_file():
+            raise HTTPException(404, f'Eval report {name!r} not found')
+        try:
+            lines = p.read_text(encoding='utf-8', errors='replace').splitlines()
+        except OSError as exc:
+            raise HTTPException(500, str(exc))
+        entries = []
+        for line in lines[:500]:
+            if not line.strip():
+                continue
+            try:
+                entries.append(redact_value(app.state.redactor, json.loads(line)))
+            except ValueError:
+                entries.append({'raw': redact_value(
+                    app.state.redactor, line[:2000])})
+        return {'report': name, 'entries': entries, 'count': len(entries),
+                'truncated': len(lines) > 500}
 
     @app.get('/runtime/state')
     async def runtime_state():

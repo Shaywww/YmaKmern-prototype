@@ -145,9 +145,18 @@ cmd_cp() {
             fi
             local audit="$PROTO/data/cp_audit.jsonl"
             echo "cp audit: $([ -f "$audit" ] && wc -l < "$audit" || echo 0) lines"
+            if [ -f /etc/systemd/system/dududa-cp.service ]; then
+                echo "cp service: $(systemctl is-active dududa-cp 2>/dev/null || echo inactive)"
+            else
+                echo "cp service: unit not installed"
+            fi
             ;;
         start|stop|restart)
-            echo "manage via: systemctl start|stop|restart dududa-cp（systemd 单元 ADR-0001 CP-P2 部署）"
+            if [ ! -f /etc/systemd/system/dududa-cp.service ]; then
+                echo "dududa-cp unit not installed; run: bash $PROTO/deploy/control_plane/install_cp.sh" >&2
+                return 2
+            fi
+            systemctl "$action" dududa-cp
             ;;
         *)
             echo "usage: ops.sh cp {status|start|stop|restart}" >&2

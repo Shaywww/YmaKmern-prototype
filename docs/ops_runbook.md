@@ -48,8 +48,8 @@ bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/exit_gate_check.sh         # 完整 31 项（含 CP gate）
-bash scripts/exit_gate_check.sh --fast  # 静态 28 项
+bash scripts/exit_gate_check.sh         # 完整 37 项（含 CP gate）
+bash scripts/exit_gate_check.sh --fast  # 静态 33 项
 ```
 
 覆盖内容：
@@ -90,7 +90,7 @@ bash scripts/eval_gate.sh
 cd /opt/dududa20-prototype
 git log --oneline -3                        # 期望的提交链
 git status --short                          # 工作区干净（无输出）
-bash scripts/exit_gate_check.sh             # 31 项全 PASS
+bash scripts/exit_gate_check.sh             # 37 项全 PASS
 bash scripts/eval_gate.sh                   # ALL GATES PASS
 bash scripts/ops.sh health && bash scripts/ops.sh manifest   # 两 JSON 的 ok 均为 true
 systemctl is-active astrbot                 # active
@@ -189,8 +189,37 @@ systemctl is-active astrbot                 # active
 
 验证：
 
-    bash scripts/exit_gate_check.sh        # summary 31 项 PASS=31 FAIL=0
+    bash scripts/exit_gate_check.sh        # summary 37 项 PASS=37 FAIL=0
     find /opt/dududa20-prototype -name '*.bak*' -not -path '*/.git/*' | wc -l   # 0
     find /root/data/plugins/dududa20 -name '*.bak*' | wc -l                    # 0
     cd /opt/dududa20-prototype && git status --porcelain                       # 空
 
+
+
+## 10. Control Plane 运维（ADR-0001）
+
+独立管理面（FastAPI，默认 127.0.0.1:8000），不参与 QQ 消息同步链路。
+
+- CP-P0 安全基线：Bearer/X-CP-Token 鉴权（缺省拒绝）、写操作经 PermissionEngine（owner 可写）、
+  JSONL 审计、Redactor 出参脱敏、Trace Scope 过滤、MCP query 经 CapabilityRegistry + access 策略。
+- CP-P1 只读面板：Trace Viewer（/traces[/{trace_id}|/runs/{run_id}]）、Memory Explorer（/memory，
+  经 JSONMemoryRepository，RESTRICTED 永不召回 / PRIVATE 仅本人）、Eval 报告（/eval/reports）、
+  MCP Health（/mcp/services）。全部只读，无写路由。
+- CP-P2 预留：Agent Playground（沙箱）、成本/性能面板、自动故障告警、日志检索。
+
+部署与日常：
+
+    bash /opt/dududa20-prototype/deploy/control_plane/install_cp.sh   # 安装 systemd 单元 + cp.env（随机 token）+ 防火墙白名单
+    systemctl status dududa-cp                                        # 服务状态
+    bash /opt/dududa20-prototype/scripts/ops.sh cp status             # token 配置/监听/审计行数/单元状态
+    bash /opt/dududa20-prototype/scripts/ops.sh cp restart            # 重启
+    curl -s http://127.0.0.1:8000/health                              # 存活探针（无 token 豁免）
+    curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/personas
+
+安全要点：
+- token 在 /root/data/cp.env（systemd EnvironmentFile），仅 root 可读；ops.sh cp status 只显示是否已配置，不打印明文。
+- 防火墙 dududa-fw.sh 已将 8000 纳入受信来源白名单（纵深防御；默认只绑 loopback）。
+- 运维坑：历史上 8000 曾被旧原型进程（run_server 无鉴权版）长期占用导致 systemd 单元起不来，
+  若 `systemctl is-active dududa-cp` 反复 restart 且日志报 address already in use，
+  用 `ss -ltnp | grep ':8000 '` 定位旧进程并清理后再 restart。
+- CP 备份已纳入 /root/manage.sh backup（dududa-cp.service + cp.env + packages）。
