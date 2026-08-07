@@ -34,8 +34,15 @@ class OpenAIProvider(ModelProvider):
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
 
     def _base_for(self, model_id: str) -> str:
-        """按模型选择 base（降级模型可指向不同网关）。"""
-        return self._base_urls.get(model_id, self._base_url)
+        """按模型选择 base（降级模型可指向不同网关）。
+
+        OpenAI 兼容网关的 API 路径在 /v1 下；host 根路径通常是管理面板，
+        自动补 /v1（如 https://gateway.example -> https://gateway.example/v1）。
+        """
+        base = self._base_urls.get(model_id, self._base_url)
+        if base and base.count("/") == 2:
+            return base + "/v1"
+        return base
 
     def _key_for(self, model_id: str) -> str:
         """按模型选择密钥（降级模型可指向不同网关的密钥）。"""

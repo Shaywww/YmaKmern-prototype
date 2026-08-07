@@ -131,6 +131,14 @@ class TestOpenAIProviderMultiGateway:
         assert prov._base_for("deepseek-chat") == "https://api.deepseek.com/v1"
         assert prov._base_for("gpt-5.5") == "https://fallback.example/v1"
         assert prov._base_for("claude-x") == "https://vision.example/v1"
+        # host 根路径自动补 /v1（OpenAI 兼容网关 API 在 /v1 下）
+        prov2 = OpenAIProvider(
+            api_key="k", base_url="https://api.deepseek.com/v1",
+            base_urls={"gpt-5.5": "https://fallback.example",
+                       "claude-x": "https://vision.example/"},
+            api_keys={})
+        assert prov2._base_for("gpt-5.5") == "https://fallback.example/v1"
+        assert prov2._base_for("claude-x") == "https://vision.example/v1"
         assert prov._key_for("deepseek-chat") == "main-key"
         assert prov._key_for("gpt-5.5") == "fb-key"
         assert prov._key_for("claude-x") == "vis-key"

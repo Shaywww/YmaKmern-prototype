@@ -552,9 +552,12 @@ class DududaCore:
                 logger.warning("Primary LLM (%s) failed: %s, trying fallback...", self._cfg["MODEL"], e)
         # Fallback: MHCoding GPT-5.5 via httpx
         try:
+            _fb_base = str(self._cfg.get("FALLBACK_BASE", "") or "").strip().rstrip("/")
+            if _fb_base and _fb_base.count("/") == 2:
+                _fb_base += "/v1"  # OpenAI 兼容网关 API 路径在 /v1 下
             async with httpx.AsyncClient(timeout=60) as c:
                 r = await c.post(
-                    f"{self._cfg['FALLBACK_BASE'].rstrip('/')}/chat/completions",
+                    f"{_fb_base}/chat/completions",
                     headers={"Authorization": f"Bearer {self._cfg['FALLBACK_KEY']}",
                              "Content-Type": "application/json"},
                     json={"model": self._cfg["FALLBACK_MODEL"], "messages": msgs,
