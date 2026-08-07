@@ -145,6 +145,14 @@ class TestLeakCleanup:
         assert "{'title'" not in out
         assert out.strip() == "参考"
 
+    def test_dangling_source_intro_removed(self):
+        out = self._strip(
+            "搜到啦～超实用的～ ^^~ ^^  （来源：[{'title': '中国科学技术大学',"
+            " 'link': 'https://www.ustc.edu.cn/'}]")
+        assert "{" not in out
+        assert "来源" not in out
+        assert out.rstrip().endswith("超实用的")
+
     def test_normal_reply_untouched(self):
         text = "嘿嘿，USTC就是中国科学技术大学哦～在安徽合肥，1958年创办的！"
         assert self._strip(text) == text

@@ -327,7 +327,12 @@ def _strip_tool_leak(text: str) -> str:
         r"|\[?\{\s*['\"][a-zA-Z_0-9]+['\"]\s*:)"
         , text)
     if m:
-        text = text[:m.start()].rstrip(" ~～~^.,!;:，。！；： \t\n")
+        text = text[:m.start()]
+        # 去掉悬空引子（LLM 常写「（来源：」后接原始数据再被截断）
+        text = re.sub(r"[（(]\s*来源[:：]?\s*$", "", text)
+        text = re.sub(r"来源[:：]?\s*$", "", text)
+        text = re.sub(r"[（(]\s*[:：]?\s*$", "", text)
+        text = text.rstrip(" ~～~^.,!;:，。！；： \t\n")
     return text
 
 
