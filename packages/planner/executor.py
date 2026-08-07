@@ -33,6 +33,9 @@ class ExecutionContext:
     # ---- Doc 2.4.12 / 2.4.3: cancellation（取消后不得开始下一步）----
     cancellation: Optional[Any] = None   # asyncio.Event；外部取消信号
     cancel_requested: bool = False       # 内部主动取消
+    # ---- Doc 2.4.12 / 2.4.23: 持久确认（执行时重新授权）----
+    confirmation_store: Optional[Any] = None   # ConfirmationStore；None 时退回 legacy confirmed_ids
+    confirmation_ids: tuple = ()               # 本次运行携带的确认 token
 
     def request_cancel(self) -> None:
         """请求取消：不再开始新调用，迟到的结果不推进状态。"""
@@ -216,10 +219,8 @@ class ToolExecutor:
                     f"Risk {cap_risk} exceeds allowed {max_risk} for {step.capability_id}"
                 )
         # Confirmation
-        if cap.requires_confirmation and cap.capability_id not in ctx.confirmed_ids:
-            raise AuthorizationError(
-                f"Capability {step.capability_id} requires confirmation"
-            )
+        if cap.requires_confirmation:
+            self._require_confirmation(step, ctx, cap)
         # Argument schema (basic: required present, no unknown keys)
         schema = cap.schema.input_schema if cap.schema else {}
         args = dict(step.arguments or {})
@@ -245,6 +246,53 @@ class ToolExecutor:
                 f"Duplicate call rejected for {step.capability_id} (key={idem_key!r})"
             )
         return cap
+
+    def _require_confirmation(self, step, ctx: ExecutionContext, cap) -> None:
+        """Doc 2.4.12/2.4.23: 工具执行时对确认类能力做持久确认校验。
+
+        有 store 时：
+          - 显式 token（ctx.confirmation_ids）逐枚校验并消费（single-use）；
+          - 无 token 时按 (actor, scope, action, payload digest) 命中待确认记录，
+            已批准则消费放行（重试同参数自动命中）；未批准给出确认码；
+          - 都没有则自动创建持久待确认记录（管理员批准后可重试）。
+        无 store 时退回 legacy confirmed_ids 集合判断。
+        """
+        store = ctx.confirmation_store
+        if store is None:
+            if cap.capability_id not in ctx.confirmed_ids:
+                raise AuthorizationError(
+                    f"Capability {cap.capability_id} requires confirmation")
+            return
+        args = dict(step.arguments or {})
+        for cid in ctx.confirmation_ids:
+            res = store.authorize_tool(
+                cid, ctx.actor, ctx.conversation_scope,
+                cap.capability_id, args, ctx.permissions)
+            if res.allowed:
+                return
+            reason = res.reason_codes[0].value if res.reason_codes else "denied"
+            raise AuthorizationError(
+                f"Confirmation rejected for {cap.capability_id}: {reason}")
+        pending = store.find_pending(
+            ctx.actor, ctx.conversation_scope, cap.capability_id, args)
+        if pending is not None:
+            if not pending.approved:
+                raise AuthorizationError(
+                    f"Capability {cap.capability_id} requires confirmation "
+                    f"(id={pending.confirmation_id})")
+            res = store.authorize_tool(
+                pending.confirmation_id, ctx.actor, ctx.conversation_scope,
+                cap.capability_id, args, ctx.permissions)
+            if res.allowed:
+                return
+            reason = res.reason_codes[0].value if res.reason_codes else "denied"
+            raise AuthorizationError(
+                f"Confirmation rejected for {cap.capability_id}: {reason}")
+        conf = store.create_for_actor(
+            ctx.actor, ctx.conversation_scope, cap.capability_id, args)
+        raise AuthorizationError(
+            f"Capability {cap.capability_id} requires confirmation "
+            f"(id={conf.confirmation_id})")
 
     async def _call_provider(self, step, cap) -> Any:
         if self._registry is None:

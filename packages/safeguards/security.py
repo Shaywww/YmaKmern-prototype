@@ -42,6 +42,7 @@ class AuthReason(str, Enum):
     CONFIRMATION_DIGEST_MISMATCH = "confirmation_digest_mismatch"
     CONFIRMATION_ACTOR_MISMATCH = "confirmation_actor_mismatch"
     CONFIRMATION_SCOPE_MISMATCH = "confirmation_scope_mismatch"
+    CONFIRMATION_ACTION_MISMATCH = "confirmation_action_mismatch"
     ROLE_ALLOWED = "role_allowed"
     OWNER_ALLOWED = "owner_allowed"
     CONFIRMATION_OK = "confirmation_ok"
@@ -301,6 +302,94 @@ class ConfirmationStore:
         return AuthorizationResult(
             AuthorizationDecision.ALLOW, (AuthReason.CONFIRMATION_OK,)
         )
+
+    def create_for_actor(
+        self,
+        actor_id: str,
+        scope_key: str,
+        action: str,
+        payload: dict[str, Any],
+        required_permission: str = "use_tool",
+    ) -> Confirmation:
+        """为工具路径创建持久确认（executor 无 Actor 对象，只传 actor_id）。"""
+        conf = Confirmation(
+            confirmation_id=uuid4().hex,
+            actor_id=actor_id,
+            scope_key=scope_key,
+            action=action,
+            payload_digest=self.digest(payload),
+            required_permission=required_permission,
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=self._ttl),
+        )
+        self._confirmations[conf.confirmation_id] = conf
+        return conf
+
+    def find_pending(
+        self,
+        actor_id: str,
+        scope_key: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> Optional[Confirmation]:
+        """按绑定找未消费未过期的确认（重试同参数自动命中，同命令路径）。"""
+        digest = self.digest(payload)
+        for c in self._confirmations.values():
+            if (c.actor_id == actor_id
+                    and c.scope_key == scope_key
+                    and c.action == action
+                    and c.payload_digest == digest
+                    and not c.is_consumed
+                    and not c.is_expired):
+                return c
+        return None
+
+    def authorize_tool(
+        self,
+        confirmation_id: str,
+        actor_id: str,
+        scope_key: str,
+        action: str,
+        payload: dict[str, Any],
+        permissions: tuple[str, ...] = (),
+    ) -> AuthorizationResult:
+        """工具执行时的确认校验 + 单次消费（文档 2.4.12/2.4.23）。
+
+        执行时重新授权：管理员批准、Actor/Scope/action/payload digest 绑定、
+        过期与重放拒绝、所需权限复核（角色变化即失效）。消费后 single-use。
+        """
+        conf = self._confirmations.get(confirmation_id)
+        if conf is None:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.UNKNOWN_RESOURCE,))
+        if conf.is_consumed:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_REPLAYED,))
+        if conf.is_expired:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_EXPIRED,))
+        if not conf.approved:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_REQUIRED,))
+        if conf.actor_id != actor_id:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_ACTOR_MISMATCH,))
+        if conf.scope_key != scope_key:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_SCOPE_MISMATCH,))
+        if conf.action != action:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_ACTION_MISMATCH,))
+        if conf.payload_digest != self.digest(payload):
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.CONFIRMATION_DIGEST_MISMATCH,))
+        if conf.required_permission and conf.required_permission not in permissions:
+            return AuthorizationResult(
+                AuthorizationDecision.DENY, (AuthReason.ROLE_TOO_LOW,))
+        self._confirmations[confirmation_id] = Confirmation(
+            **{**conf.__dict__, "consumed_at": datetime.now(timezone.utc)})
+        return AuthorizationResult(
+            AuthorizationDecision.ALLOW, (AuthReason.CONFIRMATION_OK,))
 
     def prune(self) -> int:
         """清理已消费或过期的确认，返回清理数量。"""

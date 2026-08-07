@@ -58,6 +58,7 @@ class RuntimeOrchestrator:
         planner_integration=None,
         profile_store: Optional[Any] = None,
         idempotency_registry: Optional[MessageIdempotencyRegistry] = None,
+        confirmation_store: Optional[Any] = None,
     ):
         self._context_builder = context_builder or ContextBuilder()
         self._decision_engine = decision_engine or SocialDecisionEngine()
@@ -72,6 +73,7 @@ class RuntimeOrchestrator:
         self._last_state: Optional[RuntimeState] = None
         self._completions: dict[str, CompletionReceipt] = {}
         self._pending_cancellation: Optional[Any] = None  # run(…) 传入的外部取消信号（文档 2.5.5）
+        self._confirmation_store = confirmation_store  # 持久确认（文档 2.4.23/2.4.12）
 
     async def run(
         self,
@@ -81,6 +83,7 @@ class RuntimeOrchestrator:
         run_id: Optional[str] = None,
         trace_id: Optional[str] = None,
         cancellation: Optional[Any] = None,
+        confirmation_ids: Optional[Any] = None,
     ) -> RuntimeResult:
         budget = budget or RuntimeBudget()
         # 兼容：允许直接传入 PreprocessedEnvelope（Connector 预处理产物）
@@ -90,6 +93,7 @@ class RuntimeOrchestrator:
             envelope=envelope, budget=budget,
             run_id=run_id or uuid4().hex,
             trace_id=trace_id or uuid4().hex,
+            confirmation_ids=tuple(confirmation_ids or ()),
         )
         if self._dedupe_envelope(envelope):
             # 幂等键重复：该消息已被处理过（已有人回答）-> 不回复、可审计
@@ -428,6 +432,8 @@ class RuntimeOrchestrator:
                 actor=self._actor_id(state),
                 conversation_scope=self._conversation_id(state),
                 cancellation=self._pending_cancellation,
+                confirmation_store=self._confirmation_store,
+                confirmation_ids=state.confirmation_ids,
                 run_id=state.run_id,
                 trace_id=state.trace_id,
             )
@@ -468,6 +474,8 @@ class RuntimeOrchestrator:
             actor=self._actor_id(state),
             conversation_scope=self._conversation_id(state),
             cancellation=self._pending_cancellation,
+            confirmation_store=self._confirmation_store,
+            confirmation_ids=state.confirmation_ids,
             run_id=state.run_id,
             trace_id=state.trace_id,
         )

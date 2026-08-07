@@ -84,7 +84,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     def __init__(self, plugin, decision_engine, capability_registry, memory_repo,
                  renderer, planner_integration, profile_store=None,
-                 idempotency_registry=None):
+                 idempotency_registry=None, confirmation_store=None):
         super().__init__(
             context_builder=plugin.context_builder,
             decision_engine=decision_engine,
@@ -94,8 +94,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             planner_integration=planner_integration,
             profile_store=profile_store,
             idempotency_registry=idempotency_registry,
+            confirmation_store=confirmation_store,
         )
         self._profile_store = profile_store
+        self._confirmation_store = confirmation_store
         self._plugin = plugin
         self._pending_event = None
         self._injected_perception = None
@@ -113,7 +115,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 pass
 
     async def run(self, envelope, budget=None, policy=None,
-                  perception=None, event=None, run_id=None, trace_id=None):
+                  perception=None, event=None, run_id=None, trace_id=None,
+                  confirmation_ids=None):
         """镜像 RuntimeOrchestrator.run()，但 COMPOSED 阶段改为生产异步合成。"""
         budget = budget or RuntimeBudget()
         self._pending_event = event
@@ -124,6 +127,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             envelope=envelope, budget=budget,
             run_id=run_id or uuid4().hex,
             trace_id=trace_id or uuid4().hex,
+            confirmation_ids=tuple(confirmation_ids or ()),
         )
         if self._dedupe_envelope(envelope):
             # 幂等键重复：该消息已被处理过（已有人回答）-> 不回复、可审计

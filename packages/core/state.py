@@ -182,6 +182,7 @@ class RuntimeState:
     capability_candidates: tuple[Any, ...] = ()  # CapabilityCandidate
     tool_plan: Optional[ToolPlan] = None
     tool_observations: tuple[Any, ...] = ()      # ToolObservation
+    confirmation_ids: tuple[str, ...] = ()       # 本次运行的持久确认 token（文档 2.4.23）
 
     # 生成
     draft_response: Optional[Any] = None   # DraftResponse
