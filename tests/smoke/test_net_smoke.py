@@ -107,6 +107,6 @@ def test_production_course_capability_health():
     main_mod, p = _load_plugin()
     caps = {c.capability_id: c for c in p.cap_registry.list_enabled()}
     for want in ("mcp.course_schedule", "mcp.exam_schedule",
-                 "mcp.academic_calendar"):
+                 "mcp.academic_calendar", "mcp.academic_affairs"):
         assert want in caps, f"{want} 未注册"
         assert caps[want].is_healthy, f"{want} 不健康"
