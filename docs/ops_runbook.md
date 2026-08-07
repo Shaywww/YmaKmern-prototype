@@ -13,7 +13,7 @@ systemctl is-active astrbot             # active / inactive
 journalctl -u astrbot --no-pager -n 200 # 最近 200 行日志
 # 启动成功标志（必须出现）：
 #   Dududa 2.0 | renderer=OK | memory=JSON | vision=... | security=ON
-#   MCP capabilities registered: 7
+#   MCP capabilities registered: 8
 ```
 
 ## 1. 运维脚本 `scripts/ops.sh`

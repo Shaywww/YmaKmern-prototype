@@ -3,8 +3,13 @@
 
 覆盖：服务实时性、注册计数、Planner 模式（时间 vs 考试优先级）、E2E 工具链。
 """
+import os
 import sys
 sys.path.insert(0, "/opt/dududa20-prototype")
+# 测试与生产运行时数据隔离：access 策略指向不存在的路径 = legacy allow，
+# 不受 data/mcp_access.json（生产 default deny）影响（文档 2.5.6）。
+os.environ.setdefault(
+    "DUDUDA_MCP_ACCESS", "/tmp/dududa-test-mcp-access-absent.json")
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -77,7 +82,7 @@ class _StubProvider:
 class TestCandidateCutoff:
     @pytest.mark.asyncio
     async def test_production_shape_keeps_clock_in_candidates(self):
-        """生产注册表（3 内置 + 7 MCP = 10 项）超过默认 top_k=8 时，
+        """生产注册表（3 内置 + 8 MCP = 11 项）超过默认 top_k=8 时，
         mcp.clock 不得被候选截断（曾导致「现在几点」降级为闲聊）。"""
         reg = CapabilityRegistry()
         for i in range(3):
@@ -87,7 +92,7 @@ class TestCandidateCutoff:
                            risk=CapabilityRisk.READ_ONLY),
                 _StubProvider())
         register_all_mcp_services(reg)
-        assert len(reg.list_enabled()) == 10
+        assert len(reg.list_enabled()) == 11
         orch = RuntimeOrchestrator(
             decision_engine=_ForceToolsEngine(),
             capability_registry=reg,
@@ -132,7 +137,7 @@ class TestClockCapability:
         assert "clock" in services
         reg = CapabilityRegistry()
         n = register_all_mcp_services(reg)
-        assert n == 7
+        assert n == 8
         assert reg.get("mcp.clock") is not None
 
     @pytest.mark.asyncio

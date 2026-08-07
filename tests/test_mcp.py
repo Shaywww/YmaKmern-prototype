@@ -14,7 +14,7 @@ from packages.mcp.base import ServiceHealth
 class TestAllServices:
     def test_all_services_created(self):
         svcs = create_all_services()
-        assert len(svcs) == 7
+        assert len(svcs) == 8
         assert "clock" in svcs
         assert "course_schedule" in svcs
 
@@ -152,7 +152,7 @@ class TestRegisterIntoCapabilityRegistry:
     def test_register_all(self):
         reg = CapabilityRegistry()
         count = register_all_mcp_services(reg)
-        assert count == 7
+        assert count == 8
         assert reg.get("mcp.clock") is not None
         assert reg.get("mcp.course_schedule") is not None
         assert reg.get("mcp.exam_schedule") is not None
@@ -169,7 +169,7 @@ class TestRegisterIntoCapabilityRegistry:
         summaries = reg.summaries()
         assert any("course_schedule" in s for s in summaries)
         assert any("exam_schedule" in s for s in summaries)
-        assert len(summaries) == 7
+        assert len(summaries) == 8
         assert any("clock" in s for s in summaries)
 
 class TestCaching:

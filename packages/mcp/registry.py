@@ -9,6 +9,7 @@ from .training_program import TrainingProgramService
 from .second_classroom import SecondClassroomService
 from .campus_notice import CampusNoticeService
 from .clock_service import ClockService
+from .academic_affairs import AcademicAffairsService
 import time
 import os
 from typing import Any, Optional
@@ -101,6 +102,7 @@ def create_all_services() -> dict:
         "training_program": TrainingProgramService(),
         "second_classroom": SecondClassroomService(),
         "campus_notice": CampusNoticeService(),
+        "academic_affairs": AcademicAffairsService(),
         "clock": ClockService(),
     }
     return _SERVICES
@@ -166,6 +168,7 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
         "second_classroom": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_upcoming","get_by_category"]},"keyword":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
         "campus_notice": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_pinned","get_recent"]},"keyword":{"type":"string"},"source":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
         "clock": {"type":"object","properties":{"action":{"type":"string","enum":["get_now","get_date","get_time"]},"fmt":{"type":"string"}}},
+        "academic_affairs": {"type":"object","properties":{"action":{"type":"string","enum":["get_student_info","get_grade","get_credits_summary","get_graduation_requirements"]},"student_id":{"type":"string"},"semester":{"type":"string"},"major_id":{"type":"string"},"token":{"type":"string"}}},
     }
 
     count = 0

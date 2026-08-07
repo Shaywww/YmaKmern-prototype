@@ -44,10 +44,11 @@ def _cap(cid):
 
 
 class TestICourseSet:
-    def test_set_contains_six_services(self):
-        assert len(ICOURSE_SERVICE_IDS) == 6
+    def test_set_contains_seven_services(self):
+        assert len(ICOURSE_SERVICE_IDS) == 7
         for svc in ("course_schedule", "exam_schedule", "academic_calendar",
-                    "training_program", "second_classroom", "campus_notice"):
+                    "training_program", "second_classroom", "campus_notice",
+                    "academic_affairs"):
             assert is_icourse_capability(f"mcp.{svc}")
 
     def test_clock_not_icourse(self):
@@ -227,7 +228,7 @@ class TestRegistryHealthWiring:
         from packages.mcp import registry as reg
         reg2 = CapabilityRegistry()
         n = register_all_mcp_services(reg2)
-        assert n == 7
+        assert n == 8
         try:
             for _ in range(3):
                 reg.breaker.record_failure("course_schedule")

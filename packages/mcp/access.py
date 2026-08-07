@@ -41,6 +41,7 @@ ICOURSE_SERVICE_IDS = frozenset({
     "training_program",
     "second_classroom",
     "campus_notice",
+    "academic_affairs",
 })
 
 # 配置文件不存在时的兼容默认：不限制（与历史行为一致，dev/CI 全绿）。
