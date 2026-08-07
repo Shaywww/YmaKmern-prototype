@@ -781,7 +781,7 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <pre id="qr" style="margin-top:.5rem;display:none"></pre>
 </div>
 </div>
-<div id="lg" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.94);z-index:50;align-items:center;justify-content:center"><div class="card" style="width:340px"><h2>控制台认证</h2><div style="font-size:.8rem;color:#94a3b8;margin-bottom:.6rem;line-height:1.5">浏览器无法自动携带 Token。请输入控制台 Token（服务器 /root/data/cp.env 中的 DUDUDA_CP_TOKEN），仅保存在本机浏览器。</div><input id="lgt" placeholder="DUDUDA_CP_TOKEN" style="margin-bottom:.6rem"><div class="fr"><button class="btn btn-p" onclick="login()">进入</button></div></div></div>
+<div id="lg" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.94);z-index:50;align-items:center;justify-content:center"><div class="card" style="width:340px"><h2>控制台认证</h2><input id="lgt" placeholder="DUDUDA_CP_TOKEN" style="margin-bottom:.6rem"><div class="fr"><button class="btn btn-p" onclick="login()">进入</button></div></div></div>
 <footer>Dududa 2.0 Agent 运行状态 - v0.1.0</footer>
 <script>
 const A="";let TK=localStorage.getItem("cp_token")||"";function showLogin(){document.getElementById("lg").style.display="flex"}function hideLogin(){document.getElementById("lg").style.display="none"}async function login(){const t=document.getElementById("lgt").value.trim();if(!t)return alert("请输入 Token");TK=t;localStorage.setItem("cp_token",t);hideLogin();rf()}async function api(u,o){o=o||{};o.headers=Object.assign({},o.headers||{});if(TK)o.headers["Authorization"]="Bearer "+TK;const r=await fetch(A+u,o);if(r.status===401){showLogin();throw new Error("需要 Token")}if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()}
