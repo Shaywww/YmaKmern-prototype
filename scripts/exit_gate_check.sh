@@ -1,5 +1,5 @@
 #!/bin/bash
-# dududa20 退出门禁证据检查（文档 2.5.11 P0/P1/P2）。
+# dududa20 退出门禁证据检查（文档 2.5.11 P0/P1/P2 + Phase 10 兼容清理）。
 # 只读：跑门禁相关测试 + 静态证据；--fast 跳过 pytest 只做静态检查。
 # 用法: bash scripts/exit_gate_check.sh [--fast]
 set -euo pipefail
@@ -81,6 +81,13 @@ if [ "$FAST" != "--fast" ]; then
     fi
     rm -rf "$tmp"
 fi
+echo "== P10 gate（Phase 10 兼容清理 + legacy 清零）=="
+static "P10 原型仓库无 legacy 副本" bash -c "! find '$PROTO' -path '$PROTO/.git' -prune -o -type f \( -name '*.bak*' -o -name '*.swp' -o -name '*.swo' \) -print | grep -q ."
+static "P10 插件仓库无 legacy 副本" bash -c "! find '$PLUGIN' -path '$PLUGIN/.git' -prune -o -type f \( -name '*.bak*' -o -name 'main.py.final' -o -name 'main.py.stable*' -o -name 'main.py.v2.final' \) -print | grep -q ."
+static "P10 原型仓库工作区干净" bash -c "cd '$PROTO' && test -z \"\$(git status --porcelain)\""
+static "P10 插件仓库工作区干净" bash -c "cd '$PLUGIN' && test -z \"\$(git status --porcelain)\""
+static "P10 应用层无旧入口路径引用" bash -c "! grep -rn '$PLUGIN/main.py' '$PROTO/packages/' | grep -v __pycache__ | grep -q ."
+static "P10 文档含 rollback/清理清单" grep -q 'rollback\|回滚\|清理' "$PROTO/docs/ops_runbook.md"
 
 echo
 echo "summary: 门禁检查 $((pass + fail)) 项, PASS=$pass FAIL=$fail"

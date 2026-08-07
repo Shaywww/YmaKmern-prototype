@@ -34,6 +34,7 @@ bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root
 | `health` | `$OPS_OUT/health_status.json` | `service.active`、`banner`、`mcp_capabilities`、`recent_errors`、`backup.age_seconds`、`ok` |
 | `manifest` | `$OPS_OUT/supply_chain_manifest.json` | `schema_version: 2`、`repos.prototype.commit`、`repos.plugin.commit`、`working_tree_clean`、`containers.napcat.image_digest`、`ok` |
 | `smoke [--fast]` | stdout（`PASS/FAIL` 逐项） | bash 语法、py_compile、插件 import、服务 active；非 fast 追加两组关键 pytest |
+| `smoke-net` | stdout（`PASS/FAIL` 逐项） | 真实网络：主/降级网关可达 + 生产 Router LLM 往返 + mcp.clock 调用（需 systemd 注入密钥，与阻塞 CI 分开） |
 | `backup` | `/root/backups/dududa20/dududa20_<时间戳>.tar.gz` | 保留最近 5 份，更旧的自动删除 |
 
 判定口径：
@@ -47,14 +48,15 @@ bash scripts/ops.sh backup              # 先写 health 快照，再委托 /root
 
 ```bash
 cd /opt/dududa20-prototype
-bash scripts/exit_gate_check.sh         # 完整 18 项
-bash scripts/exit_gate_check.sh --fast  # 静态 16 项
+bash scripts/exit_gate_check.sh         # 完整 24 项
+bash scripts/exit_gate_check.sh --fast  # 静态 22 项
 ```
 
 覆盖内容：
 - P0：forbidden imports / 插件拆分 / 事件契约 / 权限负向 / 提示词注入 / Memory 隔离 / 迁移回滚 / 插件真实加载。
 - P1：`DUDUDA_ROUTER`、`DUDUDA_HYBRID_RENDER`、`DUDUDA_LIMITS_ENABLED`、`DUDUDA_MCP_CLIENT` 四个开关 + 429 降级 / 工具链降级重试硬上限 / 无重复回复、重复 Tool、错误 Memory。
 - P2：`manage.sh` 有 rollback / `ops.sh` 可执行 / 插件薄壳 < 500 行 / 应用层不引用旧 main / manifest 与 health 实际生成且 `ok`。
+- P10：两仓库无 legacy 副本（`*.bak*`/`*.swp`/`main.py.final` 等）、工作区干净、应用层无旧入口路径引用、文档含 rollback/清理清单。
 
 退出码：全部 PASS 为 0；任一 FAIL 为 1。末尾输出 `summary: 门禁检查 N 项, PASS=... FAIL=...`。
 
@@ -167,3 +169,28 @@ systemctl is-active astrbot                 # active
     curl -s -m 6 http://<公网IP>:6099/   # 超时/000
     iptables -t raw -D DUDUDA-PRE -p tcp -m tcp --dport 6099 -s <本机IP> -j DROP
     grep -F autoLogin /opt/napcat/config/webui.json                       # 3823883634
+
+
+## 9. Phase 10 兼容清理（legacy 清零）
+
+目标（文档 2.5.11 Phase 10）：生产入口、测试、文档、旧 import/path 消费者与 rollback 清单全部满足；legacy 移除清单为零。
+
+清理口径（`scripts/exit_gate_check.sh` P10 段静态检查，`--fast` 也执行）：
+- 原型仓库与插件仓库工作区必须干净（`git status --porcelain` 为空）。
+- 两仓库不得存在 legacy 代码副本：`*.bak*`、`*.swp`/`*.swo`、`main.py.final`/`main.py.stable*`/`main.py.v2.final`。
+  缓存（`__pycache__`、`.pytest_cache`）与运行数据（`data/`、`deploy/.env*`）不在清单内。
+- `packages/` 不得引用插件旧入口路径 `/root/data/plugins/dududa20/main.py`；测试与运维脚本加载薄壳是预期行为，不算 legacy。
+- 生产入口 = 插件薄壳 `main.py`（< 500 行），业务逻辑在 `/opt/dududa20-prototype/packages/`。
+
+回滚路径（rollback 清单）：
+- 代码回滚：两仓库均以 git 为唯一事实源，历史提交即回滚证据；按需 `git revert` 或 `git checkout <rev>`。
+- 数据回滚：`/root/manage.sh rollback`（自动取最新 `dududa20_*.tar.gz` 恢复）；`/root/manage.sh restore <file>` 指定备份。
+- 发布前必须全绿：`bash scripts/exit_gate_check.sh`（P0/P1/P2/P10）+ `bash scripts/eval_gate.sh` + `bash scripts/ops.sh smoke-net`。
+
+验证：
+
+    bash scripts/exit_gate_check.sh        # summary 24 项 PASS=24 FAIL=0
+    find /opt/dududa20-prototype -name '*.bak*' -not -path '*/.git/*' | wc -l   # 0
+    find /root/data/plugins/dududa20 -name '*.bak*' | wc -l                    # 0
+    cd /opt/dududa20-prototype && git status --porcelain                       # 空
+
