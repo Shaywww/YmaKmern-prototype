@@ -29,9 +29,11 @@ async def handle_media(plugin, event, url, name, is_image,
                        run_id="", trace_id="") -> str:
     ext = _file_ext(name)
     try:
-        logger.info("Media | run_id=%s trace_id=%s: %s (%s) image=%s url=%s",
-                    run_id, trace_id, name, ext, is_image, url[:50])
-        if url.startswith("/"):
+        logger.info("Media | run_id=%s trace_id=%s: %s (%s) image=%s",
+                    run_id, trace_id, name, ext, is_image)
+        if isinstance(url, (bytes, bytearray)):
+            data = bytes(url)
+        elif url.startswith("/"):
             import os as _os
             if _os.path.exists(url):
                 with open(url, "rb") as f:
@@ -469,7 +471,7 @@ def _preserve_media(url: str) -> str:
 def _drop_stash_file(path: str) -> None:
     import os as _os
     try:
-        if path and path.startswith(_stash_dir()) and _os.path.exists(path):
+        if isinstance(path, str) and path.startswith(_stash_dir()) and _os.path.exists(path):
             _os.remove(path)
     except Exception:
         pass
@@ -521,6 +523,56 @@ def _is_at_only(event, msgs) -> bool:
     return bool(getattr(event, "is_at_or_wake_command", False))
 
 
+def _stash_via_repo(repo, event, gid, f_url, f_name, f_img) -> bool:
+    """把媒体放入受信 Attachment Repository（文档 2.4.2）。
+
+    本地路径 -> 物化字节；http(s) -> 惰性 URL；data: -> 解码字节。
+    仓库超限 / 参数非法一律返回 False（fail-closed，等价不暂存）。
+    """
+    try:
+        sender = str(event.get_sender_id())
+        try:
+            platform = str(event.get_platform_name() or "qq")
+        except Exception:
+            platform = "qq"
+        data, source_url = b"", ""
+        if f_url.startswith("/"):
+            import os as _os
+            if not _os.path.exists(f_url):
+                # 本地文件已被清理：回退 raw_message 里的远程 URL（惰性下载）
+                remote = _remote_media_url(event)
+                if remote:
+                    source_url = remote
+                else:
+                    return False
+            else:
+                with open(f_url, "rb") as _f:
+                    data = _f.read()
+        elif f_url.startswith("data:"):
+            import base64 as _b64
+            try:
+                _, encoded = (f_url.split(",", 1) if "," in f_url
+                              else ("", f_url.split(":", 2)[-1]))
+                data = _b64.b64decode(encoded)
+            except Exception:
+                return False
+        elif f_url.startswith("http"):
+            source_url = f_url
+        else:
+            return False
+        ref = repo.put(platform, gid, sender, name=f_name or "media",
+                       mime="image/*" if f_img else "",
+                       kind="image" if f_img else "file",
+                       data=data, source_url=source_url)
+        if ref is None:
+            return False
+        logger.info("Flow stash: repo=%s scope=%s/%s size=%d",
+                    ref.ref[:8], gid, sender, ref.size)
+        return True
+    except Exception:
+        return False
+
+
 def _stash_group_media(plugin, event, msgs) -> bool:
     """未@ 的群聊图片/文件：静默暂存 60s，返回 True 表示吞掉本消息。"""
     if getattr(event, "is_at_or_wake_command", False):
@@ -535,6 +587,9 @@ def _stash_group_media(plugin, event, msgs) -> bool:
         f_url, f_name, f_img = _detect_media(event)
         if not f_url:
             return False
+        repo = getattr(plugin, "media_repo", None)
+        if repo is not None:
+            return _stash_via_repo(repo, event, gid, f_url, f_name, f_img)
         f_url = _preserve_media(f_url)
         if not f_url.startswith("/"):
             remote = _remote_media_url(event)
@@ -561,15 +616,30 @@ def _take_paired_media(plugin, event):
         gid = str(getattr(getattr(event, "message_obj", None), "group_id", "") or "")
         if not gid:
             return ()
+        text = str(getattr(event, "message_str", "") or "").strip()
+        if text and not any(kw in text for kw in _IMAGE_ASK_KEYWORDS):
+            return ()
+        repo = getattr(plugin, "media_repo", None)
+        if repo is not None:
+            try:
+                sender = str(event.get_sender_id())
+                try:
+                    platform = str(event.get_platform_name() or "qq")
+                except Exception:
+                    platform = "qq"
+                rec = repo.take_scope(platform, gid, sender)
+            except Exception:
+                return ()
+            if rec is None:
+                return ()
+            return (rec.data or rec.source_url or "", rec.name,
+                    rec.kind == "image")
         slot = getattr(plugin, "_recent_media", None)
         if not slot:
             return ()
         sender = str(event.get_sender_id())
         st = slot.get((gid, sender))
         if not st or time.time() - st[0] > 60:
-            return ()
-        text = str(getattr(event, "message_str", "") or "").strip()
-        if text and not any(kw in text for kw in _IMAGE_ASK_KEYWORDS):
             return ()
         slot.pop((gid, sender), None)
         return (st[1], st[2], st[3])

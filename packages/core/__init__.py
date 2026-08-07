@@ -1,5 +1,8 @@
 """嘟嘟哒 2.0 Agent Runtime Core —— 核心领域类型包。"""
 
+from .attachment_repo import (
+    AttachmentRef, AttachmentRecord, AttachmentRepository,
+)
 from .envelope import (
     Platform, MessageKind, AttachmentKind, Attachment,
     Actor, ConversationRef, MessageEnvelope, PreprocessedEnvelope,
@@ -50,6 +53,8 @@ from .persona.expressions import ExpressionLibrary
 from .persona.persona_renderer import PersonaRenderer
 
 __all__ = [
+    # attachment repo
+    "AttachmentRef", "AttachmentRecord", "AttachmentRepository",
     # envelope
     "Platform", "MessageKind", "AttachmentKind", "Attachment",
     "Actor", "ConversationRef", "MessageEnvelope", "PreprocessedEnvelope",
