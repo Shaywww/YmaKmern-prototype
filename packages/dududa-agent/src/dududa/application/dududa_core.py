@@ -561,7 +561,14 @@ class DududaCore:
                           "max_tokens": max_tokens, "temperature": temperature},
                 )
                 r.raise_for_status()
-                reply = r.json()["choices"][0]["message"]["content"]
+                try:
+                    reply = r.json()["choices"][0]["message"]["content"]
+                except Exception:
+                    logger.error(
+                        "Fallback non-JSON response from %s: %.150s",
+                        self._cfg.get("FALLBACK_BASE", ""),
+                        (r.text or "")[:150])
+                    raise
             if not skip_render:
                 reply = self._render_response(reply or "", self._persona_tone())
             return reply or ""

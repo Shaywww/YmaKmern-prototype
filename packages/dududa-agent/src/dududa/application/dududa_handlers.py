@@ -322,6 +322,7 @@ def _strip_tool_leak(text: str) -> str:
     """
     if not text:
         return text
+    _changed = False
     m = re.search(
         r"(?:mcp\.[a-zA-Z_0-9]+\s*(?:[=:]\s*)?[\[{]"
         r"|mcp\.[a-zA-Z_0-9]+\s*[=:]\s*\{"
@@ -330,6 +331,22 @@ def _strip_tool_leak(text: str) -> str:
         , text)
     if m:
         text = text[:m.start()]
+        _changed = True
+    # 裸工具名提及（不带数据，如「参考：**mcp.web_search**」）：整行剔除或仅删标记
+    _before = text
+    text = re.sub(
+        r"^[ \t]*[*_～~]*[ \t]*mcp\.[a-zA-Z_0-9]+[ \t]*[*_～~]*[ \t]*$",
+        "", text, flags=re.M)
+    text = re.sub(r"\*+mcp\.[a-zA-Z_0-9]+\*+", "", text)
+    text = re.sub(r"mcp\.[a-zA-Z_0-9]+", "", text)
+    if text != _before:
+        _changed = True
+    if _changed:
+        text = re.sub(r"\*{2,}", "", text)
+        # 悬空引子行（如「参考：**mcp.web_search**」剔除后剩「参考：」）整行删除
+        text = re.sub(
+            r"^[ \t]*(?:参考|来源|出处|数据|结果)[：:]\s*$",
+            "", text, flags=re.M)
         # 去掉悬空引子（LLM 常写「来源：mcp.xxx=[{...」或「（来源：」后接原始数据再被截断）
         text = re.sub(
             r"[（(]\s*来源\s*[:：]?\s*(?:mcp\.[a-zA-Z_0-9]+\s*[=:]?\s*)?$",

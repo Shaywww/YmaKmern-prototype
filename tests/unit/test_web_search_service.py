@@ -143,7 +143,7 @@ class TestLeakCleanup:
     def test_bare_raw_dict(self):
         out = self._strip("参考：[{'title': 'x', 'link': 'y'}] 没了")
         assert "{'title'" not in out
-        assert out.strip() == "参考"
+        assert out == ""
 
     def test_dangling_source_intro_removed(self):
         out = self._strip(
@@ -182,7 +182,7 @@ class TestLeakCleanup:
             "结果：mcp.web_search:{'title': 'x', 'link': 'y'}")
         assert "mcp.web_search" not in out
         assert "{" not in out
-        assert out == "结果"
+        assert out == ""
 
     def test_direct_bracket_after_tool_name(self):
         out = self._strip(
@@ -190,6 +190,24 @@ class TestLeakCleanup:
         assert "mcp.web_search" not in out
         assert "{" not in out
         assert out == "给你看"
+
+    def test_bare_tool_name_line(self):
+        out = self._strip(
+            "诶呀，短路了呢～\n参考：**mcp.web_search**")
+        assert "mcp.web_search" not in out
+        assert "**" not in out
+        assert out == "诶呀，短路了呢"
+
+    def test_inline_bare_tool_name(self):
+        out = self._strip("这是mcp.web_search查到的结果哦")
+        assert "mcp.web_search" not in out
+        assert out == "这是查到的结果哦"
+
+    def test_bare_tool_name_with_source_intro(self):
+        out = self._strip("好哦～ 来源：mcp.web_search")
+        assert "mcp.web_search" not in out
+        assert "来源" not in out
+        assert out == "好哦"
 
     def test_normal_reply_untouched(self):
         text = "嘿嘿，USTC就是中国科学技术大学哦～在安徽合肥，1958年创办的！"
