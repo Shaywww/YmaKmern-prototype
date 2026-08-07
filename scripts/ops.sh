@@ -137,9 +137,12 @@ cmd_cp() {
     local action="${1:-status}"
     case "$action" in
         status)
-            local tok
-            tok=$(systemctl show "$SERVICE" -p Environment 2>/dev/null | grep -o 'DUDUDA_CP_TOKEN=[^ ]*' || true)
-            echo "cp token configured: $([ -n "$tok" ] && echo yes || echo no)"
+            # token 在 dududa-cp 的 EnvironmentFile（/root/data/cp.env），不打印明文
+            if [ -f /root/data/cp.env ] && grep -qE '^DUDUDA_CP_TOKEN=.+' /root/data/cp.env 2>/dev/null; then
+                echo "cp token configured: yes"
+            else
+                echo "cp token configured: no"
+            fi
             if command -v ss >/dev/null 2>&1; then
                 ss -ltn 2>/dev/null | grep -q ':8000 '                     && echo "cp listener: 127.0.0.1:8000 (listening)"                     || echo "cp listener: not listening"
             fi
