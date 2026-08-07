@@ -387,12 +387,18 @@ class DududaCore:
         topic_kw = {"课程": "course", "考试": "exam", "作业": "homework", "天气": "weather",
                     "文件": "file", "图片": "image", "成绩": "grade", "食堂": "canteen", "图书馆": "library",
                     "几点": "time", "时间": "time", "几号": "time", "星期几": "time",
-                    "日期": "time", "什么时候了": "time", "现在是": "time", "现在几": "time"}
+                    "日期": "time", "什么时候了": "time", "现在是": "time", "现在几": "time",
+                    "通知": "notice", "公告": "notice", "校历": "calendar", "放假": "calendar",
+                    "节假日": "calendar", "学期": "calendar", "活动": "activity", "讲座": "activity",
+                    "竞赛": "activity", "社团": "activity", "第二课堂": "activity",
+                    "培养方案": "training", "毕业要求": "training", "选课": "training",
+                    "学分": "training", "绩点": "grade", "分数": "grade"}
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
         intents = list(topics) if topics else ["chitchat"]
-        needs_tools = any(t in ("course", "exam", "grade", "weather", "time") for t in topics)
+        needs_tools = any(t in ("course", "exam", "grade", "weather", "time",
+                                      "notice", "activity", "calendar", "training") for t in topics)
         has_command = any(a.act_type == "command" for a in acts)
         # 联网搜索：显式「搜/百度」命令也触发工具链（web_search）
         if has_command and any(k in combined for k in

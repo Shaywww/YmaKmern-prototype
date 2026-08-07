@@ -76,6 +76,19 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
         COMPLEX_PATTERNS["program_check"],
     )
 
+    planner.register_pattern(
+        ("成绩", "分数", "绩点"),
+        {"name": "grade_lookup", "goal": "Get student grades",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.academic_affairs",
+                     "arguments": {"action": "get_grade"}, "purpose": "Get grades"}]},
+    )
+    planner.register_pattern(
+        ("放假", "校历", "节假日", "什么时候放"),
+        {"name": "holiday_lookup", "goal": "Get academic calendar holidays",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.academic_calendar",
+                     "arguments": {"action": "get_holidays"}, "purpose": "Get holidays"}]},
+    )
+
     # 日期/时间（文档 2.5.x 时钟能力）：注册在最后，考试/课表等模式优先
     planner.register_pattern(
         ("几点", "时间", "几号", "星期几", "日期", "什么时候了", "现在是", "现在几"),
