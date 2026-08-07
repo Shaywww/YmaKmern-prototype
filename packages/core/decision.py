@@ -12,6 +12,17 @@ from typing import Optional
 from .state import SocialAction
 
 
+def _policy_rate(policy: Any, field_name: str, default: float) -> float:
+    """安全读取策略数值（兼容无 policy 的旧 context 桩）。"""
+    try:
+        value = getattr(policy, field_name, None)
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class DocumentAction(str, Enum):
     """文档 2.5.4 六动作（对齐契约命名，增量兼容 SocialAction）。"""
     IGNORE = "ignore"
@@ -38,6 +49,8 @@ class DecisionReason(str, Enum):
     COOLDOWN_ACTIVE = "cooldown_active"       # 冷却中
     NOT_IN_ALLOWLIST = "not_in_allowlist"     # 不在目标群/用户列表
     PERMISSION_DENIED = "permission_denied"   # 权限不足
+    GROUP_MODE_OFF = "group_mode_off"         # 群策略 mode=off（群内沉默）
+    GROUP_MODE_SILENT = "group_mode_silent"   # 群策略 mode=silent（只回 @/命令/回复链）
     SAFETY_BLOCK = "safety_block"             # 安全阻止
     NO_TOOL_RESULT = "no_tool_result"         # 工具无结果
 
@@ -115,6 +128,15 @@ class SocialDecisionEngine:
         import time
         now = now or time.time()
         reasons: list[DecisionReason] = []
+        policy = getattr(context, "policy", None) if context is not None else None
+        mode = getattr(policy, "mode", "normal") or "normal"
+
+        # 0. 群策略 mode=off：该群完全沉默（框架命令不受影响，文档 2.5.2/2.5.4）
+        if mode == "off":
+            return SocialDecision(
+                action=SocialAction.IGNORE,
+                reason_codes=(DecisionReason.GROUP_MODE_OFF,),
+            )
 
         # 1. 显式命令（最高优先级）
         if perception and perception.is_explicit_command:
@@ -142,6 +164,13 @@ class SocialDecisionEngine:
                 action=SocialAction.DIRECT_REPLY,
                 reason_codes=(DecisionReason.REPLY_TO_BOT,),
                 confidence=0.9,
+            )
+
+        # 3.5 群策略 mode=silent：只回 @/命令/回复链，其余不参与
+        if mode == "silent":
+            return SocialDecision(
+                action=SocialAction.IGNORE,
+                reason_codes=(DecisionReason.GROUP_MODE_SILENT,),
             )
 
         # 4. 安全检查（最高阻塞优先级）
@@ -195,15 +224,37 @@ class SocialDecisionEngine:
                     reason_codes=(DecisionReason.COOLDOWN_ACTIVE,),
                 )
 
-        # 9. 概率参与
+        # 9. 概率参与（群策略 reply_rate / meme_rate 生效，文档 2.5.2/2.5.4）
         import random
-        if random.random() < self._reply_probability:
+        reply_rate = _policy_rate(policy, "reply_rate", 1.0)
+        meme_rate = _policy_rate(policy, "meme_rate", 1.0)
+        rate = self._reply_probability * max(0.0, reply_rate)
+        if rate <= 0.0:
             return SocialDecision(
-                action=SocialAction.DIRECT_REPLY if perception and perception.is_question()
-                else SocialAction.REACT,
+                action=SocialAction.IGNORE,
+                reason_codes=(DecisionReason.LOW_RELEVANCE,),
+            )
+        if random.random() >= rate:
+            return SocialDecision(
+                action=SocialAction.IGNORE,
+                reason_codes=(DecisionReason.LOW_RELEVANCE,),
+            )
+        if perception and perception.is_question():
+            return SocialDecision(
+                action=SocialAction.DIRECT_REPLY,
                 reason_codes=(DecisionReason.HIGH_RELEVANCE,),
                 confidence=0.5,
             )
+        if meme_rate <= 0.0 or random.random() >= meme_rate:
+            return SocialDecision(
+                action=SocialAction.IGNORE,
+                reason_codes=(DecisionReason.LOW_RELEVANCE,),
+            )
+        return SocialDecision(
+            action=SocialAction.REACT,
+            reason_codes=(DecisionReason.HIGH_RELEVANCE,),
+            confidence=0.5,
+        )
 
         # 10. 默认不参与
         return SocialDecision(

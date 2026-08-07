@@ -219,6 +219,7 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
                     budget=RuntimeBudget(max_tool_steps=4, max_tool_retries=2,
                                           deadline_seconds=40),
                     perception=perception,
+                    policy=_group_policy_view(plugin, event),
                     event=event,
                     run_id=run_id or None,
                     trace_id=trace_id or None,
@@ -264,6 +265,18 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
     except Exception as e:
         logger.exception("Text error: %s", e)
         return "诶呀，短路了一下..."
+
+
+
+def _group_policy_view(plugin, event):
+    """生产插件投影当前群 PolicyView（未装配/异常返回 None）。"""
+    fn = getattr(plugin, "_group_policy_view", None)
+    if fn is None:
+        return None
+    try:
+        return fn(event)
+    except Exception:
+        return None
 
 
 def _dedupe_message(plugin, event, msg_id) -> bool:
@@ -408,7 +421,8 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
     state = state.transition(RuntimePhase.PERCEIVED, perception=perception)
     try:
         envelope = plugin.input_adapter.to_envelope(event)
-        ctx_snapshot = plugin.context_builder.build(envelope)
+        ctx_snapshot = plugin.context_builder.build(
+            envelope, policy=_group_policy_view(plugin, event))
         state = state.transition(RuntimePhase.CONTEXT_BUILT, context_snapshot=ctx_snapshot)
     except Exception:
         pass

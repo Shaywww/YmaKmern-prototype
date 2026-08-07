@@ -9,6 +9,7 @@ import logging
 
 from packages.safeguards.security import AuthorizationDecision
 from packages.core.renderer import OCRenderer
+from packages.core.group_policy import GROUP_MODES
 
 from packages.application.dududa_log import get_logger as _get_logger
 logger = _get_logger("dududa20")
@@ -135,3 +136,89 @@ async def cmd_forget_impl(plugin, event) -> str:
     except Exception as e:
         logger.warning("Forget: %s", e)
         return "清除失败"
+
+
+# ---- 群策略（文档 2.5.2 / 2.5.4）：mode / reply_rate / meme_rate ----
+
+def _group_store(plugin):
+    store = getattr(plugin, "group_policy", None)
+    if store is None:
+        raise RuntimeError("群策略存储未装配（group_policy）")
+    return store
+
+
+async def cmd_group_impl(plugin, event, target=None) -> str:
+    """查看群策略（默认当前群）。"""
+    gid = (target or "").strip()
+    if not gid:
+        try:
+            gid = str(getattr(event.message_obj, "group", None) or "")
+        except Exception:
+            gid = ""
+    if not gid:
+        return "用法: dududa_group [群号]"
+    policy = _group_store(plugin).get(gid)
+    if policy is None:
+        return f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1）"
+    return (f"群 {gid}: mode={policy.mode} reply_rate={policy.reply_rate} "
+            f"meme_rate={policy.meme_rate}")
+
+
+async def cmd_group_mode_impl(plugin, event, group_id=None, mode=None) -> str:
+    """设置群模式：normal（默认）/ silent（只回@和命令）/ off（沉默）。"""
+    gid = (group_id or "").strip()
+    mode = (mode or "").strip().lower()
+    if not gid or not mode:
+        return "用法: dududa_mode <群号> <normal|silent|off>"
+    if mode not in GROUP_MODES:
+        return "mode 无效（应为 normal/silent/off）"
+    res, conf = plugin._authorize_manage(
+        event, resource="group_policy", payload={"mode": mode, "group": gid})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    policy = _group_store(plugin).set(gid, mode=mode)
+    return (f"群 {gid} mode 已设置: {policy.mode} "
+            f"(reply_rate={policy.reply_rate} meme_rate={policy.meme_rate})")
+
+
+def _parse_rate(value) -> float:
+    v = float(value)
+    if not (0.0 <= v <= 1.0):
+        raise ValueError
+    return v
+
+
+async def cmd_group_reply_rate_impl(plugin, event, group_id=None, rate=None) -> str:
+    """设置被动参与概率 0~1（未 @ 时按此概率回应群消息）。"""
+    gid = (group_id or "").strip()
+    if not gid or rate is None:
+        return "用法: dududa_reply_rate <群号> <0~1>"
+    try:
+        parsed = _parse_rate(rate)
+    except (TypeError, ValueError):
+        return "reply_rate 无效（应为 0~1 的数字）"
+    res, conf = plugin._authorize_manage(
+        event, resource="group_policy", payload={"reply_rate": parsed, "group": gid})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    policy = _group_store(plugin).set(gid, reply_rate=parsed)
+    return (f"群 {gid} reply_rate 已设置: {policy.reply_rate} "
+            f"(mode={policy.mode} meme_rate={policy.meme_rate})")
+
+
+async def cmd_group_meme_rate_impl(plugin, event, group_id=None, rate=None) -> str:
+    """设置表情回复比例 0~1（问候/轻松消息走 REACT 的概率，未命中回文本）。"""
+    gid = (group_id or "").strip()
+    if not gid or rate is None:
+        return "用法: dududa_meme_rate <群号> <0~1>"
+    try:
+        parsed = _parse_rate(rate)
+    except (TypeError, ValueError):
+        return "meme_rate 无效（应为 0~1 的数字）"
+    res, conf = plugin._authorize_manage(
+        event, resource="group_policy", payload={"meme_rate": parsed, "group": gid})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    policy = _group_store(plugin).set(gid, meme_rate=parsed)
+    return (f"群 {gid} meme_rate 已设置: {policy.meme_rate} "
+            f"(mode={policy.mode} reply_rate={policy.reply_rate})")

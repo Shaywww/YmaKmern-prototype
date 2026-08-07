@@ -10,6 +10,7 @@ import os
 import re
 import json as _json
 import logging
+import random
 import time
 import httpx
 
@@ -73,7 +74,7 @@ class DududaCore:
     def __init__(self, *, memory, personas, renderer, oc_renderer,
                  permission_engine, confirmations, cap_registry,
                  context_builder, input_adapter, llm_provider, config,
-                 model_router=None):
+                 model_router=None, group_policy=None):
         self._memory = memory
         self._personas = personas
         self._renderer = renderer
@@ -85,6 +86,7 @@ class DududaCore:
         self._input_adapter = input_adapter
         self._llm_provider = llm_provider
         self._model_router = model_router  # 8 类角色路由（文档 2.5.7），None = 旧路径
+        self._group_policy = group_policy  # 群策略仓库（文档 2.5.2/2.5.4），None = 不启用
         self._cfg = config  # 保持引用：适配层可用动态代理（monkeypatch 兼容）
         self._pending_confirms = {}
         self._react_cooldown: dict = {}  # 群聊问候 10s 冷却（文档 2.5.4）
@@ -264,6 +266,27 @@ class DududaCore:
         except Exception: pass
         return False
 
+    def _group_policy_for(self, event):
+        """当前群策略；未配置返回 None（调用方保持原有行为）。
+
+        支持 GroupPolicyStore 实例或 callable(group_id) -> GroupPolicy|None。
+        """
+        try:
+            gp = self._group_policy
+            if gp is None:
+                return None
+            gid = str(getattr(event.message_obj, "group", None) or "")
+            if not gid:
+                return None
+            if callable(gp):
+                return gp(gid)
+            getter = getattr(gp, "get", None)
+            if getter is None:
+                return None
+            return getter(gid)
+        except Exception:
+            return None
+
     def _social_decision(self, event) -> tuple:
         try:
             return self._social_decision_impl(event)
@@ -280,16 +303,29 @@ class DududaCore:
         is_group = bool(getattr(event.message_obj, "group", None))
         if not is_group:
             return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
+        # 群策略（文档 2.5.2/2.5.4）：mode / reply_rate / meme_rate 落地到回复策略
+        policy = self._group_policy_for(event)
+        if policy is not None and policy.mode == "off":
+            return SocialAction.IGNORE, DecisionReason.GROUP_MODE_OFF.value
         mentioned = bool(getattr(event, "is_at_or_wake_command", True))
         if not mentioned:
+            # 被动参与：normal 模式按 reply_rate 概率；silent/未配置不主动插话
+            if (policy is not None and policy.mode == "normal"
+                    and policy.reply_rate > 0.0
+                    and random.random() < policy.reply_rate):
+                return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
             return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()
         # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）
         if any(kw in clean for kw in ("帮我", "查", "搜", "算", "翻译")):
             return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
         # 纯问候/单表情 -> REACT（同会话 10s 冷却，文档 2.5.4 速率冷却）
+        # meme_rate 控制表情回复比例；未命中回退文本回复（保证 @ 必回）。
         # 短名词（USTC/AI/课程名）不属于问候，走 DIRECT_REPLY 解释含义
         if len(clean) <= 1 or _is_greeting_text(clean):
+            if (policy is not None and policy.meme_rate < 1.0
+                    and random.random() >= policy.meme_rate):
+                return SocialAction.DIRECT_REPLY, DecisionReason.GREETING_ONLY.value
             return self._react_with_cooldown(event)
         # 问句 -> DIRECT_REPLY
         if any(clean.endswith(q) for q in ("?", "？", "吗", "呢", "嘛", "么")):
