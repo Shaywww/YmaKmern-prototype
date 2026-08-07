@@ -37,6 +37,11 @@ async def test_tool_runtime_eval():
 
 
 @pytest.mark.asyncio
+async def test_capability_retrieval_eval():
+    _assert_ok("capability_retrieval", evals.run_capability_retrieval())
+
+
+@pytest.mark.asyncio
 async def test_memory_writegate_eval():
     _assert_ok("memory_writegate", evals.run_memory_writegate())
 

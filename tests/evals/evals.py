@@ -278,6 +278,123 @@ async def run_tool_runtime() -> dict:
         "executed_steps": len(results),
     }
 
+class _NoopProvider:
+    """Eval 用无副作用 Provider（检索只读，不执行）。"""
+
+    async def execute(self, capability, arguments):
+        return None
+
+    def health(self):
+        return True
+
+
+def run_capability_retrieval() -> dict:
+    """Capability Top-K 检索 Eval（文档 2.5.5/2.5.10 Phase 9）。
+
+    指标：
+    - recall_at_k：确定性意图命中下的 Top-K 召回率；
+    - wrong_exposure_rate：越权/禁止副作用/不健康等不应出现的能力泄漏率；
+    - arg_accuracy：ToolPlanValidator 对合法/缺参/未知/超预算计划的判定正确率。
+    """
+    from packages.core.capability import (
+        Capability, CapabilityRegistry, CapabilityQuery, CapabilityRisk,
+        CapabilitySchema, ProviderType, ToolPlanValidator,
+    )
+    from packages.core.state import RuntimeBudget
+    from packages.planner.planner import GeneratedPlan, PlannedStep
+
+    fx = load_fixture("capability_retrieval_cases.json")
+
+    # 1) Recall@K：intent token 进 description，确定性打分
+    recall_scores = []
+    for q in fx["recall_queries"]:
+        reg = CapabilityRegistry()
+        for c in q["capabilities"]:
+            reg.register(
+                Capability(
+                    capability_id=c["id"], name=c.get("name", c["id"]),
+                    description=c["description"], provider=ProviderType.BUILTIN,
+                    risk=CapabilityRisk.READ_ONLY,
+                ),
+                _NoopProvider(),
+            )
+        candidates = reg.retrieve(
+            CapabilityQuery(intent=q["intent"], top_k=q["top_k"]),
+            permissions=(),
+        )
+        retrieved = {c.capability.capability_id for c in candidates}
+        relevant = set(q["relevant"])
+        recall = (len(retrieved & relevant) / len(relevant)) if relevant else 0.0
+        recall_scores.append(recall)
+    recall_at_k = round(sum(recall_scores) / len(recall_scores), 4)
+
+    # 2) 错误能力暴露率：不应出现的能力（越权/副作用/不健康）不得泄漏
+    leaks = total_checks = 0
+    for case in fx["exposure_cases"]:
+        reg = CapabilityRegistry()
+        for c in case["capabilities"]:
+            reg.register(
+                Capability(
+                    capability_id=c["id"], name=c.get("name", c["id"]),
+                    description=c.get("description", c["id"]),
+                    provider=ProviderType.BUILTIN,
+                    risk=CapabilityRisk(c.get("risk", "read_only")),
+                    required_permissions=tuple(c.get("required_permissions", ())),
+                    side_effects=tuple(c.get("side_effects", ())),
+                    health_check=(lambda: False) if c.get("unhealthy") else None,
+                ),
+                _NoopProvider(),
+            )
+        candidates = reg.retrieve(
+            CapabilityQuery(
+                intent=case.get("intent", ""),
+                max_risk=CapabilityRisk(case.get("max_risk", "side_effect")),
+                forbidden_side_effects=tuple(case.get("forbidden_side_effects", ())),
+                top_k=case.get("top_k", 8),
+            ),
+            permissions=tuple(case.get("permissions", ())),
+        )
+        retrieved = {c.capability.capability_id for c in candidates}
+        for bad in case["must_not_expose"]:
+            total_checks += 1
+            if bad in retrieved:
+                leaks += 1
+    wrong_exposure_rate = round(leaks / total_checks, 4) if total_checks else 0.0
+
+    # 3) 参数正确率：ToolPlanValidator 判定正确率
+    reg = CapabilityRegistry()
+    schema = CapabilitySchema(input_schema={"required": ["action"]})
+    reg.register(
+        Capability(
+            capability_id="mcp.course_schedule", name="课表",
+            description="查询课程表", provider=ProviderType.MCP,
+            risk=CapabilityRisk.READ_ONLY, schema=schema,
+        ),
+        _NoopProvider(),
+    )
+    validator = ToolPlanValidator(reg)
+    correct = total = 0
+    for case in fx["arg_cases"]:
+        budget = RuntimeBudget(max_tool_steps=case.get("max_steps", 8))
+        steps = tuple(
+            PlannedStep(f"s{i}", case["capability"],
+                        dict(case.get("args", {})), "p")
+            for i in range(case.get("plan_steps", 1)))
+        plan = GeneratedPlan(goal=case.get("name", "t"), steps=steps)
+        valid, _ = validator.validate_plan(plan, budget)
+        total += 1
+        correct += int(valid == case["expect_valid"])
+    arg_accuracy = round(correct / total, 4) if total else 0.0
+
+    return {
+        "version": fx.get("version"),
+        "recall_at_k": recall_at_k,
+        "wrong_exposure_rate": wrong_exposure_rate,
+        "arg_accuracy": arg_accuracy,
+        "recall_queries": len(recall_scores),
+        "exposure_checks": total_checks,
+    }
+
 
 def run_memory_writegate() -> dict:
     from packages.core.memory import (

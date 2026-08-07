@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "recall_queries": [
+    {"name": "course_search", "intent": "课程 课表", "top_k": 8,
+     "capabilities": [
+       {"id": "mcp.course_schedule", "description": "查询课程表 课程信息"},
+       {"id": "mcp.course_search", "description": "按关键词搜索课程"},
+       {"id": "mcp.get_reviews", "description": "查询课程评价"},
+       {"id": "campus_notice", "description": "校园通知公告"},
+       {"id": "mcp.clock", "description": "当前时间"},
+       {"id": "translate.tool", "description": "翻译文本"},
+       {"id": "weather.tool", "description": "天气预报"},
+       {"id": "calc.tool", "description": "计算器"},
+       {"id": "dictionary.tool", "description": "词典查询"},
+       {"id": "reminder.tool", "description": "设置提醒"}
+     ],
+     "relevant": ["mcp.course_schedule", "mcp.course_search"]},
+    {"name": "time_query", "intent": "时间 几点", "top_k": 8,
+     "capabilities": [
+       {"id": "mcp.clock", "description": "返回当前北京时间"},
+       {"id": "campus_notice", "description": "校园通知公告"},
+       {"id": "translate.tool", "description": "翻译文本"},
+       {"id": "weather.tool", "description": "天气预报"},
+       {"id": "calc.tool", "description": "计算器"},
+       {"id": "dictionary.tool", "description": "词典查询"},
+       {"id": "reminder.tool", "description": "设置提醒"},
+       {"id": "file_reader", "description": "解析文档"}
+     ],
+     "relevant": ["mcp.clock"]},
+    {"name": "notice_query", "intent": "通知 公告", "top_k": 8,
+     "capabilities": [
+       {"id": "campus_notice", "description": "校园通知公告 最新消息"},
+       {"id": "mcp.course_schedule", "description": "查询课程表"},
+       {"id": "mcp.clock", "description": "当前时间"},
+       {"id": "translate.tool", "description": "翻译文本"},
+       {"id": "weather.tool", "description": "天气预报"},
+       {"id": "calc.tool", "description": "计算器"},
+       {"id": "dictionary.tool", "description": "词典查询"},
+       {"id": "reminder.tool", "description": "设置提醒"}
+     ],
+     "relevant": ["campus_notice"]}
+  ],
+  "exposure_cases": [
+    {"name": "dangerous_requires_admin", "intent": "删除全部数据",
+     "max_risk": "dangerous", "top_k": 8, "permissions": [],
+     "capabilities": [
+       {"id": "safe.query", "description": "查询数据", "risk": "read_only"},
+       {"id": "danger.delete", "description": "删除数据", "risk": "dangerous",
+        "required_permissions": ["admin"]}
+     ],
+     "must_not_expose": ["danger.delete"]},
+    {"name": "permission_deny", "intent": "修改群配置", "max_risk": "side_effect",
+     "top_k": 8, "permissions": ["user"],
+     "capabilities": [
+       {"id": "group.cfg.set", "description": "修改群配置", "risk": "side_effect",
+        "required_permissions": ["admin"]}
+     ],
+     "must_not_expose": ["group.cfg.set"]},
+    {"name": "forbidden_side_effect", "intent": "随便做点什么",
+     "max_risk": "side_effect", "top_k": 8, "permissions": ["admin"],
+     "forbidden_side_effects": ["delete"],
+     "capabilities": [
+       {"id": "safe.hello", "description": "打招呼", "risk": "read_only"},
+       {"id": "destroy.tool", "description": "删除文件", "risk": "side_effect",
+        "side_effects": ["delete"], "required_permissions": ["admin"]}
+     ],
+     "must_not_expose": ["destroy.tool"]},
+    {"name": "unhealthy_excluded", "intent": "查询数据", "max_risk": "read_only",
+     "top_k": 8, "permissions": [],
+     "capabilities": [
+       {"id": "healthy.tool", "description": "正常查询", "risk": "read_only"},
+       {"id": "broken.tool", "description": "查询数据", "risk": "read_only",
+        "unhealthy": true}
+     ],
+     "must_not_expose": ["broken.tool"]}
+  ],
+  "arg_cases": [
+    {"name": "valid_args", "capability": "mcp.course_schedule",
+     "args": {"action": "search", "keyword": "数据结构"}, "expect_valid": true},
+    {"name": "missing_required", "capability": "mcp.course_schedule",
+     "args": {"keyword": "数据结构"}, "expect_valid": false},
+    {"name": "unknown_capability", "capability": "no.such.tool",
+     "args": {}, "expect_valid": false},
+    {"name": "over_budget", "capability": "mcp.course_schedule",
+     "args": {}, "plan_steps": 10, "max_steps": 4, "expect_valid": false}
+  ]
+}

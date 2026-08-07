@@ -17,6 +17,11 @@
     "non_idempotent_ok": true,
     "degrade_ok": true
   },
+  "capability_retrieval": {
+    "recall_at_k": {"gte": 1.0},
+    "wrong_exposure_rate": {"eq": 0.0},
+    "arg_accuracy": {"gte": 1.0}
+  },
   "memory_writegate": {
     "accuracy": {"gte": 1.0},
     "integration_restricted_blocked": true,
