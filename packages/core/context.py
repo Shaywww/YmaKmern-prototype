@@ -94,10 +94,12 @@ class ContextBuilder:
         memory_repo: Optional[Any] = None,
         capability_registry: Optional[Any] = None,
         profile_store: Optional[Any] = None,
+        style_store: Optional[Any] = None,
     ):
         self._memory_repo = memory_repo
         self._capability_registry = capability_registry
         self._profile_store = profile_store
+        self._style_store = style_store
 
     def build(
         self,
@@ -105,6 +107,7 @@ class ContextBuilder:
         conversation_context: Optional[ConversationContext] = None,
         policy: Optional[PolicyView] = None,
         budget: Optional[RuntimeBudget] = None,
+        persona_id: str = "dududa_default",
     ) -> ContextSnapshot:
         # 权限
         permissions: list[str] = []
@@ -156,6 +159,27 @@ class ContextBuilder:
                     )
             except Exception:
                 pass  # 画像存储异常不阻断推理
+
+        # 用户 style（文档 2.5.8）：四维键具名 selector，投影到 UserPreference.style
+        if self._style_store is not None:
+            try:
+                style = self._style_store.get(
+                    envelope.platform.value, "dududa",
+                    envelope.sender.actor_id,
+                    persona_id or "dududa_default")
+                if style is not None:
+                    style_lines = style.summary_lines()
+                    if style_lines:
+                        base = user_pref
+                        user_pref = UserPreference(
+                            actor_id=envelope.sender.actor_id,
+                            style="\n".join(style_lines),
+                            preferred_name=base.preferred_name if base else None,
+                            remembered_facts=base.remembered_facts if base else (),
+                            preferences=base.preferences if base else (),
+                        )
+            except Exception:
+                pass  # style 存储异常不阻断推理
 
         return ContextSnapshot(
             current_message=envelope,

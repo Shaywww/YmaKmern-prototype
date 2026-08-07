@@ -83,7 +83,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     """
 
     def __init__(self, plugin, decision_engine, capability_registry, memory_repo,
-                 renderer, planner_integration, profile_store=None,
+                 renderer, planner_integration, profile_store=None, style_store=None,
                  idempotency_registry=None, confirmation_store=None):
         super().__init__(
             context_builder=plugin.context_builder,
@@ -93,10 +93,12 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             renderer=renderer,
             planner_integration=planner_integration,
             profile_store=profile_store,
+            style_store=style_store,
             idempotency_registry=idempotency_registry,
             confirmation_store=confirmation_store,
         )
         self._profile_store = profile_store
+        self._style_store = style_store
         self._confirmation_store = confirmation_store
         self._plugin = plugin
         self._pending_event = None
@@ -230,6 +232,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             record_state_perception(
                 self._injected_perception, state, source="rule")
             self._record_profile(state, self._injected_perception)
+            self._record_style(
+                state, self._injected_perception,
+                persona_id=getattr(self._plugin.personas, "active_id",
+                                   "dududa_default"),
+                bot_id=self._prod_bot_id())
             return state.transition(RuntimePhase.PERCEIVED,
                                     perception=self._injected_perception)
         return super()._phase_perceive(state)
@@ -290,6 +297,31 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             lines.append("最近话题: " + "、".join(sess.active_topics[:6]))
         return tuple(lines)
 
+    def _prod_bot_id(self) -> str:
+        """生产 bot 维度：真实 QQ 机器人号（事件缺失时回落 dududa）。"""
+        try:
+            return self._plugin._get_bot_id(self._pending_event) or "dududa"
+        except Exception:
+            return "dududa"
+
+    def _style_lines(self, state) -> tuple:
+        """用户 style 摘要（文档 2.5.8）：具名 selector 读取，注入 LLM 上下文。"""
+        store = getattr(self, "_style_store", None)
+        if store is None:
+            return ()
+        try:
+            env = state.envelope
+            if env is None or env.sender is None:
+                return ()
+            style = store.get(
+                self._platform(state), self._prod_bot_id(),
+                env.sender.actor_id,
+                getattr(self._plugin.personas, "active_id",
+                        "dududa_default"))
+        except Exception:
+            return ()
+        return style.summary_lines() if style else ()
+
     async def _phase_compose_prod(self, state):
         draft_text = await self._compose_prod_text(state)
         draft = DraftResponse(
@@ -337,6 +369,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         profile_lines = self._profile_lines(state)
         if profile_lines:
             mem_prefix = ("\n".join(profile_lines) + "\n") + (mem_prefix or "")
+        style_lines = self._style_lines(state)
+        if style_lines:
+            mem_prefix = ("\n".join(style_lines) + "\n") + (mem_prefix or "")
         try:
             is_group = bool(getattr(getattr(event, "message_obj", None), "group", None))
         except Exception:

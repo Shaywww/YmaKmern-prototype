@@ -242,3 +242,29 @@ async def cmd_group_interrupt_cost_impl(plugin, event, group_id=None, cost=None)
     policy = _group_store(plugin).set(gid, interruption_cost=parsed)
     return (f"群 {gid} interrupt_cost 已设置: {policy.interruption_cost} "
             f"(mode={policy.mode} reply_rate={policy.reply_rate} meme_rate={policy.meme_rate})")
+
+
+async def cmd_style_impl(plugin, event) -> str:
+    """查看当前用户在本 Persona 下的 style 偏好（文档 2.5.8 四维隔离）。"""
+    store = getattr(plugin, "style_store", None)
+    if store is None:
+        return "style 存储未装配（style_store）"
+    try:
+        platform = "qq"
+        bot_id = "dududa"
+        getter = getattr(plugin, "_get_bot_id", None)
+        if getter is not None:
+            try:
+                bot_id = getter(event) or "dududa"
+            except Exception:
+                bot_id = "dududa"
+        user = str(event.get_sender_id())
+        persona = getattr(getattr(plugin, "personas", None), "active_id",
+                          "dududa_default")
+    except Exception:
+        return "无法读取当前会话信息"
+    style = store.get(platform, bot_id, user, persona)
+    if style is None:
+        return ("还没有记录你的风格偏好～告诉我“以后叫我XX”“回复简短点”"
+                "“说话随意点”“多用表情”就能记住哦")
+    return style.display()

@@ -57,6 +57,7 @@ class RuntimeOrchestrator:
         delivery_manager: Optional[DeliveryManager] = None,
         planner_integration=None,
         profile_store: Optional[Any] = None,
+        style_store: Optional[Any] = None,
         idempotency_registry: Optional[MessageIdempotencyRegistry] = None,
         confirmation_store: Optional[Any] = None,
     ):
@@ -69,6 +70,7 @@ class RuntimeOrchestrator:
         self._write_gate = WriteGate(self._memory_repo)
         self._tool_chain = planner_integration
         self._profile_store = profile_store  # SESSION_STATE / USER_PROFILE（文档 2.4.6）
+        self._style_store = style_store  # USER_STYLE 四维隔离（文档 2.5.8）
         self._idempotency_registry = idempotency_registry  # Connector 幂等键判重（文档 2.4.1）
         self._last_state: Optional[RuntimeState] = None
         self._completions: dict[str, CompletionReceipt] = {}
@@ -215,9 +217,11 @@ class RuntimeOrchestrator:
     def _phase_scope(self, state: RuntimeState) -> RuntimeState:
         return state.transition(RuntimePhase.SCOPED)
 
-    def _phase_context(self, state: RuntimeState, policy: Optional[PolicyView] = None) -> RuntimeState:
+    def _phase_context(self, state: RuntimeState, policy: Optional[PolicyView] = None,
+                         persona_id: str = "dududa_default") -> RuntimeState:
         snapshot = self._context_builder.build(
             envelope=state.envelope, policy=policy, budget=state.budget,
+            persona_id=persona_id,
         )
         return state.transition(RuntimePhase.CONTEXT_BUILT, context_snapshot=snapshot, scope=snapshot)
 
@@ -248,6 +252,7 @@ class RuntimeOrchestrator:
         )
         record_state_perception(perception, state, source="rule")
         self._record_profile(state, perception)
+        self._record_style(state, perception)
         return state.transition(RuntimePhase.PERCEIVED, perception=perception)
 
     def _phase_decide(self, state: RuntimeState) -> RuntimeState:
@@ -779,6 +784,39 @@ class RuntimeOrchestrator:
             )
         except Exception as e:
             logger.warning("Profile record failed: %s", e)
+
+    def _record_style(self, state: RuntimeState, perception,
+                      persona_id: str = "dududa_default",
+                      bot_id: str = "dududa") -> None:
+        """用户 style 学习（文档 2.5.8）：与画像同语义，engaged 才写长期偏好。
+
+        四维键 platform+bot+user+persona；保留来源会话与可见性；
+        跨会话读取走 UserStyleStore.get() 具名 selector。
+        """
+        store = self._style_store
+        if store is None:
+            return
+        env = state.envelope
+        if env is None or env.sender is None:
+            return
+        engaged = bool(
+            getattr(env, "mentions", ()) or env.reply_to
+            or bool(getattr(perception, "is_explicit_command", False)))
+        try:
+            kind = getattr(env, "kind", None)
+            kind_value = getattr(kind, "value", "") or ""
+            store.record_message(
+                platform=self._platform(state),
+                bot_id=bot_id,
+                conversation_id=self._conversation_id(state),
+                user_id=self._actor_id(state),
+                persona_id=persona_id,
+                text=getattr(env, "text", "") or "",
+                engaged=engaged,
+                visibility="private" if kind_value == "private" else "public",
+            )
+        except Exception as e:
+            logger.warning("Style record failed: %s", e)
 
     @staticmethod
     def _result_from_state(state: RuntimeState, outcome: Optional[RunOutcome]) -> RuntimeResult:
