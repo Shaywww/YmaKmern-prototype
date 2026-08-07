@@ -2,52 +2,7 @@
 
 基于文档 https://docs.mmdustc.top/dududa107/ 开发的 2.0 独立原型：QQ 机器人（AstrBot 插件）+ Web 控制台 + 运维工具链。
 
-## 一键安装（不需要装 Python）
-
-双击 `setup.bat`，全自动：下载 Python → 安装依赖 → 跑测试验证。
-
-## 手动安装
-
-```bash
-pip install -r requirements.txt
-```
-
-## 运行 Web 控制台
-
-本地调试（仅本机可访问）：
-
-```bash
-# 从仓库根目录运行
-export PYTHONPATH=packages/dududa-agent/src:$PYTHONPATH   # Windows: set PYTHONPATH=packages\dududa-agent\src
-python -c "from dududa.control_plane.app import run_server; run_server()"
-# 浏览器打开 http://127.0.0.1:8000
-```
-
-生产环境以 systemd 服务运行（`deploy/control_plane/install_cp.sh` 安装）：
-
-```bash
-bash ops/ops.sh cp status     # 查看状态 / token 配置
-bash ops/ops.sh cp restart    # 重启
-```
-
-- 服务监听 `0.0.0.0:8000`，外部访问地址：`http://<服务器IP>:8000/`（防火墙仅放行受信来源：回环 / 私网 / 运维公网 IP）
-- 控制台需要 token 认证（`DUDUDA_CP_TOKEN`，首次安装时生成，存放在 `/root/data/cp.env`），未带 token 返回 401
-
-## 对接 QQ
-
-生产环境以 AstrBot 插件运行：将 `packages/dududa-agent/src/dududa/adapters/astrbot/plugin.py` 部署为 AstrBot 插件（生产装配参考 `/root/data/plugins/dududa20/main.py`），需额外安装 AstrBot：
-
-```bash
-pip install astrbot
-```
-
-## 运行测试
-
-```bash
-python -m pytest tests/ -q
-```
-
-当前 1086 个测试全绿（unit / contracts / integration / evals 分层；smoke 为真实网络层，默认跳过）。
+> 本仓库为指定用户定制，安装与部署方式不对外公开，按内部约定执行。
 
 ## 项目结构
 
