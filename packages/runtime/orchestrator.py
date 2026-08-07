@@ -71,6 +71,7 @@ class RuntimeOrchestrator:
         self._idempotency_registry = idempotency_registry  # Connector 幂等键判重（文档 2.4.1）
         self._last_state: Optional[RuntimeState] = None
         self._completions: dict[str, CompletionReceipt] = {}
+        self._pending_cancellation: Optional[Any] = None  # run(…) 传入的外部取消信号（文档 2.5.5）
 
     async def run(
         self,
@@ -79,6 +80,7 @@ class RuntimeOrchestrator:
         policy: Optional[PolicyView] = None,
         run_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        cancellation: Optional[Any] = None,
     ) -> RuntimeResult:
         budget = budget or RuntimeBudget()
         # 兼容：允许直接传入 PreprocessedEnvelope（Connector 预处理产物）
@@ -98,6 +100,16 @@ class RuntimeOrchestrator:
             )
             self._last_state = state
             return self._result_from_state(state, RunOutcome.IGNORED)
+
+        self._pending_cancellation = cancellation
+        if cancellation is not None and cancellation.is_set():
+            # 入口即取消：不进入任何阶段（文档 2.4.3：deadline/cancellation 到达后不再开始新调用）
+            state = state.transition(
+                RuntimePhase.CANCELLED, outcome=RunOutcome.CANCELLED,
+                decision_reason="cancelled_at_entry",
+            )
+            self._last_state = state
+            return self._result_from_state(state, RunOutcome.CANCELLED)
 
         try:
             state = self._phase_validate(state)
@@ -125,9 +137,9 @@ class RuntimeOrchestrator:
 
             if self._should_use_tools(state):
                 state = await self._phase_tool_chain(state)
-                if state.outcome == RunOutcome.FAILED:
+                if state.outcome in (RunOutcome.FAILED, RunOutcome.CANCELLED):
                     self._last_state = state
-                    return self._result_from_state(state, RunOutcome.FAILED)
+                    return self._result_from_state(state, state.outcome or RunOutcome.FAILED)
             else:
                 state = state.transition(RuntimePhase.COMPOSED)
 
@@ -316,6 +328,12 @@ class RuntimeOrchestrator:
         # 3) 执行（每步重新授权 + deadline/预算检查）
         observations = await self._execute(state, plan, max_steps, permissions)
 
+        # 3.5) 取消：迟到结果不推进状态（文档 2.4.12 / 2.5.5）
+        if any(getattr(o, "cancelled", False) for o in observations):
+            return state.transition(RuntimePhase.TOOLS_EXECUTED,
+                                    tool_plan=plan, tool_observations=tuple(observations),
+                                    outcome=RunOutcome.CANCELLED)
+
         # 4) 结果校验 -> 动作归一化
         verdict = validator.validate_results(tuple(observations))
         state = state.transition(RuntimePhase.TOOLS_EXECUTED,
@@ -409,6 +427,7 @@ class RuntimeOrchestrator:
                 permissions=permissions,
                 actor=self._actor_id(state),
                 conversation_scope=self._conversation_id(state),
+                cancellation=self._pending_cancellation,
                 run_id=state.run_id,
                 trace_id=state.trace_id,
             )
@@ -426,36 +445,48 @@ class RuntimeOrchestrator:
                     source=sr.source or "provider",
                     latency_ms=sr.latency_ms,
                     cached=sr.cached,
+                    cancelled=sr.cancelled,
                 ))
             return observations
         return await self._execute_direct(state, plan, max_steps)
 
     async def _execute_direct(self, state: RuntimeState, plan, max_steps):
-        """无 Planner/Executor 集成时的直连退化路径（仍做预算与去重）。"""
+        """无 Planner/Executor 集成时的直连退化路径。
+
+        使用临时 ToolExecutor，保证与正式路径一致的
+        每步重新授权 / 重试 / 去重 / 取消语义（文档 2.4.12）。
+        """
+        from ..planner.executor import ToolExecutor, ExecutionContext
+        budget = state.budget
+        permissions = self._permissions_of(state)
+        executor = ToolExecutor(self._capability_registry)
+        ctx = ExecutionContext(
+            max_steps=max_steps,
+            max_retries_per_step=budget.max_tool_retries,
+            deadline_seconds=budget.deadline_seconds,
+            permissions=permissions,
+            actor=self._actor_id(state),
+            conversation_scope=self._conversation_id(state),
+            cancellation=self._pending_cancellation,
+            run_id=state.run_id,
+            trace_id=state.trace_id,
+        )
+        step_results = await executor.execute_plan(plan, ctx)
+        by_id = {s.step_id: s for s in plan.steps}
         observations: list[ToolObservation] = []
-        for step in plan.steps[:max_steps]:
-            if state.budget.is_expired():
-                break
-            cap = self._capability_registry.get(step.capability_id)
-            provider = self._capability_registry.get_provider(step.capability_id) if cap else None
-            if cap is None or provider is None:
-                observations.append(ToolObservation(
-                    step_id=step.step_id, capability_id=step.capability_id,
-                    success=False, error="Capability unavailable"))
-                continue
-            try:
-                if self._capability_registry.record_call(
-                    step.capability_id, state.run_id, window_seconds=60.0
-                ):
-                    observations.append(ToolObservation(
-                        step_id=step.step_id, capability_id=step.capability_id,
-                        success=False, error="Duplicate call rejected"))
-                    continue
-                observations.append(await provider.execute(cap, dict(step.arguments or {})))
-            except Exception as e:
-                observations.append(ToolObservation(
-                    step_id=step.step_id, capability_id=step.capability_id,
-                    success=False, error=str(e)))
+        for sr in step_results:
+            step = by_id.get(sr.step_id)
+            observations.append(ToolObservation(
+                step_id=sr.step_id,
+                capability_id=step.capability_id if step else "",
+                success=sr.success,
+                data=sr.data if sr.success else None,
+                error=sr.error,
+                source=sr.source or "provider",
+                latency_ms=sr.latency_ms,
+                cached=sr.cached,
+                cancelled=sr.cancelled,
+            ))
         return observations
 
     def _should_use_tools(self, state: RuntimeState) -> bool:

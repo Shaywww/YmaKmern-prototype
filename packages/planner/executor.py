@@ -30,19 +30,38 @@ class ExecutionContext:
     # ---- Trace 关联 ID（文档 2.5.10）----
     run_id: str = ""
     trace_id: str = ""
+    # ---- Doc 2.4.12 / 2.4.3: cancellation（取消后不得开始下一步）----
+    cancellation: Optional[Any] = None   # asyncio.Event；外部取消信号
+    cancel_requested: bool = False       # 内部主动取消
+
+    def request_cancel(self) -> None:
+        """请求取消：不再开始新调用，迟到的结果不推进状态。"""
+        self.cancel_requested = True
 
     @property
     def is_expired(self) -> bool:
         return (_time.time() - self.created_at) > self.deadline_seconds
 
     @property
+    def cancelled(self) -> bool:
+        """deadline 到期或收到取消信号即视为已取消。"""
+        if self.cancel_requested:
+            return True
+        ev = self.cancellation
+        if ev is not None:
+            is_set = getattr(ev, "is_set", None)
+            if callable(is_set) and is_set():
+                return True
+        return self.is_expired
+
+    @property
     def can_execute_step(self) -> bool:
-        return self.step_count < self.max_steps and not self.is_expired
+        return self.step_count < self.max_steps and not self.cancelled
 
     @property
     def can_retry(self) -> bool:
         # max_retries_per_step 表示允许的重试次数（不含首次尝试）
-        return self.retry_count <= self.max_retries_per_step and not self.is_expired
+        return self.retry_count <= self.max_retries_per_step and not self.cancelled
 
 @dataclass
 class StepResult:
@@ -55,6 +74,7 @@ class StepResult:
     cached: bool = False
     retries_used: int = 0
     completed: bool = False
+    cancelled: bool = False
 
 class ToolExecutor:
     """Multi-step tool executor with retry, timeout, and budget tracking."""
@@ -81,7 +101,17 @@ class ToolExecutor:
             if remaining <= 0:
                 break
             batch = batch[:remaining]  # 硬上限按步生效，不因并行 batch 越界
+            if ctx.cancelled:
+                break  # 取消后不得开始下一步
             batch_results = await asyncio.gather(*[self._execute_step(s, ctx) for s in batch])
+            if ctx.cancelled:
+                # 取消在批内到达：迟到的结果不能继续推进状态，整批标记为已取消
+                for r in batch_results:
+                    if not r.cancelled:
+                        r.cancelled = True
+                        r.success = False
+                        r.error = "Cancelled"
+                        r.completed = False
             results.extend(batch_results)
             for r in batch_results:
                 self._step_results[r.step_id] = r
@@ -103,6 +133,12 @@ class ToolExecutor:
             return result
 
         while retries <= ctx.max_retries_per_step:
+            if ctx.cancelled:
+                return _done(StepResult(
+                    step_id=step.step_id, success=False, error="Cancelled",
+                    latency_ms=(_time.time()-start)*1000,
+                    retries_used=retries, completed=False, cancelled=True,
+                ))
             ctx.step_count += 1
             trace_recorder.record(
                 event="tool_call", run_id=ctx.run_id, trace_id=ctx.trace_id,
@@ -134,7 +170,13 @@ class ToolExecutor:
                         latency_ms=(_time.time()-start)*1000,
                         retries_used=retries, completed=True,
                     ))
-                if not ctx.can_retry or ctx.is_expired:
+                if ctx.cancelled:
+                    return _done(StepResult(
+                        step_id=step.step_id, success=False, error="Cancelled",
+                        latency_ms=(_time.time()-start)*1000,
+                        retries_used=retries, completed=False, cancelled=True,
+                    ))
+                if not ctx.can_retry:
                     return _done(StepResult(
                         step_id=step.step_id, success=False, error=str(e),
                         latency_ms=(_time.time()-start)*1000,

@@ -111,6 +111,7 @@ class ToolObservation:
     cached: bool = False
     sensitive: bool = False
     truncated: bool = False
+    cancelled: bool = False   # 工具链取消（Doc 2.4.12：迟到结果不推进状态）
 
     @property
     def has_valid_data(self) -> bool:
