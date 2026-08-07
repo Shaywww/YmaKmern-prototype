@@ -59,6 +59,7 @@ def _load_plugin():
     _tmp = tempfile.mkdtemp(prefix="dududa_eval_")
     main.MEMORY_FILE = str(Path(_tmp) / "memory.json")
     main.CONFIRM_FILE = str(Path(_tmp) / "confirmations.json")
+    main.GROUP_POLICY_FILE = str(Path(_tmp) / "group_policy.json")
     try:
         ctx = main.star.Context()
     except TypeError:
@@ -146,6 +147,38 @@ def run_social_decision() -> dict:
         "accuracy": round(passed / total, 4) if total else 0.0,
         "distinct_actions": len(actions),
         "actions": sorted(actions),
+        "details": details,
+    }
+
+
+def run_social_decision_policy() -> dict:
+    """should-reply 策略 Eval（文档 2.5.4/2.5.9）：打断成本 + 群聊隐私门。"""
+    plugin = _load_plugin()
+    fx = load_fixture("social_decision_policy_cases.json")
+    store = plugin.group_policy
+    total = passed = 0
+    details = []
+    for i, case in enumerate(fx["cases"]):
+        setup = case.get("setup", {})
+        gid = case.get("group", "g1")
+        store.set(gid, mode=setup.get("mode", "normal"),
+                  reply_rate=setup.get("reply_rate", 1.0),
+                  meme_rate=setup.get("meme_rate", 1.0),
+                  interruption_cost=setup.get("interruption_cost", 0.0))
+        ev = _FakeEvent(case["text"], group=gid,
+                        at=case.get("at", True),
+                        session=case.get("session", f"pe{i}"))
+        action, reason = plugin._social_decision(ev)
+        ok = action.value == case["expect"]
+        total += 1
+        passed += int(ok)
+        details.append({"case": case.get("name", case["text"]),
+                        "action": action.value, "reason": reason,
+                        "expected": case["expect"], "passed": ok})
+    return {
+        "version": fx.get("version"),
+        "cases": total, "passed": passed,
+        "accuracy": round(passed / total, 4) if total else 0.0,
         "details": details,
     }
 
@@ -332,6 +365,7 @@ async def run_all() -> dict:
     return {
         "perception": run_perception(),
         "social_decision": run_social_decision(),
+        "social_decision_policy": run_social_decision_policy(),
         "tool_runtime": await run_tool_runtime(),
         "memory_writegate": run_memory_writegate(),
         "oc_render": run_oc_render(),

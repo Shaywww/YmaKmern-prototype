@@ -52,6 +52,7 @@ class _FakeEvent:
 def _plugin(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "MEMORY_FILE", str(tmp_path / "memory.json"))
     monkeypatch.setattr(main, "CONFIRM_FILE", str(tmp_path / "confirmations.json"))
+    monkeypatch.setattr(main, "GROUP_POLICY_FILE", str(tmp_path / "group_policy.json"))
     return main.Main(_make_context())
 
 

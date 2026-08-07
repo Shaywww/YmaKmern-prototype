@@ -161,7 +161,7 @@ async def cmd_group_impl(plugin, event, target=None) -> str:
     if policy is None:
         return f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1）"
     return (f"群 {gid}: mode={policy.mode} reply_rate={policy.reply_rate} "
-            f"meme_rate={policy.meme_rate}")
+            f"meme_rate={policy.meme_rate} interrupt_cost={policy.interruption_cost}")
 
 
 async def cmd_group_mode_impl(plugin, event, group_id=None, mode=None) -> str:
@@ -222,3 +222,23 @@ async def cmd_group_meme_rate_impl(plugin, event, group_id=None, rate=None) -> s
     policy = _group_store(plugin).set(gid, meme_rate=parsed)
     return (f"群 {gid} meme_rate 已设置: {policy.meme_rate} "
             f"(mode={policy.mode} reply_rate={policy.reply_rate})")
+
+
+
+async def cmd_group_interrupt_cost_impl(plugin, event, group_id=None, cost=None) -> str:
+    """设置打断成本 0~1（被动参与概率乘 (1-cost)）。"""
+    gid = (group_id or "").strip()
+    if not gid or cost is None:
+        return "用法: dududa_interrupt_cost <群号> <0~1>"
+    try:
+        parsed = _parse_rate(cost)
+    except (TypeError, ValueError):
+        return "interrupt_cost 无效（应为 0~1 的数字）"
+    res, conf = plugin._authorize_manage(
+        event, resource="group_policy",
+        payload={"interruption_cost": parsed, "group": gid})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    policy = _group_store(plugin).set(gid, interruption_cost=parsed)
+    return (f"群 {gid} interrupt_cost 已设置: {policy.interruption_cost} "
+            f"(mode={policy.mode} reply_rate={policy.reply_rate} meme_rate={policy.meme_rate})")

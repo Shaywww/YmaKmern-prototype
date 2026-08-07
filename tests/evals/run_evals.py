@@ -24,8 +24,8 @@ from tests.evals import evals
 def main() -> int:
     thresholds = evals.load_thresholds()
     versions = {name: evals.load_fixture(f"{name}_cases.json").get("version")
-                for name in ("perception", "social_decision", "tool_runtime",
-                             "memory_writegate", "oc_render")}
+                for name in ("perception", "social_decision", "social_decision_policy",
+                             "tool_runtime", "memory_writegate", "oc_render")}
     print("=" * 64)
     print("Dududa 2.0 Eval（文档 2.5.10 / Phase 9 前半）")
     print("fixture versions:", versions)
@@ -34,6 +34,7 @@ def main() -> int:
     for name, runner in (
         ("perception", evals.run_perception),
         ("social_decision", evals.run_social_decision),
+        ("social_decision_policy", evals.run_social_decision_policy),
         ("tool_runtime", lambda: asyncio.run(evals.run_tool_runtime())),
         ("memory_writegate", evals.run_memory_writegate),
         ("oc_render", evals.run_oc_render),

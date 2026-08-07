@@ -38,6 +38,7 @@ class GroupPolicy:
     mode: str = "normal"
     reply_rate: float = 0.0
     meme_rate: float = 1.0
+    interruption_cost: float = 0.0
     updated_at: float = 0.0
 
     @classmethod
@@ -49,6 +50,7 @@ class GroupPolicy:
             mode=mode,
             reply_rate=_clamp01(raw.get("reply_rate", 0.0)),
             meme_rate=_clamp01(raw.get("meme_rate", 1.0)),
+            interruption_cost=_clamp01(raw.get("interruption_cost", 0.0)),
             updated_at=float(raw.get("updated_at", 0.0) or 0.0),
         )
 
@@ -58,6 +60,7 @@ class GroupPolicy:
             reply_rate=self.reply_rate,
             meme_rate=self.meme_rate,
             mode=self.mode,
+            interruption_cost=self.interruption_cost,
         )
 
 
@@ -107,7 +110,8 @@ class GroupPolicyStore:
 
     def set(self, group_id: str, mode: Optional[str] = None,
             reply_rate: Optional[float] = None,
-            meme_rate: Optional[float] = None) -> GroupPolicy:
+            meme_rate: Optional[float] = None,
+            interruption_cost: Optional[float] = None) -> GroupPolicy:
         gid = str(group_id)
         if mode is not None and mode not in GROUP_MODES:
             raise ValueError("mode 必须是 normal/silent/off 之一")
@@ -119,6 +123,8 @@ class GroupPolicyStore:
                 raw["reply_rate"] = _clamp01(reply_rate)
             if meme_rate is not None:
                 raw["meme_rate"] = _clamp01(meme_rate)
+            if interruption_cost is not None:
+                raw["interruption_cost"] = _clamp01(interruption_cost)
             raw["updated_at"] = time.time()
             self._groups[gid] = raw
             self._save()

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "cases": [
+    {"name": "interrupt_cost=1 blocks passive reply",
+     "setup": {"mode": "normal", "reply_rate": 1.0, "interruption_cost": 1.0},
+     "text": "大家今晚吃什么", "at": false, "expect": "ignore"},
+    {"name": "interrupt_cost=0 keeps passive reply",
+     "setup": {"mode": "normal", "reply_rate": 1.0, "interruption_cost": 0.0},
+     "text": "大家今晚吃什么", "at": false, "expect": "direct_reply"},
+    {"name": "reply_rate=0 blocks passive",
+     "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0},
+     "text": "大家今晚吃什么", "at": false, "expect": "ignore"},
+    {"name": "@ mention unaffected by interrupt_cost",
+     "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 1.0},
+     "text": "@bot 明天考什么？", "at": true, "expect": "direct_reply"},
+    {"name": "greeting react respects meme_rate",
+     "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0, "meme_rate": 1.0},
+     "text": "@bot 你好", "at": true, "session": "pe_greet1", "expect": "react"},
+    {"name": "privacy grades in group",
+     "text": "@bot 我的成绩", "at": true, "expect": "ignore"},
+    {"name": "privacy schedule in group",
+     "text": "@bot 我的课表发我一下", "at": true, "expect": "ignore"},
+    {"name": "privacy location in group",
+     "text": "我的位置在哪", "at": true, "expect": "ignore"},
+    {"name": "privacy ask in private is allowed",
+     "group": null, "text": "我的成绩", "at": true, "expect": "direct_reply"},
+    {"name": "non-sensitive mention still replies",
+     "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0},
+     "text": "@bot 数据结构难吗", "at": true, "expect": "direct_reply"}
+  ]
+}

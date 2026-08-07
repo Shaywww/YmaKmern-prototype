@@ -27,6 +27,11 @@ async def test_social_decision_eval():
 
 
 @pytest.mark.asyncio
+async def test_social_decision_policy_eval():
+    _assert_ok("social_decision_policy", evals.run_social_decision_policy())
+
+
+@pytest.mark.asyncio
 async def test_tool_runtime_eval():
     _assert_ok("tool_runtime", await evals.run_tool_runtime())
 

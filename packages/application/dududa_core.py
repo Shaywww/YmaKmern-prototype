@@ -61,6 +61,18 @@ def persona_to_oc(template):
     )
 
 
+_GROUP_SENSITIVE_ASKS = (
+    "我的成绩", "我成绩", "我的课表", "我课表", "我的位置",
+    "我的健康", "我健康", "私聊发我", "私聊我",
+)
+
+
+def _is_group_sensitive_ask(text: str) -> bool:
+    """群聊隐私门（文档 2.5.9）：课表/成绩/健康/位置/私聊 类请求群聊默认不返回。"""
+    t = (text or "").lower()
+    return any(p in t for p in _GROUP_SENSITIVE_ASKS)
+
+
 class DududaCore:
     """应用用例层：身份、权限、决策、感知、记忆、渲染与模型调用。"""
 
@@ -307,12 +319,17 @@ class DududaCore:
         policy = self._group_policy_for(event)
         if policy is not None and policy.mode == "off":
             return SocialAction.IGNORE, DecisionReason.GROUP_MODE_OFF.value
+        # 群聊隐私门（文档 2.5.9）：课表/成绩/健康/位置/私聊 类请求群聊默认不返回
+        if _is_group_sensitive_ask(combined):
+            return SocialAction.IGNORE, DecisionReason.SENSITIVE_GROUP_REQUEST.value
         mentioned = bool(getattr(event, "is_at_or_wake_command", True))
         if not mentioned:
             # 被动参与：normal 模式按 reply_rate 概率；silent/未配置不主动插话
             if (policy is not None and policy.mode == "normal"
                     and policy.reply_rate > 0.0
-                    and random.random() < policy.reply_rate):
+                    and random.random() < policy.reply_rate
+                    * (1.0 - min(1.0, max(0.0,
+                                          policy.interruption_cost)))):
                 return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
             return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()

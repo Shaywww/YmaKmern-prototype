@@ -8,6 +8,9 @@
     "accuracy": {"gte": 1.0},
     "distinct_actions": {"gte": 4}
   },
+  "social_decision_policy": {
+    "accuracy": {"gte": 1.0}
+  },
   "tool_runtime": {
     "hard_cap_ok": true,
     "retry_ok": true,

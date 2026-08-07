@@ -37,6 +37,7 @@ class PolicyView:
     reply_rate: float = 1.0
     meme_rate: float = 1.0
     mode: str = "normal"
+    interruption_cost: float = 0.0  # 打断成本 0~1：越高越少被动参与（文档 2.5.4）
 
 
 @dataclass(frozen=True)

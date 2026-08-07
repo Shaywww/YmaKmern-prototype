@@ -51,6 +51,7 @@ class DecisionReason(str, Enum):
     PERMISSION_DENIED = "permission_denied"   # 权限不足
     GROUP_MODE_OFF = "group_mode_off"         # 群策略 mode=off（群内沉默）
     GROUP_MODE_SILENT = "group_mode_silent"   # 群策略 mode=silent（只回 @/命令/回复链）
+    SENSITIVE_GROUP_REQUEST = "sensitive_group_request"  # 群聊隐私门：Sensitive 数据群聊默认不返回
     SAFETY_BLOCK = "safety_block"             # 安全阻止
     NO_TOOL_RESULT = "no_tool_result"         # 工具无结果
 
@@ -231,7 +232,10 @@ class SocialDecisionEngine:
         import random
         reply_rate = _policy_rate(policy, "reply_rate", 1.0)
         meme_rate = _policy_rate(policy, "meme_rate", 1.0)
-        rate = self._reply_probability * max(0.0, reply_rate)
+        interrupt_cost = min(1.0, max(0.0,
+                                      _policy_rate(policy, "interruption_cost", 0.0)))
+        rate = (self._reply_probability * max(0.0, reply_rate)
+                * (1.0 - interrupt_cost))
         if rate <= 0.0:
             return SocialDecision(
                 action=SocialAction.IGNORE,
