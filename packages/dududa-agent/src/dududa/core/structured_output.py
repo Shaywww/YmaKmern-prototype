@@ -44,9 +44,12 @@ PERCEPTION_SYSTEM_PROMPT = (
     "你是感知模块，只输出严格 JSON，不要任何其他文字。"
     "字段: confidence(0-1), speech_acts:[{act_type,confidence}], topics:[], "
     "entities:[{name,entity_type,confidence,evidence}], candidate_intents:[], "
-    "suggested_capabilities:[], needs_tools:bool, ambiguities:[]。"
+    "suggested_capabilities:[], needs_tools:bool, ambiguities:[], "
+    "tool_plan:{steps:[{capability_id,arguments}]}。"
     "act_type 只能是 question/statement/command/greeting/complaint/"
     "acknowledgment/farewell/noun_query。"
+    "tool_plan 仅在需要查实时数据/执行操作时给出（不需要时给 {\"steps\":[]}）；"
+    "capability_id 必须从可用工具中选，arguments 键名必须与工具参数一致。"
 )
 
 
@@ -80,6 +83,37 @@ def _parse_raw(raw: Any) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
     return raw
+
+
+def _parse_tool_plan(raw: Any) -> Optional[dict]:
+    """规范化感知信号附带的工具计划（可选字段，fail closed）。
+
+    结构: {"steps":[{"capability_id": str, "arguments": {标量键值}}]}。
+    任何一步结构非法 -> 整体返回 None（不挑字段继续执行）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    steps_raw = raw.get("steps")
+    if not isinstance(steps_raw, list):
+        return None
+    steps = []
+    for sr in steps_raw:
+        if not isinstance(sr, dict):
+            return None
+        cid = sr.get("capability_id")
+        args = sr.get("arguments") or {}
+        if not isinstance(cid, str) or not cid.strip():
+            return None
+        if not isinstance(args, dict):
+            return None
+        clean = {}
+        for k, v in args.items():
+            if not isinstance(k, str) or not k.strip():
+                return None
+            if isinstance(v, (str, int, float, bool)):
+                clean[k.strip()] = v
+        steps.append({"capability_id": cid.strip(), "arguments": clean})
+    return {"steps": steps}
 
 
 class StructuredOutputValidator:
@@ -138,6 +172,11 @@ class StructuredOutputValidator:
         needs_tools = raw.get("needs_tools", False)
         if not isinstance(needs_tools, bool):
             return None
+        tool_plan = raw.get("tool_plan")
+        if tool_plan is not None:
+            tool_plan = _parse_tool_plan(tool_plan)
+            if tool_plan is None:
+                return None  # 附带的工具计划非法 -> 整包丢弃（fail closed）
         return {
             "confidence": confidence,
             "speech_acts": speech_acts,
@@ -147,6 +186,7 @@ class StructuredOutputValidator:
             "suggested_capabilities": caps,
             "ambiguities": ambiguities,
             "needs_tools": needs_tools,
+            "tool_plan": tool_plan,
         }
 
     @staticmethod
@@ -228,6 +268,7 @@ class PerceptionMerger:
                 list(rule.candidate_intents)
                 + signal.get("candidate_intents", []))),
             needs_tools=rule.needs_tools or bool(signal.get("needs_tools", False)),
+            tool_plan=signal.get("tool_plan") or rule.tool_plan,
             suggested_capabilities=tuple(dict.fromkeys(
                 list(rule.suggested_capabilities)
                 + signal.get("suggested_capabilities", []))),

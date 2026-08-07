@@ -286,8 +286,9 @@ def _group_policy_view(plugin, event):
 async def _perceive_with_model(plugin, event):
     """规则感知 + 可选模型信号（文档 2.5.4 Structured Output）。
 
-    模型未装配 / 调用失败 / 输出非法 / 置信度不足 -> 只用规则结果
-    （安全降级：模型失败时减少主动回复，不挑字段继续执行）。
+    快速路径：规则已明确需要工具（关键词命中）或文本过短时跳过模型感知，
+    省一次 LLM 调用。模型未装配 / 调用失败 / 输出非法 / 置信度不足 ->
+    只用规则结果（安全降级：模型失败时减少主动回复，不挑字段继续执行）。
     """
     rule = plugin._perceive(event)
     fn = getattr(plugin, "_perception_signal", None)
@@ -298,7 +299,9 @@ async def _perceive_with_model(plugin, event):
         text = pre.combined_text.strip() if pre and pre.combined_text else ""
         if not text:
             return rule
-        raw = await fn(text)
+        if rule.needs_tools or len(text) <= 2:
+            return rule  # 快速路径：规则关键词/超短文本不调模型感知
+        raw = await fn(text, _capability_ids(plugin))
         if raw is None:
             return rule
         merged, used = merge_perception_with_model(rule, raw)
@@ -311,6 +314,18 @@ async def _perceive_with_model(plugin, event):
     except Exception as e:
         logger.warning("Perception model failed, rule-only: %s", e)
         return rule
+
+
+def _capability_ids(plugin, limit: int = 20) -> tuple:
+    """生产能力清单（供感知提示词选择合法工具 id）；异常返回空元组。"""
+    reg = getattr(plugin, "cap_registry", None)
+    if reg is None:
+        return ()
+    try:
+        cands = reg.filter_candidates(permissions=(), max_count=limit)
+    except Exception:
+        return ()
+    return tuple(c.capability.capability_id for c in cands)
 
 
 def _strip_tool_leak(text: str) -> str:

@@ -22,7 +22,7 @@ from dududa.core.envelope import (
     MessageEnvelope, Actor, Platform, MessageKind, ConversationRef,
 )
 from dududa.core.perception import PerceptionResult
-from dududa.core.state import RuntimeBudget, RuntimeState
+from dududa.core.state import RuntimeBudget, RuntimePhase, RuntimeState
 from dududa.core.memory import InMemoryRepository, MemoryType, MemoryScope
 from dududa.core.delivery import DeliveryReceipt, DeliveryStatus
 from dududa.core.renderer import Persona
@@ -372,6 +372,26 @@ class TestLLMPlanning:
         assert plan is not None and plan.steps
         assert plan.steps[0].capability_id == "mcp.translate"
         assert plan.steps[0].arguments["text"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_perception_tool_plan_preferred(self):
+        """感知信号已带 tool_plan -> 规划直接采用，不调 LLM（省一次调用）。"""
+        orch, plugin = self._orch()
+        plugin.llm_reply = "这不是JSON"  # 若误走 LLM 会返回 None
+        reg = orch._capability_registry
+        cands = reg.filter_candidates(permissions=(), max_count=24)
+        state = RuntimeState(
+            envelope=_make_envelope("明天适合出门吗"),
+            budget=RuntimeBudget(max_tool_steps=4))
+        state = state.transition(
+            RuntimePhase.PERCEIVED,
+            perception=PerceptionResult(tool_plan={
+                "steps": [{"capability_id": "mcp.weather",
+                           "arguments": {"q": "合肥"}}]}))
+        plan = await orch._llm_plan(state, cands, 4, ())
+        assert plan is not None and plan.steps
+        assert plan.steps[0].capability_id == "mcp.weather"
+        assert plan.steps[0].arguments["q"] == "合肥"
 
     @pytest.mark.asyncio
     async def test_rule_miss_then_llm_plan_runs_tool(self):

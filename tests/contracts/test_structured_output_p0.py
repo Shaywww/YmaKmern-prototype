@@ -341,7 +341,7 @@ class TestProdPerceiveWithModel:
 
     @pytest.mark.asyncio
     async def test_valid_model_signal_merged(self, plugin, monkeypatch):
-        async def fake_signal(text):
+        async def fake_signal(text, capabilities=()):
             return {
                 "confidence": 0.8,
                 "speech_acts": [{"act_type": "statement", "confidence": 0.9}],
@@ -359,7 +359,7 @@ class TestProdPerceiveWithModel:
 
     @pytest.mark.asyncio
     async def test_garbage_model_output_degrades(self, plugin, monkeypatch):
-        async def fake_signal(text):
+        async def fake_signal(text, capabilities=()):
             return "not json {{{"
         monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
         event = _FakeEvent("今天过得怎么样", group="g1")
@@ -369,13 +369,76 @@ class TestProdPerceiveWithModel:
 
     @pytest.mark.asyncio
     async def test_signal_fn_exception_degrades(self, plugin, monkeypatch):
-        async def fake_signal(text):
+        async def fake_signal(text, capabilities=()):
             raise RuntimeError("model down")
         monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
         event = _FakeEvent("今天过得怎么样", group="g1")
         rule = plugin._perceive(event)
         merged = await dududa_handlers._perceive_with_model(plugin, event)
         assert merged == rule
+
+    @pytest.mark.asyncio
+    async def test_rule_keyword_skips_model_signal(self, plugin, monkeypatch):
+        called = []
+
+        async def fake_signal(text, capabilities=()):
+            called.append(text)
+            return {"confidence": 0.9, "speech_acts": [], "topics": [],
+                    "entities": [], "candidate_intents": [], "ambiguities": [],
+                    "suggested_capabilities": [], "needs_tools": False}
+        monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
+        event = _FakeEvent("帮我查一下课程", group="g1")
+        await dududa_handlers._perceive_with_model(plugin, event)
+        assert called == []  # 规则关键词命中 -> 快速路径，不调模型
+
+    @pytest.mark.asyncio
+    async def test_short_text_skips_model_signal(self, plugin, monkeypatch):
+        called = []
+
+        async def fake_signal(text, capabilities=()):
+            called.append(text)
+            return {"confidence": 0.9, "speech_acts": [], "topics": [],
+                    "entities": [], "candidate_intents": [], "ambiguities": [],
+                    "suggested_capabilities": [], "needs_tools": False}
+        monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
+        event = _FakeEvent("哈", group="g1")
+        await dududa_handlers._perceive_with_model(plugin, event)
+        assert called == []  # 超短文本 -> 快速路径，不调模型
+
+    @pytest.mark.asyncio
+    async def test_tool_plan_passed_through(self, plugin, monkeypatch):
+        async def fake_signal(text, capabilities=()):
+            return {
+                "confidence": 0.8,
+                "speech_acts": [{"act_type": "statement", "confidence": 0.9}],
+                "topics": ["weather"], "entities": [],
+                "candidate_intents": ["weather_query"],
+                "suggested_capabilities": ["mcp.weather"], "needs_tools": True,
+                "ambiguities": [],
+                "tool_plan": {"steps": [{"capability_id": "mcp.weather",
+                                         "arguments": {"q": "合肥"}}]},
+            }
+        monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
+        event = _FakeEvent("明天适合出门吗", group="g1")
+        merged = await dududa_handlers._perceive_with_model(plugin, event)
+        assert merged.tool_plan == {"steps": [{"capability_id": "mcp.weather",
+                                               "arguments": {"q": "合肥"}}]}
+
+    @pytest.mark.asyncio
+    async def test_bad_tool_plan_invalidates_signal(self, plugin, monkeypatch):
+        async def fake_signal(text, capabilities=()):
+            return {
+                "confidence": 0.8,
+                "speech_acts": [], "topics": [], "entities": [],
+                "candidate_intents": [], "suggested_capabilities": [],
+                "needs_tools": False, "ambiguities": [],
+                "tool_plan": {"steps": [{"capability_id": 123}]},  # 结构非法
+            }
+        monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
+        event = _FakeEvent("明天适合出门吗", group="g1")
+        rule = plugin._perceive(event)
+        merged = await dududa_handlers._perceive_with_model(plugin, event)
+        assert merged == rule  # 整包丢弃（fail closed）-> 只用规则
 
     @pytest.mark.asyncio
     async def test_flag_off_signal_returns_none(self, plugin):

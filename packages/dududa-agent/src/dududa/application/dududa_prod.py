@@ -263,10 +263,12 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return None
 
     async def _llm_plan(self, state, candidates, max_steps, permissions):
-        """规则未命中时：LLM 自主选工具（结构化输出，fail-closed，文档 2.5.x）。
+        """规则未命中时：感知信号 tool_plan 优先；否则 LLM 自主选工具。
 
-        模型输出仅作工具选择建议：capability_id 必须在候选内、action 必须
-        匹配 schema enum、参数键必须白名单；任何非法 -> 丢弃该步。
+        感知+规划合并（P0）：感知阶段模型已输出 tool_plan（fail-closed
+        校验过），规划阶段直接采用，省一次 LLM 调用。其余语义同前：
+        capability_id 必须在候选内、action 必须匹配 schema enum、
+        参数键必须白名单；任何非法 -> 丢弃该步。
         模型明确不需要工具（steps=[]）-> 返回空计划（调用方直接成功）。
         调用失败 / 输出非法 -> None（保持原降级行为，安全）。
         """
@@ -276,6 +278,21 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if not candidates:
             return None
         try:
+            perception = getattr(state, "perception", None)
+            tool_plan = getattr(perception, "tool_plan", None) if perception else None
+            if tool_plan:
+                plan = self._parse_llm_plan(tool_plan, candidates, max_steps)
+                if plan is not None:
+                    logger.info(
+                        "LLM plan (perception) | run_id=%s trace_id=%s steps=%d %s",
+                        state.run_id, state.trace_id, len(plan.steps),
+                        [s.capability_id for s in plan.steps][:max_steps])
+                    trace_recorder.record(
+                        event="llm_plan", run_id=state.run_id,
+                        trace_id=state.trace_id,
+                        steps=[s.capability_id for s in plan.steps][:max_steps],
+                        rationale="perception-tool-plan")
+                    return plan
             intent = self._intent_of(state)
             lines = []
             for cand in list(candidates)[:max_steps + 6]:
@@ -316,25 +333,28 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     @staticmethod
     def _parse_llm_plan(reply, candidates, max_steps):
-        """解析并白名单校验 LLM 规划输出。
+        """解析并白名单校验 LLM 规划输出（支持 JSON 字符串或 dict）。
 
         返回 GeneratedPlan（含步骤）/ 空计划（模型明确不需要工具）/ None（非法）。
         """
         import json as _json
         from dududa.planner.planner import GeneratedPlan, PlannedStep
-        if not reply or not reply.strip():
+        if not reply:
             return None
-        text = reply.strip()
-        try:
-            data = _json.loads(text)
-        except (ValueError, TypeError):
-            start, end = text.find("{"), text.rfind("}")
-            if start < 0 or end <= start:
-                return None
+        if isinstance(reply, dict):
+            data = reply
+        else:
+            text = str(reply).strip()
             try:
-                data = _json.loads(text[start:end + 1])
+                data = _json.loads(text)
             except (ValueError, TypeError):
-                return None
+                start, end = text.find("{"), text.rfind("}")
+                if start < 0 or end <= start:
+                    return None
+                try:
+                    data = _json.loads(text[start:end + 1])
+                except (ValueError, TypeError):
+                    return None
         if not isinstance(data, dict):
             return None
         steps_raw = data.get("steps")

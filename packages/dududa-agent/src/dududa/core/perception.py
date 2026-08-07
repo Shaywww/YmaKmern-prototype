@@ -55,6 +55,10 @@ class PerceptionResult:
     # 候选意图
     candidate_intents: tuple[str, ...] = ()  # course_query | chitchat | help | ...
 
+    # 模型感知附带的工具计划（可选）：{"steps":[{"capability_id","arguments"}]}
+    # 由 _perceive_with_model 从模型信号透传，供规划阶段直接采用（省一次调用）
+    tool_plan: Optional[dict] = None
+
     # 工具需求（语义信号，不是授权）
     needs_tools: bool = False
     suggested_capabilities: tuple[str, ...] = ()
