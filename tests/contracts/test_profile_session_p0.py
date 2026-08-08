@@ -49,7 +49,7 @@ class TestExtractSignals:
     def test_facts(self):
         _, _, facts = extract_profile_signals("我是USTC的学生，我住在东区")
         assert any("USTC" in f for f in facts)
-        assert any("东区" in f for f in facts)
+        assert not any("东区" in f for f in facts)  # 位置已结构化进 location
 
     def test_no_signals(self):
         assert extract_profile_signals("今天天气不错，帮我查一下课") == ("", (), ())

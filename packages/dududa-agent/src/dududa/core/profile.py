@@ -97,7 +97,11 @@ def extract_profile_signals(text: str) -> tuple[str, tuple[str, ...], tuple[str,
         if val not in prefs:
             prefs.append(val[: _SIGNAL_MAX_LEN])
     facts: list[str] = []
+    _LOC_PREFIX_WORDS = ("我住在", "我家在", "住在", "家住", "家在")
     for m in _FACT_RE.finditer(text):
+        raw = m.group(0)
+        if any(raw.startswith(w) for w in _LOC_PREFIX_WORDS):
+            continue  # 位置类已结构化进 location 字段，不重复进事实
         val = m.group(1).strip()
         if val and val not in facts:
             facts.append(val[: _SIGNAL_MAX_LEN])
