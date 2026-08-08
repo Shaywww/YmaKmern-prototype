@@ -278,6 +278,40 @@ class TestWeatherCityGuard:
         args = self._plan("今天天气怎么样", {"action": "search"})
         assert args.get("q") == "合肥"
 
+    def test_profile_location_is_default_city(self):
+        from dududa.core.profile import ProfileStore
+        import tempfile
+        store = ProfileStore(path=tempfile.mktemp(suffix=".json"))
+        store.record_message("qq", "dududa", "g1", "u1",
+                             "我住在临泽县", engaged=True)
+        orch, _plugin, reg = _make_orchestrator()
+        orch._profile_store = store
+        cands = reg.filter_candidates(permissions=(), max_count=24)
+        plan = orch._rule_fallback_plan(_state(orch, "今天天气怎么样"),
+                                        cands, "今天天气怎么样")
+        assert plan is not None
+        assert plan.steps[0].arguments.get("q") == "临泽县"
+        args = self._plan("今天天气怎么样", {"action": "search"})
+        assert args.get("q") == "合肥"  # 无画像时仍默认合肥
+
+    @pytest.mark.asyncio
+    async def test_llm_plan_includes_recent_context(self):
+        orch, plugin, reg = _make_orchestrator()
+        seen = {}
+
+        async def capture(system, user_msg, **kw):
+            seen["user"] = user_msg
+            return '{"steps":[]}'
+
+        plugin._call_llm = capture
+        plugin._read_memory = lambda *a, **k: (
+            "【近期对话】\n[用户]: USTC今年招生怎么样\n======\n")
+        orch._pending_event = _FakeEvent("本科", group="g1")
+        cands = reg.filter_candidates(permissions=(), max_count=24)
+        await orch._llm_plan(_state(orch, "本科"), cands, 4, ())
+        assert "最近对话" in seen["user"]
+        assert "USTC今年招生怎么样" in seen["user"]
+
 
 class _BoomProvider(CapProvider):
     async def execute(self, cap, args):

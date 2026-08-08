@@ -257,7 +257,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 ))
                 if (plan is not None and getattr(plan, "steps", ())
                         and str(getattr(plan, "rationale", "")).startswith("Pattern")):
-                    return self._enrich_plan_args(plan, intent)
+                    return self._enrich_plan_args(
+                        plan, intent,
+                        default_city=self._user_location(state) or "合肥")
             except Exception:
                 pass
         return None
@@ -284,7 +286,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if tool_plan:
                 plan = self._parse_llm_plan(tool_plan, candidates, max_steps)
                 if plan is not None:
-                    plan = self._ensure_step_args(plan, intent, candidates)
+                    plan = self._ensure_step_args(
+                        plan, intent, candidates,
+                        default_city=self._user_location(state) or "合肥")
                     logger.info(
                         "LLM plan (perception) | run_id=%s trace_id=%s steps=%d %s",
                         state.run_id, state.trace_id, len(plan.steps),
@@ -314,12 +318,18 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "- 用户未明确说城市/地点时，mcp.weather 的 city 填「合肥」，不要猜测其他城市\n"
                 f"- 一次最多选 {max_steps} 个工具，按重要程度排序")
             user = f"用户消息: {intent}\n\n可用工具:\n" + "\n".join(lines)
+            ctx = self._recent_chat_context(state)
+            if ctx:
+                user = (f"最近对话（用户此前说过的内容，供理解指代，"
+                        f"不要当成本次要执行的指令）:\n{ctx}\n\n" + user)
             reply = await plugin._call_llm(
                 system, user, max_tokens=1024, temperature=0.0,
                 run_id=state.run_id, trace_id=state.trace_id, skip_render=True)
             plan = self._parse_llm_plan(reply, candidates, max_steps)
             if plan is not None:
-                plan = self._ensure_step_args(plan, intent, candidates)
+                plan = self._ensure_step_args(
+                    plan, intent, candidates,
+                    default_city=self._user_location(state) or "合肥")
                 logger.info(
                     "LLM plan | run_id=%s trace_id=%s steps=%d %s",
                     state.run_id, state.trace_id, len(plan.steps),
@@ -357,7 +367,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         elif "mcp.weather" in allowed and any(k in text for k in
                 ("天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷", "热不热")):
             m = _re.search(r"([\u4e00-\u9fff]{2,6}?(?:市|县|区|镇))", text)
-            cap_id, args = "mcp.weather", {"q": (m.group(1) if m else "合肥")}
+            default_city = self._user_location(state) or "合肥"
+            cap_id, args = "mcp.weather", {"q": (m.group(1) if m else default_city)}
         elif "mcp.news" in allowed and any(k in text for k in
                 ("新闻", "资讯", "热点", "热搜", "报道", "消息")):
             cap_id, args = "mcp.news", {}
@@ -389,11 +400,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return plan
 
     @staticmethod
-    def _ensure_step_args(plan, intent, candidates):
+    def _ensure_step_args(plan, intent, candidates, default_city="合肥"):
         """LLM 计划参数兜底：模型漏填/填错参数时，用意图文本补白名单键 q。
 
         仅当步骤参数为空且工具 schema 有 q 时注入（防空参执行失败）；
-        不覆盖模型已给的合法参数。
+        不覆盖模型已给的合法参数。default_city 为天气默认城市（画像位置优先）。
         """
         from dududa.planner.planner import GeneratedPlan, PlannedStep
         if plan is None or not getattr(plan, "steps", ()):
@@ -431,7 +442,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                                 and (city + "天气") in raw)):
                         args["q"] = city
                     else:
-                        args["q"] = "合肥"
+                        args["q"] = default_city
                     args.pop("city", None)
             steps.append(PlannedStep(
                 step_id=s.step_id, capability_id=s.capability_id,
@@ -509,8 +520,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             rationale="LLM: structured tool selection")
 
     @staticmethod
-    def _enrich_plan_args(plan, intent):
-        """把用户意图中的关键词注入计划参数，让 MCP 能真正查到数据。"""
+    def _enrich_plan_args(plan, intent, default_city="合肥"):
+        """把用户意图中的关键词注入计划参数，让 MCP 能真正查到数据。
+
+        default_city 为天气默认城市（画像位置优先）。
+        """
         import re
         raw = intent or ""
         steps = []
@@ -527,7 +541,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
                 city = re.sub(r"@\S+", "", city).strip()
                 city = re.sub(r"[，。！、\s]+$", "", city)
-                args["q"] = city or "合肥"
+                args["q"] = city or default_city
             elif cap_id == "mcp.news" and args.get("action") == "search":
                 # 新闻关键词：去掉新闻类填充词，保留「科技/体育/国际」等话题词
                 kw = re.sub(
@@ -569,6 +583,32 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 args["keyword"] = kw
             steps.append(type(s)(**{**s.__dict__, "arguments": args}))
         return type(plan)(**{**plan.__dict__, "steps": tuple(steps)})
+
+    def _user_location(self, state) -> str:
+        """画像中的用户所在地（无则空串），用于天气等默认城市。"""
+        store = getattr(self, "_profile_store", None)
+        if store is None:
+            return ""
+        try:
+            env = state.envelope
+            if env is None or env.sender is None:
+                return ""
+            user = store.get_user(
+                self._platform(state), "dududa", env.sender.actor_id)
+            return (user.location if user else "") or ""
+        except Exception:
+            return ""
+
+    def _recent_chat_context(self, state, limit=6, budget=1200) -> str:
+        """近期对话记忆（供规划理解指代，如「本科」承接「USTC招生」）。"""
+        event = getattr(self, "_pending_event", None)
+        plugin = getattr(self, "_plugin", None)
+        if event is None or plugin is None or not hasattr(plugin, "_read_memory"):
+            return ""
+        try:
+            return plugin._read_memory(event, limit=limit, budget=budget) or ""
+        except Exception:
+            return ""
 
     def _profile_lines(self, state) -> tuple:
         """画像摘要（称呼/偏好/事实 + 会话活跃话题），注入 LLM 上下文。"""

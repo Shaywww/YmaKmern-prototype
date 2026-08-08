@@ -30,17 +30,53 @@ _SIGNAL_MAX_LEN = 24
 # ---- 规则提取（确定性，无模型） ----
 
 _NAME_RE = re.compile(
-    r"(?:叫我|你可以叫我|称呼我(?:为)?|以后叫我|可以叫我)"
+    r"(?:叫我|你可以叫我|称呼我(?:为)?|以后叫我|可以叫我|我叫|我的名字(?:是|叫))"
     r"\s*(?:就(?:行|好|可以)|的话)?\s*([一-龥A-Za-z0-9_-]{1,12})"
 )
 _PREF_RE = re.compile(
-    r"(?:我喜欢|我爱|我最爱|超喜欢|最喜欢|偏爱)\s*"
+    r"(?:我喜欢|我爱|我最爱|超喜欢|最喜欢|偏爱|也喜欢|还喜欢)\s*"
     r"([^，。！？,.!?\n]{1,24})"
+)
+# 过泛偏好值（代词/天气/语气词）不入画像
+_PREF_BAD = {"你", "它", "这", "那", "我", "他", "她", "天气", "吃", "玩",
+             "吗", "呀", "吧", "啊", "呢", "哦", "这样", "那样"}
+_LOC_SUFFIX = r"(?:省|市|县|区|镇|乡|州|盟)"
+_LOC_PREFIX_RE = re.compile(r"(?:我住在|我家在|住在|家住|家在)")
+_LOC_REN_RE = re.compile(
+    r"(?:我是|来自)\s*([一-龥]{2,6}?" + _LOC_SUFFIX + r"?人)"
 )
 _FACT_RE = re.compile(
     r"(?:我是|我在|我来自|我读|我在读|我住在|我学)\s*"
     r"([^，。！？,.!?\n]{1,24})"
 )
+
+
+def _strip_tail_particles(text: str) -> str:
+    return re.sub(r"[吧啊呢呀哦啦]?$", "", text or "").strip()
+
+
+def extract_location(text: str) -> str:
+    """从消息提取用户所在地（带行政区划后缀才认，防误判）；无匹配返回空。
+
+    「我家在甘肃临泽县」-> 临泽县（取最具体一级）；「我是甘肃人」-> 甘肃。
+    """
+    if not text:
+        return ""
+    m = _LOC_PREFIX_RE.search(text)
+    if m:
+        rest = text[m.end():]
+        seg = re.match(r"[\u4e00-\u9fff]{2,}", rest)
+        if seg:
+            cands = re.findall(
+                r"[\u4e00-\u9fff]{1,4}(?:省|市|县|区|镇|乡|州|盟)",
+                seg.group(0))
+            if cands:
+                return _strip_tail_particles(cands[-1])[:_SIGNAL_MAX_LEN]
+    for m in _LOC_REN_RE.finditer(text):
+        val = re.sub(r"人$", "", m.group(1)).strip()
+        if val:
+            return val[:_SIGNAL_MAX_LEN]
+    return ""
 
 
 def extract_profile_signals(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -51,10 +87,14 @@ def extract_profile_signals(text: str) -> tuple[str, tuple[str, ...], tuple[str,
     m = _NAME_RE.search(text)
     if m:
         name = re.sub(r"(?:就(?:行|好|可以))?[吧的哦啊呀啦呢]?$", "", m.group(1)).strip()
+        if re.search(r"(?:的|同学|老师|朋友|学生|人|们)$", name) or len(name) < 1:
+            name = ""
     prefs: list[str] = []
     for m in _PREF_RE.finditer(text):
         val = m.group(1).strip()
-        if val and val not in prefs:
+        if val in _PREF_BAD or not val:
+            continue
+        if val not in prefs:
             prefs.append(val[: _SIGNAL_MAX_LEN])
     facts: list[str] = []
     for m in _FACT_RE.finditer(text):
@@ -73,6 +113,7 @@ class UserProfile:
     platform: str = "qq"
     bot_id: str = "dududa"
     preferred_name: str = ""
+    location: str = ""
     preferences: tuple[str, ...] = ()
     facts: tuple[str, ...] = ()
     topic_counts: dict[str, int] = field(default_factory=dict)
@@ -92,6 +133,7 @@ class UserProfile:
             "platform": self.platform,
             "bot_id": self.bot_id,
             "preferred_name": self.preferred_name,
+            "location": self.location,
             "preferences": list(self.preferences),
             "facts": list(self.facts),
             "topic_counts": dict(self.topic_counts),
@@ -106,6 +148,7 @@ class UserProfile:
             platform=str(data.get("platform", "qq")),
             bot_id=str(data.get("bot_id", "dududa")),
             preferred_name=str(data.get("preferred_name", "")),
+            location=str(data.get("location", "")),
             preferences=tuple(str(x) for x in data.get("preferences", ())),
             facts=tuple(str(x) for x in data.get("facts", ())),
             topic_counts={
@@ -120,6 +163,8 @@ class UserProfile:
         lines: list[str] = []
         if self.preferred_name:
             lines.append(f"用户希望被称为「{self.preferred_name}」")
+        if self.location:
+            lines.append(f"用户所在地: {self.location}")
         if self.preferences:
             lines.append("用户偏好: " + "、".join(self.preferences[:_MAX_PREFERENCES]))
         if self.facts:
@@ -263,6 +308,7 @@ class ProfileStore:
 
             if engaged:
                 name, prefs, facts = extract_profile_signals(text or "")
+                loc = extract_location(text or "")
                 u_key = self._user_key(platform, bot_id, actor_id)
                 user = self._users.get(u_key)
                 if user is None:
@@ -271,6 +317,8 @@ class ProfileStore:
                         first_seen_ts=now)
                 if name:
                     user.preferred_name = name
+                if loc:
+                    user.location = loc
                 if prefs:
                     merged = list(user.preferences)
                     for p in prefs:

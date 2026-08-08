@@ -54,6 +54,26 @@ class TestExtractSignals:
     def test_no_signals(self):
         assert extract_profile_signals("今天天气不错，帮我查一下课") == ("", (), ())
 
+    def test_self_claim_name(self):
+        name, _, _ = extract_profile_signals("我叫小明")
+        assert name == "小明"
+        name, _, _ = extract_profile_signals("我的名字叫阿伟")
+        assert name == "阿伟"
+        name, _, _ = extract_profile_signals("我是小明的同学")
+        assert name == ""  # 陈述句不当作名字
+
+    def test_preference_noise_filtered(self):
+        _, prefs, _ = extract_profile_signals("我喜欢你，也喜欢数据结构")
+        assert "你" not in prefs
+        assert "数据结构" in prefs
+
+    def test_location(self):
+        from dududa.core.profile import extract_location
+        assert extract_location("我住在东区") == "东区"
+        assert "临泽县" in extract_location("我家在甘肃临泽县")
+        assert extract_location("我是甘肃人") == "甘肃"
+        assert extract_location("今天天气怎么样") == ""
+
 
 class TestProfileStore:
     def test_roundtrip(self, tmp_path):
