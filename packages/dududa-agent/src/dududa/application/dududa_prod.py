@@ -311,6 +311,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "- 用户消息需要查实时信息/外部数据/执行操作时才选工具；"
                 "普通闲聊、问候、纯观点问题输出 {\"steps\":[]}\n"
                 "- arguments 只能使用该工具列出的参数名；action 不填时默认 search\n"
+                "- 用户未明确说城市/地点时，mcp.weather 的 city 填「合肥」，不要猜测其他城市\n"
                 f"- 一次最多选 {max_steps} 个工具，按重要程度排序")
             user = f"用户消息: {intent}\n\n可用工具:\n" + "\n".join(lines)
             reply = await plugin._call_llm(
@@ -407,18 +408,31 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 props = ((cap.schema.input_schema or {}).get("properties") or {})
                 if "q" in props and "q" not in args:
                     args["q"] = str(intent)[:120]
-                if cap.capability_id == "mcp.weather" and str(
-                        args.get("city") or "") in (
-                        "", "unknown", "默认", "用户默认位置", "current", "any"):
-                    # 城市兜底：意图里有「X市/县/区」或时间词前的地名则用，否则合肥
-                    m = re.search(
-                        r"([\u4e00-\u9fff]{2,6}(?:市|县|区))", str(intent) or "")
-                    if m is None:
-                        m = re.match(
-                            r"^([\u4e00-\u9fff]{2,4}?)(?=今天|明天|后天|"
-                            r"现在|天气|气温|冷不冷|热不热|预报)",
-                            str(intent) or "")
-                    args["city"] = m.group(1) if m else "合肥"
+                if cap.capability_id == "mcp.weather":
+                    # 城市只信意图文本：明确地名（市/县/区/镇后缀、拉丁地名、
+                    # 或中文地名后紧跟「天气」）才用，否则默认合肥。
+                    # 防止 LLM 猜用户没提过的城市（如「长庆镇」）。
+                    raw = str(intent) or ""
+                    city = re.sub(
+                        r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+",
+                        "", raw)
+                    city = re.sub(
+                        r"(天气|气温|温度|预报|怎么样|怎样|如何|今天|明天|后天|"
+                        r"现在|目前|是什么|多少|度|会不会|下不下雨|冷不冷|热不热|"
+                        r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
+                    city = re.sub(r"@\S+", "", city).strip()
+                    city = re.sub(r"[，。！、\s]+$", "", city)
+                    city = re.sub(
+                        r"(?i)(?:weather|forecast|today|now|temperature|"
+                        r"current|in)\s*$", "", city).strip()
+                    if (re.search(r"(?:市|县|区|镇|城|州|省)$", city)
+                            or re.fullmatch(r"[A-Za-z]{2,}", city)
+                            or (re.search(r"[\u4e00-\u9fff]", city)
+                                and (city + "天气") in raw)):
+                        args["q"] = city
+                    else:
+                        args["q"] = "合肥"
+                    args.pop("city", None)
             steps.append(PlannedStep(
                 step_id=s.step_id, capability_id=s.capability_id,
                 arguments=args, purpose=s.purpose))

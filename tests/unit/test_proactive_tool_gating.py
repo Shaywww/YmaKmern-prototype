@@ -247,6 +247,38 @@ class TestLLMPlanFallback:
         return reg.filter_candidates(permissions=(), max_count=24)
 
 
+class TestWeatherCityGuard:
+    """LLM 规划填的天气城市必须来自消息文本，否则默认合肥（防猜城市）。"""
+
+    def _plan(self, intent, args):
+        orch, _plugin, reg = _make_orchestrator()
+        from dududa.planner.planner import GeneratedPlan, PlannedStep
+        plan = GeneratedPlan(
+            goal=intent,
+            steps=(PlannedStep(step_id="s1", capability_id="mcp.weather",
+                               arguments=args, purpose="p"),))
+        cands = reg.filter_candidates(permissions=(), max_count=24)
+        out = orch._ensure_step_args(plan, intent, cands)
+        return out.steps[0].arguments
+
+    def test_llm_guessed_city_overridden_to_default(self):
+        args = self._plan("今天天气怎么样", {"city": "长庆镇", "action": "search"})
+        assert args.get("q") == "合肥"
+        assert "city" not in args
+
+    def test_llm_mentioned_city_kept(self):
+        args = self._plan("临泽县今天天气怎么样", {"city": "北京", "action": "search"})
+        assert args.get("q") == "临泽县"
+
+    def test_llm_english_city_kept_when_mentioned(self):
+        args = self._plan("Beijing weather", {"city": "Beijing", "action": "search"})
+        assert args.get("q") == "Beijing"
+
+    def test_no_city_gets_default(self):
+        args = self._plan("今天天气怎么样", {"action": "search"})
+        assert args.get("q") == "合肥"
+
+
 class _BoomProvider(CapProvider):
     async def execute(self, cap, args):
         raise TimeoutError("connection timed out")
