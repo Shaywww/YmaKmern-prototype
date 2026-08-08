@@ -25,6 +25,62 @@ def _strip_html(text: str) -> str:
     return _html.unescape(text).strip()
 
 
+# 视频站：无视频意图时降权（避免「搜USTC」返回腾讯视频）
+_VIDEO_HOST_MARKERS = (
+    "v.qq.com", "bilibili.com", "youku.com", "iqiyi.com", "douyin.com",
+    "kuaishou.com", "youtube.com", "m1905.com", "mgtv.com", "sohu.com/v",
+    "163.com/video", "v.163.com",
+)
+_VIDEO_QUERY_HINTS = ("视频", "电影", "番剧", "电视剧", "看", "直播", "预告", "片源", "怎么演")
+# 权威/官方来源加权
+_BOOST_HOST_MARKERS = (
+    "wikipedia.org", "baike.baidu.com", ".edu.cn", ".gov.cn", "zhihu.com",
+    "ustc.edu.cn", "docs.mmdustc.top", "qq.com/qqcom", "people.com.cn",
+    "xinhuanet.com", "chinanews.com.cn",
+)
+# 内容子域（news./m./en./bbs./...）：主站是权威答案，查询未点名子域时降权
+_CONTENT_SUBDOMAIN_MARKERS = (
+    "news.", "m.", "en.", "bbs.", "blog.", "forum.", "wap.", "tv.",
+    "mobile.", "video.",
+)
+
+
+def _rank_results(results: list[dict], q: str) -> list[dict]:
+    """相关性重排：视频站降权（非视频意图）、权威站加权、同域去重。"""
+    ql = (q or "").lower()
+    want_video = any(h in ql for h in _VIDEO_QUERY_HINTS)
+    toks = _re.findall(r"[A-Za-z]{2,}", q)
+    cjk = [c for c in _re.findall(r"[\u4e00-\u9fff]{2,}", q)][:4]
+    scored: list[tuple[int, dict]] = []
+    seen: set[str] = set()
+    for r in results:
+        link = (r.get("link") or "").lower()
+        domain = _re.sub(r"^https?://", "", link).split("/")[0]
+        if domain in seen:
+            continue
+        seen.add(domain)
+        score = 0
+        if not want_video and any(m in link for m in _VIDEO_HOST_MARKERS):
+            score -= 50
+        if any(m in link for m in _BOOST_HOST_MARKERS):
+            score += 10
+        if any(domain.startswith(m) for m in _CONTENT_SUBDOMAIN_MARKERS):
+            marker = next(m for m in _CONTENT_SUBDOMAIN_MARKERS
+                          if domain.startswith(m))
+            if marker.strip(".") not in ql:
+                score -= 8
+        hay = ((r.get("title") or "") + " " + (r.get("snippet") or "")).lower()
+        for t in toks:
+            if t.lower() in hay:
+                score += 3
+        for c in cjk:
+            if c in hay:
+                score += 5
+        scored.append((score, r))
+    scored.sort(key=lambda x: -x[0])
+    return [r for _, r in scored]
+
+
 class WebSearchService(BaseMCPService):
     """实时联网搜索（Bing RSS）。无密钥、短缓存、熔断保护。"""
 
@@ -82,8 +138,9 @@ class WebSearchService(BaseMCPService):
                         "link": link,
                         "snippet": snippet[:_SNIPPET_LIMIT],
                     })
-                    if len(results) >= max_results:
+                    if len(results) >= _MAX_RESULTS:
                         break
+                results = _rank_results(results, q)[:max_results]
                 if not results:
                     continue
                 if self._looks_relevant(results, q) or host == _BING_HOSTS[-1]:

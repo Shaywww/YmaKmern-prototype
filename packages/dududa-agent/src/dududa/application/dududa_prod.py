@@ -328,10 +328,64 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     trace_id=state.trace_id,
                     steps=[s.capability_id for s in plan.steps][:max_steps],
                     rationale=getattr(plan, "rationale", ""))
-            return plan
+                return plan
+            # 模型输出非法/失败：确定性规则兜底，保证工具链不丢
+            return self._rule_fallback_plan(state, candidates, intent)
         except Exception as e:
             logger.warning("LLM plan failed: %s", e)
+            return self._rule_fallback_plan(state, candidates, intent)
+
+    def _rule_fallback_plan(self, state, candidates, intent):
+        """LLM 规划失败/不可用时的确定性兜底（防 provider 抖动丢工具链）。
+
+        优先级：时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
+        仅当模型路径失败/输出非法时使用，模型合法空计划（无需工具）不触发。
+        """
+        if not candidates or not intent:
             return None
+        from dududa.planner.planner import GeneratedPlan, PlannedStep, _clean_query
+        import re as _re
+        text = str(intent).strip()
+        if not text:
+            return None
+        allowed = {c.capability.capability_id for c in candidates}
+        cap_id, args = None, {}
+        if "mcp.clock" in allowed and any(k in text for k in
+                ("几点", "几号", "星期几", "日期", "什么时候", "现在几", "现在是")):
+            cap_id, args = "mcp.clock", {}
+        elif "mcp.weather" in allowed and any(k in text for k in
+                ("天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷", "热不热")):
+            m = _re.search(r"([\u4e00-\u9fff]{2,6}?(?:市|县|区|镇))", text)
+            cap_id, args = "mcp.weather", {"q": (m.group(1) if m else "合肥")}
+        elif "mcp.news" in allowed and any(k in text for k in
+                ("新闻", "资讯", "热点", "热搜", "报道", "消息")):
+            cap_id, args = "mcp.news", {}
+        elif "mcp.translate" in allowed and any(k in text for k in
+                ("翻译", "译成", "translate")):
+            cap_id, args = "mcp.translate", {}
+        elif "mcp.web_search" in allowed and any(k in text for k in
+                ("搜", "百度", "查一下", "查查", "找一下", "查",
+                 "是什么", "什么是", "啥是", "啥叫", "招生", "录取",
+                 "分数线", "排名", "百科", "介绍一下")):
+            if "介绍" in text and "自己" in text:
+                return None  # 自我介绍类闲聊不搜索
+            q = _clean_query(text)
+            cap_id, args = "mcp.web_search", {"q": q or text}
+        if cap_id is None:
+            return None
+        plan = GeneratedPlan(
+            goal=text,
+            steps=(PlannedStep(step_id="fb1", capability_id=cap_id,
+                               arguments=args,
+                               purpose="Rule fallback (model planning unavailable)"),),
+            rationale="RuleFallback: model planning unavailable",
+        )
+        logger.info("Rule fallback plan | run_id=%s trace_id=%s cap=%s args=%s",
+                    state.run_id, state.trace_id, cap_id, args)
+        trace_recorder.record(event="llm_plan", run_id=state.run_id,
+                              trace_id=state.trace_id, steps=[cap_id],
+                              rationale="rule-fallback")
+        return plan
 
     @staticmethod
     def _ensure_step_args(plan, intent, candidates):

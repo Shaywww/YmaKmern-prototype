@@ -79,6 +79,25 @@ class StepResult:
     completed: bool = False
     cancelled: bool = False
 
+def _error_kind(result) -> str:
+    """失败类型归类（可观测性：控制台按类型统计工具失败原因）。"""
+    if getattr(result, "cancelled", False):
+        return "cancelled"
+    err = str(getattr(result, "error", "") or "")
+    low = err.lower()
+    if any(k in low for k in ("authorization", "permission", "denied", "forbidden")):
+        return "permission"
+    if "timeout" in low or "timed out" in low:
+        return "timeout"
+    if "max retries" in err:
+        return "retries_exhausted"
+    if "rate" in low and "limit" in low:
+        return "rate_limit"
+    if "no capability" in low or "not found" in low:
+        return "not_found"
+    return "error"
+
+
 class ToolExecutor:
     """Multi-step tool executor with retry, timeout, and budget tracking."""
 
@@ -128,11 +147,14 @@ class ToolExecutor:
         cap_id = str(getattr(step, "capability_id", ""))
 
         def _done(result: StepResult) -> StepResult:
+            err = (result.error or "") if not result.success else ""
             trace_recorder.record(
                 event="tool_result", run_id=ctx.run_id, trace_id=ctx.trace_id,
                 step_id=step.step_id, capability_id=cap_id,
                 success=result.success, latency_ms=round(result.latency_ms, 1),
-                retries_used=result.retries_used)
+                retries_used=result.retries_used,
+                error_kind=_error_kind(result) if err else "",
+                error=err[:200] if err else "")
             return result
 
         while retries <= ctx.max_retries_per_step:

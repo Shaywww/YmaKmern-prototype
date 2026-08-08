@@ -300,7 +300,7 @@ class DududaCore:
             return None
 
     _TOOL_KW = ("帮我", "查", "搜", "算", "翻译", "了解", "介绍",
-                 "是什么", "怎么样", "多少", "招生", "分数线", "排名",
+                 "是什么", "多少", "招生", "分数线", "排名",
                  "查询", "查查", "百度", "搜索", "找一下",
                  "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下")
 
@@ -410,14 +410,13 @@ class DududaCore:
             if kw in combined:
                 topics.append(topic)
         intents = list(topics) if topics else ["chitchat"]
-        needs_tools = any(t in ("course", "exam", "grade", "weather", "time",
-                                      "notice", "activity", "calendar", "training",
-                                      "news", "translate", "websearch") for t in topics)
+        # 工具意图门：命令词（_TOOL_KW）命中即触发工具链，与 _social_decision 对齐，
+        # 避免「帮我查一下/查查XX」被判为纯闲聊；工具话题命中同样触发。
         has_command = any(a.act_type == "command" for a in acts)
-        # 联网搜索：显式「搜/百度」命令也触发工具链（web_search）
-        if has_command and any(k in combined for k in
-                               ("搜", "百度", "search", "find")):
-            needs_tools = True
+        needs_tools = has_command or any(t in ("course", "exam", "grade", "weather",
+                                      "time", "notice", "activity", "calendar",
+                                      "training", "news", "translate", "websearch")
+                                      for t in topics)
         return PerceptionResult(
             speech_acts=tuple(acts),
             topics=tuple(topics),
