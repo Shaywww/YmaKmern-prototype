@@ -14,6 +14,7 @@ import pytest
 
 from dududa.application.update_pusher import (
     UpdateNoticeStore, UpdatePusher, build_notice_text,
+    build_update_push, startup_push_loop,
 )
 from dududa.application import dududa_commands
 
@@ -146,6 +147,31 @@ class TestStore:
         assert "【嘟嘟哒更新公告】" in build_notice_text(_notice(version=""))
 
 
+# ---- 1.5 装配工厂 + 启动循环 ----
+
+class TestFactory:
+    def test_disabled_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DUDUDA_UPDATE_PUSH", "0")
+        store, pusher = build_update_push(
+            types.SimpleNamespace(platform_manager=_FakePM(_FakeBot([]))),
+            str(tmp_path))
+        assert store is None and pusher is None
+
+    def test_enabled_builds(self, tmp_path):
+        store, pusher = build_update_push(
+            types.SimpleNamespace(platform_manager=_FakePM(_FakeBot([]))),
+            str(tmp_path))
+        assert store is not None and pusher is not None
+        assert store.path == str(tmp_path / "data" / "update_notice.json")
+
+    @pytest.mark.asyncio
+    async def test_startup_loop_skips_when_no_pending(self, tmp_path):
+        bot = _FakeBot(["1"])
+        pusher = UpdatePusher(_store(tmp_path), _FakePM(bot))
+        await startup_push_loop(pusher, attempts=3, delay=0.01)
+        assert bot.calls == []
+
+
 # ---- 2. 推送器 ----
 
 class TestPusher:
@@ -225,7 +251,7 @@ def plugin(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "CONFIRM_FILE", str(tmp_path / "confirmations.json"))
     monkeypatch.setattr(main, "GROUP_POLICY_FILE", str(tmp_path / "group_policy.json"))
     monkeypatch.setattr(main, "STYLE_FILE", str(tmp_path / "styles.json"))
-    monkeypatch.setattr(main, "NOTICE_FILE", str(tmp_path / "update_notice.json"))
+    monkeypatch.setenv("DUDUDA_NOTICE_FILE", str(tmp_path / "update_notice.json"))
     monkeypatch.setenv("DUDUDA_PROFILE_FILE", str(tmp_path / "profiles.json"))
     p = main.Main(_make_context())
     p._core._react_cooldown.clear()

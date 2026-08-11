@@ -12,10 +12,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import time
 from typing import Any, Optional
+
+logger = logging.getLogger("dududa20.update_pusher")
 
 
 def build_notice_text(notice: dict) -> str:
@@ -144,3 +148,32 @@ class UpdatePusher:
             "pushed_total": len(done),
             "failed": failed,
         }
+
+
+def build_update_push(context, data_dir: Optional[str] = None):
+    """插件装配：返回 (store, pusher)；DUDUDA_UPDATE_PUSH=0 时关闭。"""
+    if os.environ.get("DUDUDA_UPDATE_PUSH", "1") != "1":
+        return None, None
+    path = os.environ.get(
+        "DUDUDA_NOTICE_FILE",
+        os.path.join(data_dir or ".", "data", "update_notice.json"))
+    store = UpdateNoticeStore(path)
+    return store, UpdatePusher(store, context.platform_manager)
+
+
+async def startup_push_loop(pusher, attempts: int = 10, delay: float = 30.0) -> None:
+    """启动后后台推送：适配器未就绪时每 delay 秒重试，最多 attempts 次。"""
+    for attempt in range(1, attempts + 1):
+        try:
+            report = await pusher.push_pending()
+        except Exception as e:
+            logger.warning("Update push attempt %d failed: %s", attempt, e)
+        else:
+            if report.get("skipped") == "no_pending":
+                return
+            if report.get("friends") is not None:
+                logger.info("Update notice pushed: %s", report)
+                return
+            logger.warning("Update push attempt %d: %s", attempt,
+                           report.get("error") or report.get("skipped"))
+        await asyncio.sleep(delay)
