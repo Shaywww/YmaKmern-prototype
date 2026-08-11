@@ -10,6 +10,12 @@ services:
     environment:
       - DUDUDA_ENV=production
       - DUDUDA_DOMAIN=${DUDUDA_DOMAIN:-dududa.example.com}
+      - DUDUDA_CP_TOKEN=${DUDUDA_CP_TOKEN:?DUDUDA_CP_TOKEN is required}
+      - DUDUDA_CP_AUDIT=/app/data/cp_audit.jsonl
+      - DUDUDA_CP_TRACE_DIR=/app/data/traces
+      - DUDUDA_EVAL_DIR=/app/data/traces-eval
+      - DUDUDA_MCP_ACCESS=/app/data/mcp_access.json
+      - DUDUDA_MEMORY_FILE=/app/data/memory.json
     volumes:
       - dududa_data:/app/data
     networks:

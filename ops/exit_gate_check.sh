@@ -71,8 +71,9 @@ static "P2 manage.sh bootstrap/upgrade/rollback" bash -c "grep -q bootstrap /roo
 static "P2 Phase8 根入口兼容（dududa import）" python3.12 -c "import sys; sys.path.insert(0, '$PROTO/packages/dududa-agent/src'); import dududa.core, dududa.router, dududa.control_plane"
 
 static "P2 ops.sh health/manifest/smoke" test -x "$PROTO/ops/ops.sh"
-static "P2 插件薄壳 main.py 行数" bash -c "[ \$(wc -l < '$PLUGIN/main.py') -lt 560 ]"  # 2026-08-11: +announce 命令/lifecycle
-static "P2 应用层不引用旧 main" bash -c "! grep -rnE 'from main import|^import main' '$PROTO/packages/application/' | grep -v __pycache__ | grep -q ."
+static "P2 插件薄壳 main.py 行数" bash -c "[ \$(wc -l < '$PLUGIN/main.py') -lt 560 ]"
+static "P2 应用层不引用旧 main" bash -c "! grep -rnE 'from main import|^import main' '$PROTO/packages/dududa-agent/src/dududa/application/' | grep -v __pycache__ | grep -q ."
+static "P2 无好友更新推送入口" bash -c "! grep -RniE 'update_pusher|startup_push|dududa_announce' '$PROTO/packages/dududa-agent/src/dududa' '$PLUGIN' --exclude-dir=.git --exclude-dir=__pycache__ | grep -q ."
 if [ "$FAST" != "--fast" ]; then
     tmp=$(mktemp -d)
     if OPS_OUT="$tmp" bash "$PROTO/ops/ops.sh" manifest >/dev/null 2>&1 \

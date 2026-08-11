@@ -296,7 +296,9 @@ def _register_routes(app: FastAPI):
     @app.get('/health')
     async def health():
         svc_health = {sid: svc.check_health().value for sid, svc in app.state.services.items()}
-        return {'status':'ok','version':'0.1.0','timestamp':time.time(),'services':svc_health,'active_persona':app.state.registry.active_id}
+        status = ('ok' if all(value == 'healthy' for value in svc_health.values())
+                  else 'degraded')
+        return {'status':status,'version':'0.1.0','timestamp':time.time(),'services':svc_health,'active_persona':app.state.registry.active_id}
 
     @app.get('/personas')
     async def list_personas():

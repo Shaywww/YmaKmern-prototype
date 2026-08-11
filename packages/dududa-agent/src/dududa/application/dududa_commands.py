@@ -6,7 +6,6 @@
 """
 import json as _json
 import logging
-import time
 
 from dududa.safeguards.security import AuthorizationDecision
 from dududa.core.renderer import OCRenderer
@@ -269,83 +268,3 @@ async def cmd_style_impl(plugin, event) -> str:
         return ("还没有记录你的风格偏好～告诉我“以后叫我XX”“回复简短点”"
                 "“说话随意点”“多用表情”就能记住哦")
     return style.display()
-
-
-# ---- 更新公告推送（Update Pusher）----
-
-def _announce_report_lines(report: dict) -> str:
-    if report.get("skipped") == "no_pending":
-        return "当前没有待推送的公告（或已推送过）"
-    if report.get("friends") is None:
-        return ("推送未完成：" + str(report.get("error") or report.get("skipped"))
-                + "（适配器未就绪或好友列表拉取失败，会自动重试）")
-    lines = [
-        f"公告 {report.get('version') or ''} 推送完成："
-        f"好友 {report['friends']} 人，本次新推送 {report['pushed_new']} 人，"
-        f"累计 {report['pushed_total']} 人",
-    ]
-    if report.get("failed"):
-        shown = "、".join(f"{uid}({err})" for uid, err in report["failed"][:5])
-        lines.append("失败（下次自动重试）: " + shown)
-    return "\n".join(lines)
-
-
-async def cmd_announce_impl(plugin, event, content) -> str:
-    """管理员：写入更新公告并立即推送给机器人好友。
-
-    用法: dududa_announce [版本号] <更新内容>
-    例如: dududa_announce v4.4.0 新增天气查询与更新推送
-    """
-    if not content or not content.strip():
-        return "用法: dududa_announce [版本号] <更新内容>\n例如: dududa_announce v4.4.0 新增天气查询"
-    res, conf = plugin._authorize_manage(
-        event, resource="notice", payload={"op": "announce"})
-    if not res.allowed:
-        return _deny_hint(res, conf)
-    text = content.strip()
-    version = ""
-    first = text.split(None, 1)[0]
-    if first and (first[:1].lower() == "v" or first[:1].isdigit()) \
-            and any(ch.isdigit() for ch in first):
-        version = first
-        rest = text[len(first):].strip()
-        if not rest:
-            return "更新内容不能为空"
-        text = rest
-    store = getattr(plugin, "notice_store", None)
-    if store is None:
-        return "更新公告未装配（notice_store）"
-    notice = {
-        "version": version,
-        "content": text,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "pushed_at": None,
-        "pushed_ids": [],
-    }
-    store.write(notice)
-    pusher = getattr(plugin, "update_pusher", None)
-    if pusher is None:
-        return "公告已写入，但推送器未启用（DUDUDA_UPDATE_PUSH=0）"
-    try:
-        report = await pusher.push_pending()
-    except Exception as e:
-        logger.warning("Announce push failed: %s", e)
-        return "公告已写入，推送异常: %s" % e
-    return _announce_report_lines(report)
-
-
-async def cmd_announce_status_impl(plugin) -> str:
-    """查看当前公告状态（版本/内容/是否已推送/送达人数）。"""
-    store = getattr(plugin, "notice_store", None)
-    if store is None:
-        return "更新公告未装配（notice_store）"
-    notice = store.load()
-    if notice is None:
-        return "暂无更新公告"
-    return "\n".join([
-        f"版本: {notice.get('version') or '（无）'}",
-        f"内容: {notice.get('content')}",
-        f"创建: {notice.get('created_at')}",
-        f"推送: {notice.get('pushed_at') or '未推送'}",
-        f"已送达: {len(notice.get('pushed_ids') or [])} 人",
-    ])

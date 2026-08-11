@@ -25,8 +25,10 @@ class TestHealth:
         r = client.get("/health")
         assert r.status_code == 200
         data = r.json()
-        assert data["status"] == "ok"
         assert "services" in data
+        expected = ("ok" if all(v == "healthy" for v in data["services"].values())
+                    else "degraded")
+        assert data["status"] == expected
         assert "active_persona" in data
 
 class TestPersonas:

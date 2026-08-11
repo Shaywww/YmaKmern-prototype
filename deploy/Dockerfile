@@ -10,15 +10,11 @@ COPY pyproject.toml .
 COPY packages/ ./packages/
 COPY tests/ ./tests/
 
-RUN pip install --no-cache-dir \
-    fastapi uvicorn[standard] \
-    pydantic>=2.0 \
-    astrbot \
-    && echo "Dependencies installed"
+RUN pip install --no-cache-dir . astrbot
 
 EXPOSE 8000 6189
 
 ENV PYTHONUNBUFFERED=1
 ENV DUDUDA_ENV=production
 
-CMD ["python", "-c", "from packages.control_plane import run_server; run_server(host='0.0.0.0', port=8000)"]
+CMD ["python", "-m", "uvicorn", "dududa.control_plane.app:create_app", "--host", "0.0.0.0", "--port", "8000", "--factory"]

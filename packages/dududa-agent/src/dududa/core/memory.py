@@ -153,9 +153,11 @@ class MemoryRecord:
     def is_expired(self) -> bool:
         if self.ttl_seconds is None:
             return False
+        if self.ttl_seconds <= 0:
+            return True
         return (
             datetime.now(timezone.utc)
-            > self.created_at + __import__("datetime").timedelta(
+            >= self.created_at + __import__("datetime").timedelta(
                 seconds=self.ttl_seconds
             )
         )
