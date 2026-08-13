@@ -36,6 +36,7 @@ from dududa.application.dududa_utils import (
 )
 
 from dududa.application.dududa_log import get_logger as _get_logger
+from dududa.application.user_experience import make_support_id
 logger = _get_logger("dududa20")
 
 
@@ -599,7 +600,10 @@ class DududaCore:
             return reply or ""
         except Exception as e2:
             logger.exception("Fallback LLM also failed: %s", e2)
-            return "诶呀，短路了一下..."
+            support_id = make_support_id("llm", e2, trace_id)
+            return ("模型服务暂时没有响应，主线路和备用线路都已尝试。"
+                    "你可以稍后重试，或让我换一种更简单的方式回答。"
+                    f"\n错误编号：{support_id}")
 
     async def _call_vision(self, system, user_text, image_b64, mime,
                            run_id="", trace_id="", skip_render=False):

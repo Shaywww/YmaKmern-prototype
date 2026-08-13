@@ -6,10 +6,13 @@
 """
 import json as _json
 import logging
+from uuid import uuid4
 
 from dududa.safeguards.security import AuthorizationDecision
 from dududa.core.renderer import OCRenderer
 from dududa.core.group_policy import GROUP_MODES
+from dududa.core.memory import MemoryType, ScopeSelector
+from dududa.application.user_experience import MEMORY_MODES, make_support_id
 
 from dududa.application.dududa_log import get_logger as _get_logger
 logger = _get_logger("dududa20")
@@ -136,6 +139,204 @@ async def cmd_forget_impl(plugin, event) -> str:
     except Exception as e:
         logger.warning("Forget: %s", e)
         return "清除失败"
+
+
+def _ux(plugin):
+    store = getattr(plugin, "ux_store", None)
+    if store is None:
+        raise RuntimeError("用户体验设置尚未装配")
+    return store
+
+
+def _memory_records(plugin, event, limit=50):
+    scope = plugin._make_scope(event)
+    selector = ScopeSelector(
+        platform=scope.platform,
+        bot_id=scope.bot_id,
+        conversation_id=scope.conversation_id,
+        actor_id=scope.actor_id,
+    )
+    query = getattr(plugin.memory, "query_selector", None)
+    if query is None:
+        return ()
+    return query(selector, limit=limit)
+
+
+async def cmd_memory_impl(plugin, event, action="status", record_id=None) -> str:
+    """Self-service memory controls.  A user can only see/delete own scoped data."""
+    action = (action or "status").strip().lower()
+    aliases = {"开启": "active", "恢复": "active", "暂停": "paused",
+               "临时": "temporary", "查看": "list", "清除": "clear",
+               "状态": "status", "删除": "delete"}
+    action = aliases.get(action, action)
+    store = _ux(plugin)
+    if action in MEMORY_MODES:
+        store.set_memory_mode(event, action)
+        hints = {
+            "active": "记忆已开启：会读取并保存与你相关的记忆。",
+            "paused": "记忆已暂停：仍可读取已有记忆，但不再新增。",
+            "temporary": "已进入临时对话：不读取、也不保存记忆。",
+        }
+        return hints[action]
+    mode = store.memory_mode(event)
+    records = _memory_records(plugin, event)
+    if action == "status":
+        return (f"记忆模式: {mode} | 当前会话中你的记忆: {len(records)} 条\n"
+                "用法: /dududa_memory list|active|paused|temporary|delete <ID>|clear")
+    if action == "list":
+        if not records:
+            return f"记忆模式: {mode}\n当前会话还没有与你相关的可见记忆。"
+        lines = [f"记忆模式: {mode} | 最近 {min(len(records), 10)} 条："]
+        for record in records[:10]:
+            content = " ".join((record.content or "").split())[:100]
+            lines.append(f"- {record.record_id[:8]}  {content}")
+        lines.append("删除单条: /dududa_memory delete <前8位ID>")
+        return "\n".join(lines)
+    if action == "delete":
+        needle = (record_id or "").strip().lower()
+        if len(needle) < 6:
+            return "请提供列表中的记忆 ID，例如 /dududa_memory delete a1b2c3d4"
+        matches = [r for r in records if r.record_id.lower().startswith(needle)]
+        if len(matches) != 1:
+            return "未找到唯一匹配的记忆，请重新查看列表后再试。"
+        return "已删除 1 条记忆。" if plugin.memory.delete(matches[0].record_id) else "删除失败。"
+    if action == "clear":
+        ids = tuple(r.record_id for r in records)
+        delete_many = getattr(plugin.memory, "delete_many", None)
+        if delete_many is not None:
+            count = delete_many(ids)
+        else:
+            count = sum(1 for rid in ids if plugin.memory.delete(rid))
+        return f"已清除当前会话中与你相关的 {count} 条记忆。"
+    return "未知操作。用法: /dududa_memory list|active|paused|temporary|delete <ID>|clear"
+
+
+async def cmd_cancel_impl(plugin, event) -> str:
+    registry = getattr(plugin, "ux_tasks", None)
+    if registry is None:
+        return "当前没有可取消的任务。"
+    key = _ux(plugin).session_key(event)
+    active = registry.running(key)
+    if active is None:
+        return "当前没有正在处理的任务。"
+    active.task.cancel()
+    return f"已请求取消当前任务（阶段: {active.phase}）。"
+
+
+async def cmd_subscribe_impl(plugin, event, action="list", topic="更新") -> str:
+    action = (action or "list").strip().lower()
+    topic = (topic or "更新").strip()[:24]
+    store = _ux(plugin)
+    if action in ("add", "on", "订阅"):
+        topics = store.subscribe(event, topic)
+        return (f"已订阅「{topic}」。只有明确订阅的用户会收到消息。\n"
+                f"当前订阅: {', '.join(topics)}")
+    if action in ("remove", "off", "退订"):
+        topics = store.unsubscribe(event, topic)
+        return f"已退订「{topic}」。当前订阅: {', '.join(topics) if topics else '无'}"
+    if action in ("quiet", "免打扰"):
+        try:
+            value = store.set_quiet_hours(event, topic)
+            return f"免打扰时间已设置为 {value}。"
+        except ValueError:
+            return "格式错误。示例: /dududa_subscribe quiet 22:30-08:00"
+    value = store.get(store.key_for_event(event))
+    topics = value.get("subscriptions", [])
+    return (f"当前订阅: {', '.join(topics) if topics else '无'}\n"
+            f"免打扰: {value.get('quiet_hours')} | 每日最多 {value.get('daily_limit')} 条\n"
+            "用法: /dududa_subscribe add 更新 | remove 更新 | quiet 22:30-08:00")
+
+
+async def cmd_help_impl(plugin) -> str:
+    registry = getattr(plugin, "cap_registry", None)
+    capabilities = registry.list_enabled() if registry is not None else ()
+    available = []
+    unavailable = []
+    for capability in capabilities:
+        healthy = capability.is_healthy
+        provider = registry.get_provider(capability.capability_id)
+        if healthy and provider is not None:
+            try:
+                healthy = bool(provider.health())
+            except Exception:
+                healthy = False
+        (available if healthy else unavailable).append(capability.name)
+    lines = [
+        "我是嘟嘟哒，可以聊天、查资料、看图片和读取常见文件。",
+        "你可以试试：",
+        "- 帮我解释一下量子纠缠",
+        "- 总结这张图片/这个文件",
+        "- 查一下今天的天气或新闻",
+        f"当前可用能力（{len(available)}）: {', '.join(available[:12]) or '基础对话'}",
+    ]
+    if unavailable:
+        lines.append(f"暂不可用: {', '.join(unavailable[:8])}")
+    lines.extend([
+        "常用命令:",
+        "/dududa_memory — 查看和控制记忆",
+        "/dududa_subscribe — 自主管理订阅",
+        "/dududa_cancel — 取消正在处理的任务",
+        "/dududa_help — 查看这份动态帮助",
+        "请不要发送密码、Token、Cookie 等敏感信息。",
+        "主动订阅后会保存必要的会话路由；退订后不再发送。",
+    ])
+    return "\n".join(lines)
+
+
+async def cmd_broadcast_prepare_impl(plugin, event, topic=None, message=None) -> str:
+    topic = (topic or "").strip()[:24]
+    message = (message or "").strip()
+    if not topic or not message:
+        return "用法: /dududa_broadcast <主题> <消息正文>"
+    res, conf = plugin._authorize_manage(
+        event, resource="subscriber_broadcast", payload={"topic": topic})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    recipients = _ux(plugin).eligible_subscribers(topic)
+    broadcast_id = uuid4().hex[:8]
+    pending = getattr(plugin, "_pending_broadcasts", None)
+    if pending is None:
+        plugin._pending_broadcasts = pending = {}
+    pending[broadcast_id] = {
+        "topic": topic, "message": message[:1500],
+        "recipients": recipients, "created": __import__("time").time(),
+    }
+    return (f"推送预览 [{topic}]：\n{message[:500]}\n\n"
+            f"符合订阅、免打扰和频率限制的接收者: {len(recipients)}\n"
+            f"确认发送: /dududa_broadcast_confirm {broadcast_id}")
+
+
+async def cmd_broadcast_confirm_impl(plugin, event, broadcast_id=None) -> str:
+    broadcast_id = (broadcast_id or "").strip()
+    res, conf = plugin._authorize_manage(
+        event, resource="subscriber_broadcast", payload={"id": broadcast_id})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    pending = getattr(plugin, "_pending_broadcasts", {})
+    item = pending.pop(broadcast_id, None)
+    if not item:
+        return "推送预览不存在或已失效。"
+    now = __import__("time").time()
+    if now - float(item.get("created", 0)) > 600:
+        return "推送预览已过期，请重新生成。"
+    sender = getattr(plugin, "_send_subscription_message", None)
+    if sender is None:
+        return f"发送失败，错误编号 {make_support_id('send', 'adapter_missing')}"
+    sent = 0
+    failed = 0
+    for key, origin in item["recipients"]:
+        # Preview recipients are only a snapshot.  Re-check immediately before
+        # delivery so an unsubscribe or quiet-hour transition always wins.
+        if not _ux(plugin).eligible(key, item["topic"]):
+            continue
+        try:
+            await sender(origin, f"【嘟嘟哒·{item['topic']}】\n{item['message']}\n\n退订: /dududa_subscribe remove {item['topic']}")
+            _ux(plugin).record_delivery(key)
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            logger.warning("Opt-in broadcast failed (%s): %s", key[:8], exc)
+    return f"推送完成：成功 {sent}，失败 {failed}。"
 
 
 # ---- 群策略（文档 2.5.2 / 2.5.4）：mode / reply_rate / meme_rate ----

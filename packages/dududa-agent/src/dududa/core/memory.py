@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from contextvars import ContextVar, Token
+
 import json
 import logging
 import os
@@ -25,6 +27,24 @@ from .trace_recorder import trace_recorder
 
 
 _logger = logging.getLogger("dududa20.memory")
+
+_memory_access_mode: ContextVar[str] = ContextVar(
+    "dududa_memory_access_mode", default="active")
+
+
+def set_memory_access_mode(mode: str) -> Token:
+    """Set per-async-task memory access mode and return a reset token."""
+    if mode not in ("active", "paused", "temporary"):
+        raise ValueError(f"invalid memory access mode: {mode}")
+    return _memory_access_mode.set(mode)
+
+
+def reset_memory_access_mode(token: Token) -> None:
+    _memory_access_mode.reset(token)
+
+
+def current_memory_access_mode() -> str:
+    return _memory_access_mode.get()
 
 
 class MemoryType(str, Enum):
@@ -324,12 +344,16 @@ class InMemoryRepository(MemoryRepository):
         self._records: dict[str, MemoryRecord] = {}
 
     def write(self, record: MemoryRecord) -> str:
+        if current_memory_access_mode() in ("paused", "temporary"):
+            return record.record_id
         self._records[record.record_id] = record
         return record.record_id
 
     def query(
         self, scope: MemoryScope, limit: int = 20
     ) -> tuple[MemoryRecord, ...]:
+        if current_memory_access_mode() == "temporary":
+            return ()
         results: list[MemoryRecord] = []
         for record in self._records.values():
             if record.is_expired:
@@ -347,6 +371,8 @@ class InMemoryRepository(MemoryRepository):
         跨类型检索（如 episodic + short_term）必须显式使用 Selector，
         不允许走宽松全局匹配。
         """
+        if current_memory_access_mode() == "temporary":
+            return ()
         results: list[MemoryRecord] = []
         for record in self._records.values():
             if record.is_expired:
@@ -366,6 +392,8 @@ class InMemoryRepository(MemoryRepository):
         - PRIVATE 仅当 viewer 与记录所属 actor 一致时召回；
         - 其余按 Scope 精确匹配（fail-closed，不做宽松 fallback）。
         """
+        if current_memory_access_mode() == "temporary":
+            return ()
         results: list[MemoryRecord] = []
         for record in self._records.values():
             if record.is_expired:
@@ -387,6 +415,8 @@ class InMemoryRepository(MemoryRepository):
     def find_similar(
         self, record: MemoryRecord, threshold: float = 0.8
     ) -> Optional[MemoryRecord]:
+        if current_memory_access_mode() == "temporary":
+            return None
         for existing in self._records.values():
             if existing.scope.is_subset_of(record.scope):
                 similarity = self._text_similarity(
@@ -461,9 +491,26 @@ class JSONMemoryRepository(InMemoryRepository):
 
     def write(self, record: MemoryRecord) -> str:
         self._validate_scope(record.scope)
+        if current_memory_access_mode() in ("paused", "temporary"):
+            return record.record_id
         rid = super().write(record)
         self._save()
         return rid
+
+    def delete(self, record_id: str) -> bool:
+        deleted = super().delete(record_id)
+        if deleted:
+            self._save()
+        return deleted
+
+    def delete_many(self, record_ids: tuple[str, ...]) -> int:
+        deleted = 0
+        for record_id in record_ids:
+            if self._records.pop(record_id, None) is not None:
+                deleted += 1
+        if deleted:
+            self._save()
+        return deleted
 
     # -- 持久化 --
 

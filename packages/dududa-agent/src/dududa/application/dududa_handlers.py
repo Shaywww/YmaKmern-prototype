@@ -4,6 +4,7 @@
 事件对象仍由 AstrBot 平台传入（窄接口访问），所有业务逻辑在此层完成；
 Main 只做事件适配与结果发送。
 """
+import asyncio
 import logging
 import random
 import re
@@ -21,6 +22,8 @@ from dududa.application.dududa_utils import (
 )
 
 from dududa.application.dududa_log import get_logger as _get_logger
+from dududa.application.user_experience import make_support_id
+from dududa.core.memory import set_memory_access_mode, reset_memory_access_mode
 logger = _get_logger("dududa20")
 
 _REACT_EMOJIS = ["(\u30b7\u00b0\u3002\u00b0)\uff83", "(\u3002>\u3002<\u3002)",
@@ -268,7 +271,9 @@ async def handle_text(plugin, event, run_id="", trace_id="") -> str:
         return reply or ""
     except Exception as e:
         logger.exception("Text error: %s", e)
-        return "诶呀，短路了一下..."
+        support_id = make_support_id("text", e, trace_id)
+        return ("这次回答没有生成完整。你可以直接重试，或换一种问法。"
+                f"\n错误编号：{support_id}")
 
 
 
@@ -451,6 +456,20 @@ async def run_message_flow(plugin, event) -> str | None:
     except Exception: pass
     if not msg_id: msg_id = str(id(event))
     if _dedupe_message(plugin, event, msg_id): return None
+    ux_store = getattr(plugin, "ux_store", None)
+    ux_tasks = getattr(plugin, "ux_tasks", None)
+    task = asyncio.current_task()
+    task_key = ux_store.session_key(event) if ux_store is not None else ""
+    if ux_tasks is not None and task is not None:
+        if not ux_tasks.register(task_key, task):
+            active = ux_tasks.running(task_key)
+            phase = active.phase if active is not None else "处理中"
+            return f"上一条消息还在处理（{phase}）。需要停止可发送 /dududa_cancel。"
+    memory_token = None
+    if ux_store is not None:
+        memory_token = set_memory_access_mode(ux_store.memory_mode(event))
+    progress_task = asyncio.create_task(
+        _send_delayed_progress(plugin, event, task_key))
     _pending = getattr(plugin, "_pending_deliveries", None)
     if _pending is None:
         plugin._pending_deliveries = _pending = {}
@@ -473,17 +492,74 @@ async def run_message_flow(plugin, event) -> str | None:
         reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
         reply = _strip_tool_leak(reply)
+        if reply and ux_store is not None and ux_store.should_welcome(event):
+            ux_store.mark_welcomed(event)
+            reply = _welcome_text() + "\n\n" + reply
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               reply=(reply or "")[:200])
         return reply
+    except asyncio.CancelledError:
+        trace_recorder.record(event="flow_cancelled", run_id=run_id,
+                              trace_id=trace_id)
+        return "当前任务已取消。你可以换一种问法后重新发送。"
     except Exception as e:
         logger.exception("Flow error | run_id=%s trace_id=%s: %s",
                          run_id, trace_id, e)
         trace_recorder.record(event="flow_error", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               error=str(e)[:300])
-        return None
+        support_id = make_support_id("flow", e, trace_id)
+        return ("这次处理没有完成。你可以直接重试，或换一种方式提问。"
+                f"\n错误编号：{support_id}")
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        if memory_token is not None:
+            reset_memory_access_mode(memory_token)
+        if ux_tasks is not None and task is not None:
+            ux_tasks.finish(task_key, task)
+
+
+def _welcome_text() -> str:
+    return (
+        "你好，我是嘟嘟哒。第一次见面，给你一份极简说明：\n"
+        "我可以聊天、查资料、理解图片和常见文件。\n"
+        "发送 /dududa_help 查看实时可用能力；"
+        "/dududa_memory 管理记忆；/dududa_cancel 取消慢任务。\n"
+        "我不会因为你添加了机器人就自动推送消息，订阅需要你主动开启。"
+    )
+
+
+async def _send_delayed_progress(plugin, event, task_key: str) -> None:
+    try:
+        await asyncio.sleep(float(getattr(plugin, "progress_delay", 3.0)))
+        registry = getattr(plugin, "ux_tasks", None)
+        active = registry.running(task_key) if registry is not None else None
+        phase = active.phase if active is not None else "compose"
+        labels = {
+            "preparing": "正在理解你的问题",
+            "perception": "正在分析需求",
+            "tools": "正在查询并核对信息",
+            "compose": "正在整理答案",
+        }
+        sender = getattr(plugin, "_send_progress", None)
+        if sender is not None:
+            await sender(event, f"{labels.get(phase, phase)}，请稍等…（可发送 /dududa_cancel 取消）")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("Progress notification skipped: %s", exc)
+
+
+def _mark_task_phase(plugin, event, phase: str) -> None:
+    store = getattr(plugin, "ux_store", None)
+    registry = getattr(plugin, "ux_tasks", None)
+    if store is not None and registry is not None:
+        registry.mark_phase(store.session_key(event), phase)
 
 
 async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
@@ -541,6 +617,7 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
                              social_decision=action,
                              decision_reason=reason)
     state = state.transition(RuntimePhase.VALIDATED)
+    _mark_task_phase(plugin, event, "perception")
     perception = await _perceive_with_model(plugin, event)
     state = state.transition(RuntimePhase.PERCEIVED, perception=perception)
     try:
@@ -572,6 +649,8 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
                             run_id, trace_id, reply[:80])
                 return reply
             return None
+    _mark_task_phase(plugin, event,
+                     "tools" if getattr(perception, "needs_tools", False) else "compose")
     reply = await handle_text(plugin, event, run_id=run_id, trace_id=trace_id)
     logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
                 run_id, trace_id, (reply or "")[:80])
