@@ -141,6 +141,13 @@ class TestPersonaRegistry:
 
 
 class TestEmojiStrategy:
+    def test_default_persona_uses_text_faces_only(self):
+        p = PRESETS["dududa_default"]
+        assert p.tone.emoji_style == EmojiStyle.TEXT_ONLY
+        prompt = p.render_system_prompt()
+        assert "only kaomoji" in prompt
+        assert "no emoji" in prompt
+
     def test_no_emoji_when_none_style(self):
         p = PRESETS["dududa_serious"]
         es = EmojiStrategy(p)

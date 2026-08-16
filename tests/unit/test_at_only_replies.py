@@ -64,6 +64,17 @@ def test_strip_internal_tool_status_placeholder():
         "正常回复\n（工具状态：: None）") == "正常回复"
 
 
+def test_reply_style_removes_color_emoji_and_keeps_kaomoji():
+    assert h._normalize_reply_style(
+        "嘿嘿～查到啦 😋 (≧▽≦) ^^~") == "嘿嘿～查到啦 (≧▽≦) ^^~"
+
+
+def test_reply_style_preserves_factual_symbols():
+    assert h._normalize_reply_style(
+        "气温 24℃，评分 4.7，距离约 2 km") == (
+            "气温 24℃，评分 4.7，距离约 2 km")
+
+
 def test_is_at_only_true_for_bare_at():
     assert h._is_at_only(_FakeEvent(), [_FakeComp("At")]) is True
 

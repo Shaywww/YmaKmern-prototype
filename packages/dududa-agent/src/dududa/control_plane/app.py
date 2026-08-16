@@ -66,7 +66,7 @@ def _dict_to_tone(d: dict) -> ToneConfig:
     return ToneConfig(
         formality=FormalityLevel(d.get("formality", "casual")),
         playfulness=PlayfulnessLevel(d.get("playfulness", "playful")),
-        emoji_style=EmojiStyle(d.get("emoji_style", "moderate")),
+        emoji_style=EmojiStyle(d.get("emoji_style", "text_only")),
         max_emojis_per_message=int(d.get("max_emojis_per_message", 3)),
         use_kaomoji=bool(d.get("use_kaomoji", True)),
         use_stickers=bool(d.get("use_stickers", False)),
