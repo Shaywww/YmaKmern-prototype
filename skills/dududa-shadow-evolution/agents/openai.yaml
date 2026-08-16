@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dududa Shadow Evolution"
+  short_description: "Build reviewable skills from redacted Dududa failures"
+  default_prompt: "Use $dududa-shadow-evolution to analyze repeated redacted failures and prepare a safe, reviewable Skill candidate."

@@ -10,6 +10,7 @@ def client(tmp_path):
     """CP-P0（ADR-0001）：所有请求带管理 token；审计落 tmp。"""
     os.environ["DUDUDA_CP_TOKEN"] = "cp-test-token"
     os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
+    os.environ["DUDUDA_EVOLUTION_DIR"] = str(tmp_path / "evolution")
     # MCP access 隔离：指向不存在的路径 -> legacy allow（生产 default deny 不干扰测试）
     os.environ.setdefault("DUDUDA_MCP_ACCESS", "/tmp/dududa-cp-test-access-absent.json")
     app = create_app()
@@ -19,6 +20,7 @@ def client(tmp_path):
     os.environ.pop("DUDUDA_MCP_ACCESS", None)
     os.environ.pop("DUDUDA_CP_TOKEN", None)
     os.environ.pop("DUDUDA_CP_AUDIT", None)
+    os.environ.pop("DUDUDA_EVOLUTION_DIR", None)
 
 class TestHealth:
     def test_health_ok(self, client):
@@ -146,6 +148,36 @@ class TestRuntime:
         assert "active_persona" in data
         assert data["persona_count"] >= 4
         assert data["mcp_services"] == 12
+        assert data["evolution"]["mode"] == "shadow"
+        assert data["evolution"]["auto_activate"] is False
+
+
+class TestShadowEvolution:
+    def test_owner_can_collect_analyze_and_review_without_activation(self, client):
+        for summary in ("天气地点错误一", "天气地点错误二", "天气地点错误三"):
+            r = client.post("/evolution/experiences", json={"summary": summary})
+            assert r.status_code == 200
+        r = client.post("/evolution/analyze")
+        assert r.status_code == 200
+        assert r.json()["created_or_updated"] == 1
+        candidate = client.get("/evolution/candidates").json()["candidates"][0]
+        assert candidate["activation"] == "disabled"
+        r = client.post(
+            f"/evolution/candidates/{candidate['candidate_id']}/decision",
+            json={"decision": "approve", "note": "值得实现"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "approved_for_implementation"
+        assert r.json()["activation"] == "disabled"
+
+    def test_non_owner_cannot_write(self, client):
+        r = client.post("/evolution/experiences", json={"summary": "测试"},
+                        headers={"X-CP-Role": "normal", "X-CP-Operator": "u1"})
+        assert r.status_code == 403
+        assert client.get("/evolution/experiences", headers={
+            "X-CP-Role": "normal", "X-CP-Operator": "u1"}).status_code == 403
+
+    def test_no_activation_endpoint_exists(self, client):
+        assert client.post("/evolution/candidates/anything/activate").status_code == 404
 
 class TestDashboard:
     def test_dashboard_html(self, client):

@@ -276,11 +276,40 @@ async def cmd_help_impl(plugin) -> str:
         "/dududa_memory — 查看和控制记忆",
         "/dududa_subscribe — 自主管理订阅",
         "/dududa_cancel — 取消正在处理的任务",
+        "/dududa_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
         "/dududa_help — 查看这份动态帮助",
         "请不要发送密码、Token、Cookie 等敏感信息。",
         "主动订阅后会保存必要的会话路由；退订后不再发送。",
     ])
     return "\n".join(lines)
+
+
+async def cmd_feedback_impl(plugin, summary: str = "") -> str:
+    """用户主动提交改进线索；不保存身份、会话或原始附件。"""
+    summary = (summary or "").strip()
+    if not summary:
+        return ("用法: /dududa_feedback <问题说明>\n"
+                "反馈会先脱敏，只进入人工审核队列，不会自动修改或部署机器人。")
+    evolution = getattr(plugin, "evolution", None)
+    if evolution is None:
+        return "反馈队列当前不可用，请稍后再试。"
+    try:
+        item = evolution.add_experience(
+            summary, source="user_feedback", signal_type="explicit_feedback")
+    except ValueError:
+        return "请补充具体的问题说明后再提交。"
+    except Exception as exc:
+        logger.warning("Shadow feedback unavailable: %s", exc)
+        return "反馈队列当前不可用，请稍后再试。"
+    if item.get("duplicate"):
+        return (f"这条问题已经记录过啦（编号 {item['experience_id']}）。"
+                "它仍只在人工审核队列中。")
+    try:
+        evolution.analyze()
+    except Exception as exc:
+        logger.warning("Shadow candidate analysis deferred: %s", exc)
+    return (f"已记录脱敏改进反馈（编号 {item['experience_id']}）。"
+            "它只会用于生成待审核候选，不会自动修改、启用或部署机器人。")
 
 
 async def cmd_broadcast_prepare_impl(plugin, event, topic=None, message=None) -> str:

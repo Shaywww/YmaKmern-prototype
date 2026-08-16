@@ -19,6 +19,7 @@ from ..mcp import access as mcp_access
 from ..core.memory import (
     JSONMemoryRepository, ScopeSelector, SensitivityLevel, MemoryType,
 )
+from ..evolution import ShadowEvolution
 from .security import (
     AuditLogger, cp_auth_middleware, get_operator, redact_value,
     require_write, scope_filter_events,
@@ -113,6 +114,20 @@ class PlaygroundRun(BaseModel):
     actor_id: str = "playground_user"
 
 
+class EvolutionExperienceCreate(BaseModel):
+    summary: str
+    signal_type: str = "correction"
+    category: str = ""
+    severity: str = "medium"
+    run_id: str = ""
+    trace_id: str = ""
+
+
+class EvolutionDecision(BaseModel):
+    decision: str
+    note: str = ""
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -141,6 +156,8 @@ def create_app() -> FastAPI:
     app.state.trace_dir = Path(
         os.environ.get("DUDUDA_CP_TRACE_DIR") or str(
             Path(__file__).resolve().parents[2] / "data" / "traces"))
+    app.state.evolution = ShadowEvolution(
+        os.environ.get("DUDUDA_EVOLUTION_DIR"), app.state.redactor)
     app.state.playground = _PlaygroundSandbox()
     app.state.eval_dir = Path(
         os.environ.get("DUDUDA_EVAL_DIR") or str(
@@ -697,7 +714,64 @@ def _register_routes(app: FastAPI):
 
     @app.get('/runtime/state')
     async def runtime_state():
-        return {'active_persona':app.state.registry.active_id,'persona_count':len(app.state.registry.list_all()),'group_overrides':len(app.state.registry._group_overrides),'user_overrides':len(app.state.registry._user_overrides),'mcp_services':len(app.state.services),'trace_events':len(app.state.trace_sink.events)}
+        return {'active_persona':app.state.registry.active_id,'persona_count':len(app.state.registry.list_all()),'group_overrides':len(app.state.registry._group_overrides),'user_overrides':len(app.state.registry._user_overrides),'mcp_services':len(app.state.services),'trace_events':len(app.state.trace_sink.events),'evolution':app.state.evolution.status()}
+
+    # ---------- 影子进化：收集 / 聚类 / 审批，刻意没有激活和部署端点 ----------
+    @app.get('/evolution/status')
+    async def evolution_status():
+        return app.state.evolution.status()
+
+    @app.get('/evolution/experiences')
+    async def evolution_experiences(request: Request,
+                                    limit: int = Query(50, ge=1, le=200)):
+        require_write(request, app)
+        items = app.state.evolution.list_experiences(limit)
+        return {'experiences': items, 'count': len(items)}
+
+    @app.post('/evolution/experiences')
+    async def evolution_add(body: EvolutionExperienceCreate, request: Request):
+        require_write(request, app)
+        try:
+            item = app.state.evolution.add_experience(
+                body.summary, source='operator', signal_type=body.signal_type,
+                category=body.category, severity=body.severity,
+                run_id=body.run_id, trace_id=body.trace_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return item
+
+    @app.post('/evolution/analyze')
+    async def evolution_analyze(request: Request):
+        require_write(request, app)
+        ingested = app.state.evolution.scan_trace_directory(app.state.trace_dir)
+        result = app.state.evolution.analyze()
+        return {'trace_failures_ingested': ingested, **result}
+
+    @app.get('/evolution/candidates')
+    async def evolution_candidates(request: Request):
+        require_write(request, app)
+        items = app.state.evolution.list_candidates()
+        return {'candidates': items, 'count': len(items),
+                'activation': 'disabled', 'deployment': 'disabled'}
+
+    @app.get('/evolution/candidates/{candidate_id}')
+    async def evolution_candidate(candidate_id: str, request: Request):
+        require_write(request, app)
+        item = app.state.evolution.get_candidate(candidate_id)
+        if item is None:
+            raise HTTPException(404, 'candidate not found')
+        return item
+
+    @app.post('/evolution/candidates/{candidate_id}/decision')
+    async def evolution_decide(candidate_id: str, body: EvolutionDecision,
+                               request: Request):
+        require_write(request, app)
+        try:
+            return app.state.evolution.decide(candidate_id, body.decision, body.note)
+        except KeyError:
+            raise HTTPException(404, 'candidate not found')
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get('/')
     async def dashboard():
@@ -776,6 +850,10 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <div class="card">
 <h2>成本周报</h2><div id="cost">加载中...</div>
 </div>
+<div class="card">
+<h2>影子进化</h2><div id="evo">加载中...</div>
+<button class="btn btn-p" onclick="analyzeE()" style="margin-top:.5rem">扫描并生成候选</button>
+</div>
 <div class="card" style="grid-column:span 2">
 <h2>MCP 查询</h2>
 <div class="fr"><div><label>服务</label><select id="qs"></select></div><div><label>操作</label><select id="qa"><option>search</option></select></div><div><label>关键词</label><input id="qk"></div></div>
@@ -787,7 +865,8 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <footer>Dududa 2.0 Agent 运行状态 - v0.1.0</footer>
 <script>
 const A="";let TK=localStorage.getItem("cp_token")||"";function showLogin(){document.getElementById("lg").style.display="flex"}function hideLogin(){document.getElementById("lg").style.display="none"}async function login(){const t=document.getElementById("lgt").value.trim();if(!t)return alert("请输入 Token");TK=t;localStorage.setItem("cp_token",t);hideLogin();rf()}async function api(u,o){o=o||{};o.headers=Object.assign({},o.headers||{});if(TK)o.headers["Authorization"]="Bearer "+TK;const r=await fetch(A+u,o);if(r.status===401){showLogin();throw new Error("需要 Token")}if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()}
-async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th;const tw=await api("/metrics/tools");let toh='<div class="row"><span>窗口调用</span><strong>'+tw.window_calls+'</strong></div><div class="row"><span>失败率</span><strong>'+(tw.window_fail_rate*100).toFixed(1)+'%</strong></div>';if(!tw.by_tool.length)toh="<em>暂无工具调用</em>";for(const t of tw.by_tool.slice(0,6)){toh+='<div class="row"><span>'+escapeHtml(t.capability_id)+'</span><span>'+t.calls+' 次 · 失败 '+(t.fail_rate*100).toFixed(1)+'%</span></div>'}document.getElementById("tool").innerHTML=toh;const cw=await api("/metrics/costs");let coh='<div class="row"><span>窗口调用</span><strong>'+cw.window_events+'</strong></div><div class="row"><span>估算成本</span><strong>¥'+cw.est_cost_yuan.toFixed(4)+'</strong></div>';if(!cw.weekly.length)coh+="<em>暂无模型调用</em>";for(const w of cw.weekly.slice(0,6)){coh+='<div class="row"><span>'+escapeHtml(w.week)+'</span><span>'+w.calls+' 次 · ¥'+w.est_cost_yuan.toFixed(4)+'</span></div>'}document.getElementById("cost").innerHTML=coh}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}
+async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th;const tw=await api("/metrics/tools");let toh='<div class="row"><span>窗口调用</span><strong>'+tw.window_calls+'</strong></div><div class="row"><span>失败率</span><strong>'+(tw.window_fail_rate*100).toFixed(1)+'%</strong></div>';if(!tw.by_tool.length)toh="<em>暂无工具调用</em>";for(const t of tw.by_tool.slice(0,6)){toh+='<div class="row"><span>'+escapeHtml(t.capability_id)+'</span><span>'+t.calls+' 次 · 失败 '+(t.fail_rate*100).toFixed(1)+'%</span></div>'}document.getElementById("tool").innerHTML=toh;const cw=await api("/metrics/costs");let coh='<div class="row"><span>窗口调用</span><strong>'+cw.window_events+'</strong></div><div class="row"><span>估算成本</span><strong>¥'+cw.est_cost_yuan.toFixed(4)+'</strong></div>';if(!cw.weekly.length)coh+="<em>暂无模型调用</em>";for(const w of cw.weekly.slice(0,6)){coh+='<div class="row"><span>'+escapeHtml(w.week)+'</span><span>'+w.calls+' 次 · ¥'+w.est_cost_yuan.toFixed(4)+'</span></div>'}document.getElementById("cost").innerHTML=coh;const ev=await api("/evolution/status");document.getElementById("evo").innerHTML='<div class="row"><span>模式</span><strong>'+ev.mode+'</strong></div><div class="row"><span>脱敏经验</span><strong>'+ev.experience_count+'</strong></div><div class="row"><span>待审候选</span><strong>'+ev.candidate_count+'</strong></div><div class="row"><span>自动生效 / 部署</span><strong>关闭 / 关闭</strong></div>'}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}
+async function analyzeE(){try{const r=await api("/evolution/analyze",{method:"POST"});alert("新增失败经验 "+r.trace_failures_ingested+" 条，候选更新 "+r.created_or_updated+" 个。候选不会自动生效或部署。");rf()}catch(e){alert(e.message)}}
 function showForm(){document.getElementById("pf").style.display="block"}
 function hideForm(){document.getElementById("pf").style.display="none"}
 async function createP(){const id=document.getElementById("nid").value,nm=document.getElementById("nnm").value,dc=document.getElementById("ndc").value;if(!id)return alert("Need persona_id");try{await api("/personas",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({persona_id:id,name:nm,display_name:nm,description:dc})});hideForm();rf()}catch(e){alert(e.message)}}
