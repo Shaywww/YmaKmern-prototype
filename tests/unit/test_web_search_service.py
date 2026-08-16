@@ -13,6 +13,9 @@ class _FakeResp:
     def raise_for_status(self):
         pass
 
+    def json(self):
+        raise AssertionError("RSS response is not JSON")
+
 
 class _FakeClient:
     def __init__(self, *args, **kwargs):
@@ -47,6 +50,39 @@ class _IrrelevantClient(_FakeClient):
 <description>兰州旅游景点介绍</description></item>
 </channel></rss>"""
         return _FakeResp(rss)
+
+
+class _HostedResp(_FakeResp):
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        return self._data
+
+
+class _HostedClient(_FakeClient):
+    async def post(self, url, json=None, headers=None):
+        self._seen.update(url=url, json=json, headers=headers)
+        return _HostedResp({
+            "status": "completed",
+            "output": [
+                {"type": "reasoning", "content": [{"text": "不要泄漏我"}]},
+                {"type": "web_search_call", "status": "completed",
+                 "action": {"type": "open_page",
+                            "url": "https://www.hilton.com.cn/hotel#ws_call_id=x"}},
+                {"type": "message", "phase": "commentary",
+                 "content": [{"text": "正在搜索"}]},
+                {"type": "message", "phase": "final_answer",
+                 "content": [{"text": "兰州盛达希尔顿酒店位于兰州市城关区。",
+                              "annotations": []}]},
+            ],
+        })
+
+
+@pytest.fixture(autouse=True)
+def _clean_hosted_search_env(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DUDUDA_DEEPSEEK_HOSTED_SEARCH", raising=False)
 
 
 class TestStripHtml:
@@ -98,6 +134,43 @@ class TestWebSearchService:
         results = await svc._fetch_live(
             q="兰州盛达希尔顿酒店怎么样", max_results=5)
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_deepseek_hosted_search_is_primary(self, monkeypatch):
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr(ws.httpx, "AsyncClient", _HostedClient)
+        svc = ws.WebSearchService()
+        results = await svc._fetch_live(
+            q="兰州盛达希尔顿酒店怎么样", max_results=5)
+        assert results[0]["title"] == "DeepSeek 联网检索摘要"
+        assert "城关区" in results[0]["snippet"]
+        assert results[0]["link"] == "https://www.hilton.com.cn/hotel"
+        assert "正在搜索" not in results[0]["snippet"]
+        assert "不要泄漏我" not in results[0]["snippet"]
+
+    @pytest.mark.asyncio
+    async def test_hosted_search_without_sources_falls_back(self, monkeypatch):
+        class NoSourceHosted(_HostedClient):
+            async def post(self, url, json=None, headers=None):
+                return _HostedResp({
+                    "status": "completed",
+                    "output": [{
+                        "type": "message", "phase": "final_answer",
+                        "content": [{"text": "兰州盛达希尔顿酒店很好。"}],
+                    }],
+                })
+
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr(ws.httpx, "AsyncClient", NoSourceHosted)
+        svc = ws.WebSearchService()
+        results = await svc._fetch_live(q="兰州盛达希尔顿酒店", max_results=5)
+        assert results == []
+
+    def test_source_url_removes_tracking_fragment(self):
+        assert ws._clean_source_url(
+            "https://example.com/a?q=1#ws_call_id=abc") == (
+                "https://example.com/a?q=1")
+        assert ws._clean_source_url("file:///etc/passwd") == ""
 
     @pytest.mark.asyncio
     async def test_search_via_query_uses_cache_key(self, monkeypatch):
