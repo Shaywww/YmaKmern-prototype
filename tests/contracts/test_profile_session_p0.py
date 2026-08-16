@@ -71,6 +71,9 @@ class TestExtractSignals:
         from dududa.core.profile import extract_location
         assert extract_location("我住在东区") == "东区"
         assert "临泽县" in extract_location("我家在甘肃临泽县")
+        assert extract_location("我现在在临泽县，29号回兰州") == "临泽县"
+        assert extract_location("我目前在甘肃临泽县").endswith("临泽县")
+        assert extract_location("我现在在学习高等数学") == ""
         assert extract_location("我是甘肃人") == "甘肃"
         assert extract_location("今天天气怎么样") == ""
 

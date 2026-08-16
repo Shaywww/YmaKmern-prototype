@@ -44,9 +44,11 @@ class TestWeatherService:
     async def test_mock_mode(self, monkeypatch):
         svc = WeatherService()
         monkeypatch.setattr(svc.config, "mock_mode", True)
-        r = await svc.search(city="合肥")
+        r = await svc.search(city="临泽县")
         assert r.success
-        assert r.data["city"] == "合肥"
+        assert r.data["city"] == "临泽县"
+        assert r.data["query_city"] == "临泽县"
+        assert "observation_area" in r.data
         assert "temp_c" in r.data
 
 
@@ -105,7 +107,18 @@ class TestProdEnrichArgs:
 
     def test_weather_default_city(self):
         plan = self._enrich("今天天气怎么样", "mcp.weather")
-        assert plan.steps[0].arguments["q"] == "合肥"
+        assert plan.steps[0].arguments["q"] == ""
+
+    def test_weather_result_keeps_query_location_distinct_from_station(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        text = _ProdOrchestrator._format_tool_data({
+            "city": "临泽县", "query_city": "临泽县",
+            "observation_area": "Liaochuan", "region": "Gansu",
+            "temp_c": "16", "feels_like_c": "15", "desc": "Clear",
+            "humidity": "40", "wind_kph": "8", "forecast_3d": [],
+        })
+        assert "查询地点: 临泽县" in text
+        assert "仅数据来源，不是用户地点" in text
 
     def test_news_topic_extraction(self):
         plan = self._enrich("科技方面有什么新闻", "mcp.news")

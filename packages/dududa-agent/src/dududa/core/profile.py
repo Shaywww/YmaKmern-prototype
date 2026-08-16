@@ -41,7 +41,9 @@ _PREF_RE = re.compile(
 _PREF_BAD = {"你", "它", "这", "那", "我", "他", "她", "天气", "吃", "玩",
              "吗", "呀", "吧", "啊", "呢", "哦", "这样", "那样"}
 _LOC_SUFFIX = r"(?:省|市|县|区|镇|乡|州|盟)"
-_LOC_PREFIX_RE = re.compile(r"(?:我住在|我家在|住在|家住|家在)")
+_LOC_PREFIX_RE = re.compile(
+    r"(?:我现在在|我目前在|我当前在|我人在|我这几天在|我住在|我家在|住在|家住|家在)"
+)
 _LOC_REN_RE = re.compile(
     r"(?:我是|来自)\s*([一-龥]{2,6}?" + _LOC_SUFFIX + r"?人)"
 )
@@ -58,7 +60,8 @@ def _strip_tail_particles(text: str) -> str:
 def extract_location(text: str) -> str:
     """从消息提取用户所在地（带行政区划后缀才认，防误判）；无匹配返回空。
 
-    「我家在甘肃临泽县」-> 临泽县（取最具体一级）；「我是甘肃人」-> 甘肃。
+    「我现在在临泽县」/「我家在甘肃临泽县」-> 临泽县（取最具体一级）；
+    「我是甘肃人」-> 甘肃。
     """
     if not text:
         return ""

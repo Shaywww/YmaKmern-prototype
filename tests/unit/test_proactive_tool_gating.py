@@ -263,7 +263,7 @@ class TestWeatherCityGuard:
 
     def test_llm_guessed_city_overridden_to_default(self):
         args = self._plan("今天天气怎么样", {"city": "长庆镇", "action": "search"})
-        assert args.get("q") == "合肥"
+        assert args.get("q") == ""
         assert "city" not in args
 
     def test_llm_mentioned_city_kept(self):
@@ -276,7 +276,16 @@ class TestWeatherCityGuard:
 
     def test_no_city_gets_default(self):
         args = self._plan("今天天气怎么样", {"action": "search"})
-        assert args.get("q") == "合肥"
+        assert args.get("q") == ""
+
+    def test_rule_plan_without_location_asks_instead_of_guessing(self):
+        orch, _plugin, reg = _make_orchestrator()
+        plan = orch._plan(
+            _state(orch, "明天天气怎么样"),
+            reg.filter_candidates(permissions=(), max_count=24), 4, ())
+        assert plan is not None
+        assert plan.rationale == "NeedsWeatherLocation"
+        assert plan.steps == ()
 
     def test_empty_web_search_query_is_filled_from_intent(self):
         orch, _plugin, reg = _make_orchestrator()
@@ -305,7 +314,7 @@ class TestWeatherCityGuard:
         assert plan is not None
         assert plan.steps[0].arguments.get("q") == "临泽县"
         args = self._plan("今天天气怎么样", {"action": "search"})
-        assert args.get("q") == "合肥"  # 无画像时仍默认合肥
+        assert args.get("q") == ""  # 无画像时不猜城市
 
     @pytest.mark.asyncio
     async def test_llm_plan_includes_recent_context(self):

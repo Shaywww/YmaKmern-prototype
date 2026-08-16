@@ -47,8 +47,16 @@ class WeatherService(BaseMCPService):
                 "desc": ((d.get("weatherDesc") or [{}])[0].get("value", "")),
             })
         area = (data.get("nearest_area") or [{}])[0]
+        observation_area = ((area.get("areaName") or [{}])[0].get("value", ""))
+        region = ((area.get("region") or [{}])[0].get("value", ""))
         return {
-            "city": ((area.get("areaName") or [{}])[0].get("value", city)),
+            # Keep the user's requested place as the answer anchor.  wttr.in's
+            # nearest_area is a weather observation/grid label, not a replacement
+            # for the requested city (e.g. Hefei may resolve to Changqingzhen).
+            "city": city,
+            "query_city": city,
+            "observation_area": observation_area,
+            "region": region,
             "observed_at": cur.get("localObsDateTime", ""),
             "temp_c": cur.get("temp_C", ""),
             "feels_like_c": cur.get("FeelsLikeC", ""),
@@ -59,8 +67,11 @@ class WeatherService(BaseMCPService):
         }
 
     def _get_mock(self, **kwargs) -> dict:
+        city = str(kwargs.get("city") or kwargs.get("q") or "合肥")
         return {
-            "city": "合肥", "observed_at": "", "temp_c": "30", "feels_like_c": "32",
+            "city": city, "query_city": city,
+            "observation_area": "", "region": "",
+            "observed_at": "", "temp_c": "30", "feels_like_c": "32",
             "desc": "晴", "humidity": "60", "wind_kph": "10",
             "forecast_3d": [{"date": "2026-08-08", "min_c": "26", "max_c": "35", "desc": "晴"}],
         }

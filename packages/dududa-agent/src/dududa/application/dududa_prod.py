@@ -250,6 +250,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             from dududa.planner.planner import PlanningContext
             try:
                 intent = self._intent_of(state)
+                if self._weather_needs_location(state, intent):
+                    from dududa.planner.planner import GeneratedPlan
+                    return GeneratedPlan(
+                        goal=intent, steps=(),
+                        rationale="NeedsWeatherLocation")
                 plan = self._tool_chain.planner.plan(PlanningContext(
                     user_intent=intent,
                     available_capabilities=candidates,
@@ -260,7 +265,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                         and str(getattr(plan, "rationale", "")).startswith("Pattern")):
                     return self._enrich_plan_args(
                         plan, intent,
-                        default_city=self._user_location(state) or "合肥")
+                        default_city=self._user_location(state))
             except Exception:
                 pass
         return None
@@ -289,7 +294,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 if plan is not None:
                     plan = self._ensure_step_args(
                         plan, intent, candidates,
-                        default_city=self._user_location(state) or "合肥")
+                        default_city=self._user_location(state))
                     logger.info(
                         "LLM plan (perception) | run_id=%s trace_id=%s steps=%d %s",
                         state.run_id, state.trace_id, len(plan.steps),
@@ -316,7 +321,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "- 用户消息需要查实时信息/外部数据/执行操作时才选工具；"
                 "普通闲聊、问候、纯观点问题输出 {\"steps\":[]}\n"
                 "- arguments 只能使用该工具列出的参数名；action 不填时默认 search\n"
-                "- 用户未明确说城市/地点时，mcp.weather 的 city 填「合肥」，不要猜测其他城市\n"
+                "- 用户未明确说城市/地点且上下文也没有当前位置时，不要调用 mcp.weather，输出 steps=[]\n"
                 f"- 一次最多选 {max_steps} 个工具，按重要程度排序")
             user = f"用户消息: {intent}\n\n可用工具:\n" + "\n".join(lines)
             ctx = self._recent_chat_context(state)
@@ -330,7 +335,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if plan is not None:
                 plan = self._ensure_step_args(
                     plan, intent, candidates,
-                    default_city=self._user_location(state) or "合肥")
+                    default_city=self._user_location(state))
                 logger.info(
                     "LLM plan | run_id=%s trace_id=%s steps=%d %s",
                     state.run_id, state.trace_id, len(plan.steps),
@@ -368,7 +373,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         elif "mcp.weather" in allowed and any(k in text for k in
                 ("天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷", "热不热")):
             m = _re.search(r"([\u4e00-\u9fff]{2,6}?(?:市|县|区|镇))", text)
-            default_city = self._user_location(state) or "合肥"
+            default_city = self._user_location(state)
+            if not m and not default_city:
+                return None
             cap_id, args = "mcp.weather", {"q": (m.group(1) if m else default_city)}
         elif "mcp.news" in allowed and any(k in text for k in
                 ("新闻", "资讯", "热点", "热搜", "报道", "消息")):
@@ -401,7 +408,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return plan
 
     @staticmethod
-    def _ensure_step_args(plan, intent, candidates, default_city="合肥"):
+    def _ensure_step_args(plan, intent, candidates, default_city=""):
         """LLM 计划参数兜底：模型漏填/填错参数时，用意图文本补白名单键 q。
 
         仅当步骤参数为空且工具 schema 有 q 时注入（防空参执行失败）；
@@ -521,7 +528,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             rationale="LLM: structured tool selection")
 
     @staticmethod
-    def _enrich_plan_args(plan, intent, default_city="合肥"):
+    def _enrich_plan_args(plan, intent, default_city=""):
         """把用户意图中的关键词注入计划参数，让 MCP 能真正查到数据。
 
         default_city 为天气默认城市（画像位置优先）。
@@ -599,6 +606,38 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return (user.location if user else "") or ""
         except Exception:
             return ""
+
+    @staticmethod
+    def _explicit_weather_city(text: str) -> str:
+        """Extract a location explicitly present in a weather utterance."""
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        city = re.sub(
+            r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+", "", raw)
+        city = re.sub(
+            r"(天气|气温|温度|预报|怎么样|怎样|如何|今天|明天|后天|"
+            r"现在|目前|是什么|多少|度|会不会|下不下雨|冷不冷|热不热|"
+            r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
+        city = re.sub(r"@\S+", "", city).strip()
+        city = re.sub(r"[，。！、\s]+$", "", city)
+        city = re.sub(
+            r"(?i)(?:weather|forecast|today|now|temperature|current|in)\s*$",
+            "", city).strip()
+        if (re.search(r"(?:市|县|区|镇|城|州|省)$", city)
+                or re.fullmatch(r"[A-Za-z]{2,}", city)
+                or (re.search(r"[\u4e00-\u9fff]", city)
+                    and (city + "天气") in raw)):
+            return city
+        return ""
+
+    def _weather_needs_location(self, state, text: str) -> bool:
+        raw = str(text or "")
+        is_weather = any(k in raw for k in
+                         ("天气", "气温", "温度", "下雨", "下雪", "预报",
+                          "冷不冷", "热不热"))
+        return bool(is_weather and not self._explicit_weather_city(raw)
+                    and not self._user_location(state))
 
     def _recent_chat_context(self, state, limit=6, budget=1200) -> str:
         """近期对话记忆（供规划理解指代，如「本科」承接「USTC招生」）。"""
@@ -726,6 +765,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "没查到的内容我会直说，不会装作知道。"
                 "发送 /dududa_help 可以查看当前真实可用的能力。"
             )
+        if self._weather_needs_location(state, combined):
+            return "你想查哪里的天气呀？告诉我城市或区县就好～(｡･ω･｡)"
         plan_steps = tuple(
             getattr(getattr(state, "tool_plan", None), "steps", ()) or ())
         usable_observations = [
@@ -767,13 +808,19 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                if o.success and o.data is not None
                and str(o.data).strip() not in ("[]", "{}", "")]
         if obs:
+            weather_rule = ""
+            if any(o.capability_id == "mcp.weather" for o in obs):
+                weather_rule = (
+                    "\n天气地点规则：city/query_city 是用户查询地点，必须用它称呼地点；"
+                    "observation_area 只是最近数据点，绝不能拿它替换用户查询地点。"
+                )
             tool_block = "\n".join(
                 f"[工具 {o.capability_id}]:\n{_redact_text(self._format_tool_data(o.data)[:1200])}"
                 for o in obs)
             user_msg = (
                 f"{mem_prefix}{combined}\n\n"
                 f"以下是通过工具查到的真实数据（必须基于这些数据如实回答，不准编造）：\n"
-                f"{tool_block}"
+                f"{tool_block}{weather_rule}"
             )
         else:
             user_msg = mem_prefix + combined
@@ -792,6 +839,23 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     @staticmethod
     def _format_tool_data(data: Any) -> str:
         """工具结果转可读文本：list[dict] 抽 title/link/snippet，避免裸 JSON 泄漏。"""
+        if isinstance(data, dict) and "forecast_3d" in data:
+            lines = [f"查询地点: {data.get('query_city') or data.get('city') or ''}"]
+            area = str(data.get("observation_area", "") or "").strip()
+            region = str(data.get("region", "") or "").strip()
+            if area:
+                lines.append(
+                    f"最近数据点（仅数据来源，不是用户地点）: {area}"
+                    + (f", {region}" if region else ""))
+            lines.extend([
+                f"当前温度: {data.get('temp_c', '')}℃",
+                f"体感温度: {data.get('feels_like_c', '')}℃",
+                f"天气: {data.get('desc', '')}",
+                f"湿度: {data.get('humidity', '')}%",
+                f"风速: {data.get('wind_kph', '')} km/h",
+                f"未来预报: {data.get('forecast_3d') or []}",
+            ])
+            return "\n".join(lines)
         if isinstance(data, list) and data and all(isinstance(x, dict) for x in data):
             lines = []
             for i, item in enumerate(data[:8], 1):
