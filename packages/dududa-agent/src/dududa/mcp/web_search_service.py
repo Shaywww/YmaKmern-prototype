@@ -143,14 +143,18 @@ class WebSearchService(BaseMCPService):
                 results = _rank_results(results, q)[:max_results]
                 if not results:
                     continue
-                if self._looks_relevant(results, q) or host == _BING_HOSTS[-1]:
+                if self._looks_relevant(results, q):
                     return results
                 last_results = results
             except Exception as exc:  # 单源失败/超时换备用源
                 last_err = exc
                 continue
+        # Bing RSS can silently fall back to broad, stale results.  Returning
+        # those as a successful lookup encourages the response model to fill
+        # in missing facts.  An empty result is safer and lets the runtime
+        # report that it could not verify the answer.
         if last_results:
-            return last_results
+            return []
         if last_err is not None:
             raise last_err
         return []

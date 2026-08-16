@@ -39,6 +39,16 @@ class _FakeClient:
         return _FakeResp(rss)
 
 
+class _IrrelevantClient(_FakeClient):
+    async def get(self, url, params=None, headers=None):
+        rss = """<?xml version="1.0"?>
+<rss version="2.0"><channel>
+<item><title>兰州市_百度百科</title><link>https://example.com/lanzhou</link>
+<description>兰州旅游景点介绍</description></item>
+</channel></rss>"""
+        return _FakeResp(rss)
+
+
 class TestStripHtml:
     def test_tags_and_entities(self):
         assert ws._strip_html("<b>中国科学技术大学</b> &amp; more") == "中国科学技术大学 & more"
@@ -80,6 +90,14 @@ class TestWebSearchService:
         svc = ws.WebSearchService()
         results = await svc._fetch_live(q="ustc", max_results=2)
         assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_broad_fallback_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(ws.httpx, "AsyncClient", _IrrelevantClient)
+        svc = ws.WebSearchService()
+        results = await svc._fetch_live(
+            q="兰州盛达希尔顿酒店怎么样", max_results=5)
+        assert results == []
 
     @pytest.mark.asyncio
     async def test_search_via_query_uses_cache_key(self, monkeypatch):
