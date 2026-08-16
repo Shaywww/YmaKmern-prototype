@@ -46,7 +46,7 @@ def plugin(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_message_flow_shows_progress_then_welcomes_once(tmp_path, monkeypatch):
+async def test_message_flow_shows_progress_without_unsolicited_welcome(tmp_path, monkeypatch):
     p = plugin(tmp_path)
     async def inner(*args):
         await asyncio.sleep(0.03)
@@ -56,7 +56,8 @@ async def test_message_flow_shows_progress_then_welcomes_once(tmp_path, monkeypa
     first = Event("m1")
     reply = await dududa_handlers.run_message_flow(p, first)
     assert first.sent and "正在" in first.sent[0]
-    assert "第一次见面" in reply and reply.endswith("最终答案")
+    assert reply == "最终答案"
+    assert "第一次见面" not in reply
     second = Event("m2")
     reply2 = await dududa_handlers.run_message_flow(p, second)
     assert reply2 == "最终答案"

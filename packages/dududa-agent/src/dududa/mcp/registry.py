@@ -180,6 +180,7 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
         "weather": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"city":{"type":"string"},"q":{"type":"string"}}},
         "news": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"limit":{"type":"integer"}}},
         "translate": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"text":{"type":"string"},"q":{"type":"string"},"target":{"type":"string"}}},
+        "web_search": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"max_results":{"type":"integer"}},"required":["q"]},
     }
 
     count = 0

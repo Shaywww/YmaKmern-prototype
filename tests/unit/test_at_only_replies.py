@@ -59,6 +59,11 @@ def test_strip_tool_leak_no_false_positive():
     assert h._strip_tool_leak("今天天气不错哦～") == "今天天气不错哦～"
 
 
+def test_strip_internal_tool_status_placeholder():
+    assert h._strip_tool_leak(
+        "正常回复\n（工具状态：: None）") == "正常回复"
+
+
 def test_is_at_only_true_for_bare_at():
     assert h._is_at_only(_FakeEvent(), [_FakeComp("At")]) is True
 

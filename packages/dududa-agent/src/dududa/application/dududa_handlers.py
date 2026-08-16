@@ -204,14 +204,17 @@ async def _prune_stale_deliveries(plugin, max_age: float = 120.0) -> None:
                            run_id, e)
 
 
-async def handle_text(plugin, event, run_id="", trace_id="") -> str:
+async def handle_text(plugin, event, run_id="", trace_id="", perception=None) -> str:
     try:
         preprocessed = plugin.input_adapter.to_preprocessed(event)
         if not preprocessed or not preprocessed.combined_text.strip(): return ""
         if _contains_restricted(preprocessed.combined_text):
             logger.warning("Restricted content blocked from LLM/memory")
             return "这类敏感信息我不能处理哦，请不要发送密码、Token、Cookie 或登录凭证。"
-        perception = await _perceive_with_model(plugin, event)
+        # run_message_flow already performs perception before media/tool routing.
+        # Reuse it so one user message does not pay for the same model call twice.
+        if perception is None:
+            perception = await _perceive_with_model(plugin, event)
         try:
             envelope = plugin.input_adapter.to_envelope(event)
         except Exception:
@@ -349,6 +352,15 @@ def _strip_tool_leak(text: str) -> str:
     if not text:
         return text
     _changed = False
+    # Internal renderer metadata is never user-facing.  In particular, the
+    # persona prompt used to make models invent strings such as
+    # ``（工具状态：: None）`` even when a tool had failed.
+    _before = text
+    text = re.sub(
+        r"^[ \t]*[（(]?\s*工具状态\s*[：:].*?[）)]?\s*$",
+        "", text, flags=re.M | re.I)
+    if text != _before:
+        _changed = True
     m = re.search(
         r"(?:mcp\.[a-zA-Z_0-9]+\s*(?:[=:]\s*)?[\[{]"
         r"|mcp\.[a-zA-Z_0-9]+\s*[=:]\s*\{"
@@ -492,9 +504,6 @@ async def run_message_flow(plugin, event) -> str | None:
         reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
         reply = _strip_tool_leak(reply)
-        if reply and ux_store is not None and ux_store.should_welcome(event):
-            ux_store.mark_welcomed(event)
-            reply = _welcome_text() + "\n\n" + reply
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               reply=(reply or "")[:200])
@@ -522,16 +531,6 @@ async def run_message_flow(plugin, event) -> str | None:
             reset_memory_access_mode(memory_token)
         if ux_tasks is not None and task is not None:
             ux_tasks.finish(task_key, task)
-
-
-def _welcome_text() -> str:
-    return (
-        "你好，我是嘟嘟哒。第一次见面，给你一份极简说明：\n"
-        "我可以聊天、查资料、理解图片和常见文件。\n"
-        "发送 /dududa_help 查看实时可用能力；"
-        "/dududa_memory 管理记忆；/dududa_cancel 取消慢任务。\n"
-        "我不会因为你添加了机器人就自动推送消息，订阅需要你主动开启。"
-    )
 
 
 async def _send_delayed_progress(plugin, event, task_key: str) -> None:
@@ -651,7 +650,9 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
             return None
     _mark_task_phase(plugin, event,
                      "tools" if getattr(perception, "needs_tools", False) else "compose")
-    reply = await handle_text(plugin, event, run_id=run_id, trace_id=trace_id)
+    reply = await handle_text(
+        plugin, event, run_id=run_id, trace_id=trace_id,
+        perception=perception)
     logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
                 run_id, trace_id, (reply or "")[:80])
     return reply or None

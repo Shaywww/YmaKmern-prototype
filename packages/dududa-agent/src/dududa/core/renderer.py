@@ -208,7 +208,9 @@ class OCRenderer:
             parts.append("硬约束（不得违反）："
                          + "；".join(draft.immutable_constraints))
         parts.append(
-            "只输出转换后的回复文本本身，不要任何解释、前缀或引号。")
+            "只输出转换后的回复文本本身，不要任何解释、前缀或引号。"
+            "不得新增草稿中不存在的来源、工具状态、内部字段，也不得输出 "
+            "None、null 等占位符。")
         return "\n".join(parts)
 
     async def _invoke_llm(self, prompt: str,

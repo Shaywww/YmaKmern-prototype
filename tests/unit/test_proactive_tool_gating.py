@@ -278,6 +278,19 @@ class TestWeatherCityGuard:
         args = self._plan("今天天气怎么样", {"action": "search"})
         assert args.get("q") == "合肥"
 
+    def test_empty_web_search_query_is_filled_from_intent(self):
+        orch, _plugin, reg = _make_orchestrator()
+        from dududa.planner.planner import GeneratedPlan, PlannedStep
+        plan = GeneratedPlan(
+            goal="hotel",
+            steps=(PlannedStep(
+                step_id="s1", capability_id="mcp.web_search",
+                arguments={"action": "search", "q": ""}, purpose="p"),))
+        out = orch._ensure_step_args(
+            plan, "兰州盛达希尔顿酒店怎么样",
+            reg.filter_candidates(permissions=(), max_count=24))
+        assert out.steps[0].arguments["q"] == "兰州盛达希尔顿酒店怎么样"
+
     def test_profile_location_is_default_city(self):
         from dududa.core.profile import ProfileStore
         import tempfile
