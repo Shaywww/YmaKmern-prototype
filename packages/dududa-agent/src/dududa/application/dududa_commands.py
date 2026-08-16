@@ -292,7 +292,8 @@ async def cmd_feedback_impl(plugin, summary: str = "") -> str:
                 "反馈会先脱敏，只进入人工审核队列，不会自动修改或部署机器人。")
     evolution = getattr(plugin, "evolution", None)
     if evolution is None:
-        return "反馈队列当前不可用，请稍后再试。"
+        from dududa.evolution import ShadowEvolution
+        evolution = plugin.evolution = ShadowEvolution()
     try:
         item = evolution.add_experience(
             summary, source="user_feedback", signal_type="explicit_feedback")

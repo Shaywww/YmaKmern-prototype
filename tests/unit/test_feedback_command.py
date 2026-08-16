@@ -19,3 +19,12 @@ async def test_feedback_command_is_explicit_and_shadow_only(tmp_path):
 
     help_text = await cmd_help_impl(plugin)
     assert "/dududa_feedback" in help_text
+
+
+@pytest.mark.asyncio
+async def test_feedback_command_lazily_creates_queue(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUDUDA_EVOLUTION_DIR", str(tmp_path))
+    plugin = SimpleNamespace(cap_registry=None)
+    reply = await cmd_feedback_impl(plugin, "搜索结果缺少来源")
+    assert "已记录脱敏改进反馈" in reply
+    assert plugin.evolution.status()["mode"] == "shadow"
