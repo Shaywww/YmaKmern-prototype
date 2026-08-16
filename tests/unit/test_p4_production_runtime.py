@@ -229,9 +229,9 @@ class TestProdOrchestrator:
     @pytest.mark.asyncio
     async def test_weather_query_runs_weather_tool(self):
         orch, plugin, memory, reg = _make_orchestrator()
-        event = _FakeEvent("今天天气怎么样")
+        event = _FakeEvent("临泽县今天天气怎么样")
         result = await orch.run(
-            _make_envelope("今天天气怎么样"),
+            _make_envelope("临泽县今天天气怎么样"),
             budget=RuntimeBudget(max_tool_steps=4, deadline_seconds=20),
             perception=PerceptionResult(needs_tools=True, topics=("weather",)),
             event=event,
@@ -331,7 +331,8 @@ class TestLLMPlanning:
     @pytest.mark.asyncio
     async def test_llm_plans_weather(self):
         plan = await self._llm_plan(
-            '{"steps":[{"capability_id":"mcp.weather","arguments":{"q":"合肥"}}]}')
+            '{"steps":[{"capability_id":"mcp.weather","arguments":{"q":"合肥"}}]}',
+            text="合肥明天适合出门吗")
         assert plan is not None and plan.steps
         assert plan.steps[0].capability_id == "mcp.weather"
         assert plan.steps[0].arguments["q"] == "合肥"
@@ -381,7 +382,7 @@ class TestLLMPlanning:
         reg = orch._capability_registry
         cands = reg.filter_candidates(permissions=(), max_count=24)
         state = RuntimeState(
-            envelope=_make_envelope("明天适合出门吗"),
+            envelope=_make_envelope("合肥明天适合出门吗"),
             budget=RuntimeBudget(max_tool_steps=4))
         state = state.transition(
             RuntimePhase.PERCEIVED,
@@ -399,9 +400,9 @@ class TestLLMPlanning:
         plugin.llm_reply = (
             '{"steps":[{"capability_id":"mcp.weather",'
             '"arguments":{"q":"合肥"}}]}')
-        event = _FakeEvent("明天适合出门吗")
+        event = _FakeEvent("合肥明天适合出门吗")
         result = await orch.run(
-            _make_envelope("明天适合出门吗"),
+            _make_envelope("合肥明天适合出门吗"),
             budget=RuntimeBudget(max_tool_steps=4, deadline_seconds=20),
             perception=PerceptionResult(needs_tools=True, topics=("weather",)),
             event=event,

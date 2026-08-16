@@ -432,6 +432,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     # 或中文地名后紧跟「天气」）才用，否则默认合肥。
                     # 防止 LLM 猜用户没提过的城市（如「长庆镇」）。
                     raw = str(intent) or ""
+                    planned_city = str(
+                        args.get("q", "") or args.get("city", "") or "").strip()
                     city = re.sub(
                         r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+",
                         "", raw)
@@ -444,7 +446,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     city = re.sub(
                         r"(?i)(?:weather|forecast|today|now|temperature|"
                         r"current|in)\s*$", "", city).strip()
-                    if (re.search(r"(?:市|县|区|镇|城|州|省)$", city)
+                    if planned_city and planned_city in raw:
+                        args["q"] = planned_city
+                    elif (re.search(r"(?:市|县|区|镇|城|州|省)$", city)
                             or re.fullmatch(r"[A-Za-z]{2,}", city)
                             or (re.search(r"[\u4e00-\u9fff]", city)
                                 and (city + "天气") in raw)):
