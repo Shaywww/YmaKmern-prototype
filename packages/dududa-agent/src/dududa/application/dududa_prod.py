@@ -433,7 +433,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     # 防止 LLM 猜用户没提过的城市（如「长庆镇」）。
                     raw = str(intent) or ""
                     planned_city = str(
-                        args.get("q", "") or args.get("city", "") or "").strip()
+                        args.get("city", "") or args.get("q", "") or "").strip()
+                    # Generic q-fill above may have copied the entire utterance;
+                    # that is a query, not a city candidate.
+                    if planned_city == raw:
+                        planned_city = ""
                     city = re.sub(
                         r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+",
                         "", raw)
