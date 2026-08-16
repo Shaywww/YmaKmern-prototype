@@ -103,6 +103,8 @@ async def test_sticker_prompt_prefers_conversational_reaction():
     assert reply == "接住这个表情啦～(≧▽≦)"
     assert "自然接话" in plugin.system
     assert "不要逐项描述画面" in plugin.system
+    assert "不得臆测表情产生的具体原因" in plugin.system
+    assert "听到了八卦" in plugin.system
     assert "平台元数据已明确标记" in plugin.system
     assert plugin.user == "用户只发送了这个视觉内容，没有附带文字。"
     assert plugin.memory.startswith("[表情包《")
