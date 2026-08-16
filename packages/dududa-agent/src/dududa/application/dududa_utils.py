@@ -8,6 +8,7 @@ import re
 import json as _json
 import logging
 from io import BytesIO
+from collections.abc import Mapping
 
 from dududa.safeguards.security import Redactor
 
@@ -94,8 +95,91 @@ def _group_safe_observations(observations, is_group: bool) -> tuple:
     return tuple(out)
 
 
+def _raw_message_segments(event) -> tuple:
+    """Return normalized OneBot message segments without depending on an adapter type.
+
+    AstrBot's aiocqhttp event is mapping-like, while tests and some other adapters
+    expose ``message``/``json`` as attributes.  NapCat-specific image metadata is
+    intentionally read at this trust boundary instead of patching AstrBot itself.
+    """
+    raw_candidates = [getattr(event, "raw_message", None)]
+    raw_candidates.append(
+        getattr(getattr(event, "message_obj", None), "raw_message", None))
+    seen = set()
+    for raw in raw_candidates:
+        if raw is None or id(raw) in seen:
+            continue
+        seen.add(id(raw))
+        values = []
+        if isinstance(raw, Mapping):
+            values.extend((raw.get("message"), raw.get("json")))
+        for attr in ("message", "json"):
+            try:
+                value = getattr(raw, attr, None)
+                if callable(value):
+                    value = value()
+                values.append(value)
+            except Exception:
+                continue
+        for value in values:
+            if isinstance(value, Mapping):
+                value = value.get("message")
+            if isinstance(value, list):
+                return tuple(item for item in value if isinstance(item, Mapping))
+    return ()
+
+
+def _segment_data(segment) -> dict:
+    """Flatten a OneBot segment while keeping top-level compatibility fields."""
+    if not isinstance(segment, Mapping):
+        return {}
+    out = dict(segment)
+    nested = segment.get("data")
+    if isinstance(nested, Mapping):
+        out.update(nested)
+    return out
+
+
+_STICKER_SUMMARY_RE = re.compile(
+    r"(?:表情包?|动画表情|商城表情|贴纸|sticker|mface|emoji)", re.IGNORECASE)
+
+
+def _detect_media_kind(event) -> str:
+    """Classify explicit platform media signals as ``sticker`` or ``image``.
+
+    NapCat represents QQ market faces as OneBot ``image`` segments, but preserves
+    ``emoji_id``/``emoji_package_id``/``key`` and ``summary``.  Numeric
+    ``sub_type`` is deliberately not used alone because its meaning differs among
+    OneBot implementations.  Ambiguous ordinary image segments are left for the
+    vision model to distinguish from user-made meme images.
+    """
+    saw_image = False
+    for segment in _raw_message_segments(event):
+        kind = str(segment.get("type", "") or "").lower()
+        data = _segment_data(segment)
+        if kind in ("face", "mface"):
+            return "sticker"
+        if kind != "image":
+            continue
+        saw_image = True
+        if any(data.get(key) not in (None, "")
+               for key in ("emoji_id", "emoji_package_id", "key")):
+            return "sticker"
+        summary = str(data.get("summary", "") or "")
+        if summary and _STICKER_SUMMARY_RE.search(summary):
+            return "sticker"
+        subtype = str(data.get("sub_type", "") or "").lower()
+        if subtype in ("face", "mface", "sticker", "emoji"):
+            return "sticker"
+    return "image" if saw_image else "unknown"
+
+
 def _detect_media(event) -> tuple:
-    for c in event.get_messages():
+    try:
+        components = event.get_messages() or ()
+    except Exception:
+        components = ()
+    for c in components:
         t = str(getattr(c, "type", ""))
         if "File" in t or "Image" in t:
             name = getattr(c, "name", "") or getattr(c, "file_name", "") or "media"
@@ -105,20 +189,34 @@ def _detect_media(event) -> tuple:
                 url = getattr(c, url_attr, "")
                 if url and (url.startswith("http") or url.startswith("/")):
                     return url, name, is_image
+    # Some AstrBot adapters discard mface or cannot construct an Image component
+    # containing NapCat extension fields.  The raw OneBot segment still has a URL.
+    for segment in _raw_message_segments(event):
+        kind = str(segment.get("type", "") or "").lower()
+        if kind not in ("image", "mface", "file"):
+            continue
+        data = _segment_data(segment)
+        is_image = kind in ("image", "mface")
+        url = str(data.get("url", "") or "")
+        file_value = str(data.get("file", "") or "")
+        if not (url.startswith("http") or url.startswith("/")):
+            url = file_value
+        if not (url.startswith("http") or url.startswith("/")):
+            continue
+        name = str(data.get("name", "") or data.get("file_name", "") or "")
+        if not name:
+            # NapCat's file field is frequently an opaque id, but can also be a path.
+            name = os.path.basename(file_value.split("?", 1)[0]) or (
+                "image" if is_image else "media")
+        return url, name, is_image
     return "", "", False
 
 
 def _has_media_in_raw(event) -> bool:
     try:
-        raw = getattr(event, "raw_message", None)
-        if raw is None: return False
-        for attr in ("message", "json"):
-            msg = getattr(raw, attr, None)
-            if callable(msg): msg = msg()
-            if isinstance(msg, list):
-                for item in msg:
-                    if isinstance(item, dict) and item.get("type") in ("file", "image"):
-                        return True
+        return any(str(item.get("type", "")).lower()
+                   in ("file", "image", "mface", "face")
+                   for item in _raw_message_segments(event))
     except Exception: pass
     return False
 
