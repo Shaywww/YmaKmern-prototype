@@ -270,8 +270,22 @@ class DududaCore:
             msgs = event.get_messages()
             if msgs and any("File" in str(getattr(c,"type","")) or "Image" in str(getattr(c,"type","")) for c in msgs):
                 return False
-            is_group = bool(getattr(event.message_obj, "group", None))
-            if is_group and not getattr(event, "is_at_or_wake_command", True): return True
+            obj = getattr(event, "message_obj", None)
+            is_group = bool(
+                getattr(event, "group_id", None)
+                or getattr(obj, "group_id", None)
+                or getattr(obj, "group", None))
+            if is_group and not getattr(event, "is_at_or_wake_command", True):
+                # A non-zero reply_rate is an explicit per-group opt-in to
+                # passive participation.  Keep it reachable; the social
+                # decision engine owns the actual probability draw.
+                getter = getattr(self, "_group_policy_for", None)
+                policy = getter(event) if callable(getter) else None
+                return not bool(
+                    policy is not None
+                    and policy.mode == "normal"
+                    and policy.reply_rate > 0.0
+                    and policy.interruption_cost < 1.0)
             if not is_group:
                 text = (event.message_str or "").strip()
                 if not text: return True
@@ -288,7 +302,13 @@ class DududaCore:
             gp = self._group_policy
             if gp is None:
                 return None
-            gid = str(getattr(event.message_obj, "group", None) or "")
+            obj = getattr(event, "message_obj", None)
+            raw_group = (getattr(event, "group_id", None)
+                         or getattr(obj, "group_id", None)
+                         or getattr(obj, "group", None))
+            gid = str(getattr(raw_group, "group_id", None)
+                      or getattr(raw_group, "id", None)
+                      or raw_group or "")
             if not gid:
                 return None
             if callable(gp):
@@ -318,7 +338,11 @@ class DududaCore:
             combined = pre.combined_text.strip() if pre and pre.combined_text else ""
         except Exception:
             return SocialAction.ANSWER, "fallback"
-        is_group = bool(getattr(event.message_obj, "group", None))
+        obj = getattr(event, "message_obj", None)
+        is_group = bool(
+            getattr(event, "group_id", None)
+            or getattr(obj, "group_id", None)
+            or getattr(obj, "group", None))
         if not is_group:
             clean_0 = re.sub(r"@\S+", "", combined).strip()
             if any(kw in clean_0 for kw in self._TOOL_KW):

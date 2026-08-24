@@ -8,6 +8,7 @@ import asyncio
 import logging
 import random
 import re
+import threading
 import time
 from uuid import uuid4
 
@@ -520,6 +521,224 @@ def _claim_astrbot_reply_route(event) -> None:
         logger.debug("Could not claim AstrBot reply route", exc_info=True)
 
 
+def _coerce_event_id(value, *attrs: str) -> str:
+    """Turn adapter-specific identity objects into a stable string id."""
+    if value is None:
+        return ""
+    for attr in attrs:
+        try:
+            nested = getattr(value, attr, None)
+        except Exception:
+            nested = None
+        if nested not in (None, "") and nested is not value:
+            return str(nested)
+    if isinstance(value, (str, int)):
+        return str(value)
+    return ""
+
+
+def _event_group_id(event) -> str:
+    """Read a group id across AstrBot/NapCat adapter variants."""
+    getter = getattr(event, "get_group_id", None)
+    if callable(getter):
+        try:
+            value = getter()
+            if value not in (None, ""):
+                return _coerce_event_id(value, "group_id", "id")
+        except Exception:
+            pass
+    obj = getattr(event, "message_obj", None)
+    for value in (
+        getattr(event, "group_id", None),
+        getattr(obj, "group_id", None),
+        getattr(obj, "group", None),
+    ):
+        result = _coerce_event_id(value, "group_id", "id")
+        if result:
+            return result
+    return ""
+
+
+def _event_sender_id(event) -> str:
+    getter = getattr(event, "get_sender_id", None)
+    if callable(getter):
+        try:
+            value = getter()
+            if value not in (None, ""):
+                return str(value)
+        except Exception:
+            pass
+    obj = getattr(event, "message_obj", None)
+    for sender in (getattr(event, "sender", None),
+                   getattr(obj, "sender", None)):
+        result = _coerce_event_id(sender, "user_id", "id", "qq")
+        if result:
+            return result
+    return ""
+
+
+def _event_bot_id(plugin, event) -> str:
+    getter = getattr(plugin, "_get_bot_id", None)
+    if callable(getter):
+        try:
+            value = getter(event)
+            if value not in (None, ""):
+                return str(value)
+        except Exception:
+            pass
+    getter = getattr(event, "get_self_id", None)
+    if callable(getter):
+        try:
+            value = getter()
+            if value not in (None, ""):
+                return str(value)
+        except Exception:
+            pass
+    return str(getattr(getattr(event, "message_obj", None),
+                       "self_id", "") or "")
+
+
+def _component_at_target(component) -> str:
+    type_name = str(getattr(component, "type", "") or "").lower()
+    class_name = component.__class__.__name__.lower()
+    if not (type_name == "at" or type_name.endswith(".at")
+            or class_name in ("at", "_at")
+            or class_name.endswith("atcomponent")):
+        return ""
+    for attr in ("qq", "target", "user_id", "id"):
+        value = getattr(component, attr, None)
+        if value not in (None, ""):
+            return str(value)
+    data = getattr(component, "data", None)
+    if isinstance(data, dict):
+        for attr in ("qq", "target", "user_id", "id"):
+            value = data.get(attr)
+            if value not in (None, ""):
+                return str(value)
+    return ""
+
+
+def _explicit_at_bot(plugin, event, msgs) -> bool:
+    """Only trust an At segment that names this bot, not a broad wake flag."""
+    bot_id = _event_bot_id(plugin, event)
+    if not bot_id:
+        return False
+    for component in msgs or ():
+        if _component_at_target(component) == bot_id:
+            return True
+    for segment in _raw_message_segments(event):
+        if str(segment.get("type", "") or "").lower() != "at":
+            continue
+        data = _segment_data(segment)
+        target = data.get("qq", data.get("target", data.get("user_id", "")))
+        if str(target or "") == bot_id:
+            return True
+    text = str(getattr(event, "message_str", "") or "")
+    if re.search(r"\[At:" + re.escape(bot_id) + r"\]", text):
+        return True
+    return bool(re.search(
+        r"\[CQ:at,[^\]]*\bqq=" + re.escape(bot_id) + r"(?:,|\])", text,
+        flags=re.IGNORECASE))
+
+
+def _group_has_media(event, msgs) -> bool:
+    for component in msgs or ():
+        type_name = str(getattr(component, "type", "") or "").lower()
+        if any(kind in type_name for kind in ("image", "file", "mface")):
+            return True
+    return _has_media_in_raw(event)
+
+
+def _group_policy_for_event(plugin, event, group_id: str):
+    store = getattr(plugin, "group_policy", None)
+    getter = getattr(store, "get", None)
+    if callable(getter):
+        try:
+            return getter(group_id)
+        except Exception:
+            pass
+    getter = getattr(plugin, "_group_policy_for", None)
+    if callable(getter):
+        try:
+            return getter(event)
+        except Exception:
+            pass
+    return None
+
+
+def _preflight_group_message(plugin, event, msgs) -> bool:
+    """Return whether a group event is worth starting the full message flow.
+
+    The guard intentionally runs after message-id dedupe but before UX tasks,
+    progress notifications and traces.  A human's unmentioned media is still
+    stashed for QQ split-message pairing, without becoming a conversational
+    task.  Guard failures fail open so a local state bug cannot take Dududa
+    offline; configured sender filtering remains enforced by the production
+    guard itself.
+    """
+    group_id = _event_group_id(event)
+    if not group_id:
+        return True
+
+    exact_at = _explicit_at_bot(plugin, event, msgs)
+    split_at = False
+    if (not exact_at
+            and not bool(getattr(event, "is_at_or_wake_command", False))):
+        split_at = _recent_at_only(event)
+    if exact_at or split_at:
+        try:
+            event.is_at_or_wake_command = True
+        except Exception:
+            pass
+
+    sender_id = _event_sender_id(event)
+    has_media = _group_has_media(event, msgs)
+    guard = getattr(plugin, "group_ingress_guard", None)
+    evaluate = getattr(guard, "evaluate", None)
+    if callable(evaluate):
+        try:
+            decision = evaluate(
+                group_id=group_id,
+                sender_id=sender_id,
+                text=str(getattr(event, "message_str", "") or ""),
+                explicit_at_bot=bool(exact_at or split_at),
+                has_media=has_media,
+            )
+            if not bool(getattr(decision, "allowed", True)):
+                logger.info(
+                    "Group ingress dropped | group=%s reason=%s",
+                    group_id,
+                    str(getattr(decision, "reason", "guard"))[:40])
+                return False
+        except Exception:
+            logger.warning("Group ingress guard failed open", exc_info=True)
+
+    policy = _group_policy_for_event(plugin, event, group_id)
+    if str(getattr(policy, "mode", "normal")) == "off":
+        return False
+
+    wake = bool(getattr(event, "is_at_or_wake_command", False))
+    if has_media and not wake:
+        # Even if persistence fails, consume the unaddressed media event.  It
+        # must never fall through into a full LLM task merely because storage
+        # is unavailable.
+        if not _stash_group_media(plugin, event, msgs):
+            logger.info("Group media consumed without stash | group=%s",
+                        group_id)
+        return False
+    if wake:
+        return True
+
+    # Passive participation is an explicit per-group opt-in.  The actual
+    # probability remains owned by the social decision engine.
+    return bool(
+        policy is not None
+        and str(getattr(policy, "mode", "normal")) == "normal"
+        and float(getattr(policy, "reply_rate", 0.0) or 0.0) > 0.0
+        and float(getattr(policy, "interruption_cost", 0.0) or 0.0) < 1.0
+    )
+
+
 async def run_message_flow(plugin, event) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
@@ -532,12 +751,13 @@ async def run_message_flow(plugin, event) -> str | None:
     msgs = event.get_messages()
     if not msgs:
         if time.time() - plugin._last_file_ts < 3: return None
-        if _has_media_in_raw(event): return None
     msg_id = ""
     try: msg_id = str(event.message_obj.message_id)
     except Exception: pass
     if not msg_id: msg_id = str(id(event))
     if _dedupe_message(plugin, event, msg_id): return None
+    if _cross_session_reply_dropped(plugin, event): return None
+    if not _preflight_group_message(plugin, event, msgs): return None
     ux_store = getattr(plugin, "ux_store", None)
     ux_tasks = getattr(plugin, "ux_tasks", None)
     task = asyncio.current_task()
@@ -741,7 +961,7 @@ def _preserve_media(url: str) -> str:
     """本地路径的媒体复制到自管目录，防止 AstrBot 清理 temp 后配对失败。"""
     import os as _os
     import shutil as _shutil
-    if not url.startswith("/"):
+    if not _os.path.isabs(url):
         return url
     try:
         if not _os.path.exists(url):
@@ -784,25 +1004,95 @@ _AT_ONLY_REPLIES = (
 )
 
 
-# QQ 拆条 @ 窗口：at-only 消息后紧随的文本视为被 @（OneBot v11 配对）
-_AT_ONLY_TS: dict = {}
+# QQ 拆条 @ 窗口：at-only 消息后紧随的同人文本视为被 @
+#（OneBot v11 配对）。键必须隔离平台、群、发送者和 Bot，避免群里
+# 一个人的纯 @ 把其他人或另一个 Bot 的后续消息误当成拆条。
+_AT_ONLY_TS: dict[tuple[str, str, str, str], float] = {}
 _AT_ONLY_WINDOW_SECONDS = 5.0
+_AT_ONLY_MAX_ENTRIES = 1024
+_AT_ONLY_LOCK = threading.Lock()
+
+
+def _nonempty_event_value(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text in ("", "0", "None") else text
+
+
+def _event_getter_value(event, name: str) -> str:
+    try:
+        getter = getattr(event, name, None)
+        if callable(getter):
+            return _nonempty_event_value(getter())
+    except Exception:
+        pass
+    return ""
+
+
+def _at_only_key(event) -> tuple[str, str, str, str] | None:
+    """Return an isolated split-at key, or ``None`` when identity is incomplete."""
+    obj = getattr(event, "message_obj", None)
+
+    platform = (_event_getter_value(event, "get_platform_name")
+                or _nonempty_event_value(getattr(event, "platform", "")))
+
+    group = (_event_getter_value(event, "get_group_id")
+             or _nonempty_event_value(getattr(event, "group_id", ""))
+             or _nonempty_event_value(getattr(obj, "group_id", "")))
+    if not group:
+        raw_group = getattr(obj, "group", None)
+        group = (_nonempty_event_value(getattr(raw_group, "group_id", ""))
+                 or _nonempty_event_value(getattr(raw_group, "id", ""))
+                 or _nonempty_event_value(raw_group))
+
+    sender = _event_getter_value(event, "get_sender_id")
+    if not sender:
+        sender_obj = (getattr(event, "sender", None)
+                      or getattr(obj, "sender", None))
+        sender = _nonempty_event_value(
+            getattr(sender_obj, "user_id", "")
+            or getattr(sender_obj, "id", ""))
+
+    bot = (_event_getter_value(event, "get_self_id")
+           or _nonempty_event_value(getattr(event, "self_id", ""))
+           or _nonempty_event_value(getattr(obj, "self_id", "")))
+
+    if not all((platform, group, sender, bot)):
+        return None
+    return platform, group, sender, bot
+
+
+def _prune_at_only_ts(now: float) -> None:
+    """Drop expired windows. Caller must hold ``_AT_ONLY_LOCK``."""
+    expired = [key for key, marked_at in _AT_ONLY_TS.items()
+               if now - marked_at >= _AT_ONLY_WINDOW_SECONDS]
+    for key in expired:
+        _AT_ONLY_TS.pop(key, None)
 
 
 def _mark_at_only_ts(event) -> None:
-    try:
-        _AT_ONLY_TS[str(event.get_session_id())] = time.time()
-    except Exception:
-        pass
+    key = _at_only_key(event)
+    if key is None or _AT_ONLY_MAX_ENTRIES <= 0:
+        return
+    now = time.monotonic()
+    with _AT_ONLY_LOCK:
+        _prune_at_only_ts(now)
+        if key not in _AT_ONLY_TS and len(_AT_ONLY_TS) >= _AT_ONLY_MAX_ENTRIES:
+            oldest = min(_AT_ONLY_TS, key=_AT_ONLY_TS.get)
+            _AT_ONLY_TS.pop(oldest, None)
+        _AT_ONLY_TS[key] = now
 
 
 def _recent_at_only(event) -> bool:
-    try:
-        return (time.time()
-                - _AT_ONLY_TS.get(str(event.get_session_id()), 0.0)
-                < _AT_ONLY_WINDOW_SECONDS)
-    except Exception:
+    """Consume one recent split-at window for this exact sender/Bot scope."""
+    key = _at_only_key(event)
+    if key is None:
         return False
+    now = time.monotonic()
+    with _AT_ONLY_LOCK:
+        _prune_at_only_ts(now)
+        return _AT_ONLY_TS.pop(key, None) is not None
 
 
 def _is_at_only(event, msgs) -> bool:
@@ -837,8 +1127,8 @@ def _stash_via_repo(repo, event, gid, f_url, f_name, f_img) -> bool:
         except Exception:
             platform = "qq"
         data, source_url = b"", ""
-        if f_url.startswith("/"):
-            import os as _os
+        import os as _os
+        if _os.path.isabs(f_url):
             if not _os.path.exists(f_url):
                 # 本地文件已被清理：回退 raw_message 里的远程 URL（惰性下载）
                 remote = _remote_media_url(event)
@@ -879,11 +1169,10 @@ def _stash_group_media(plugin, event, msgs) -> bool:
     if getattr(event, "is_at_or_wake_command", False):
         return False
     try:
-        gid = str(getattr(getattr(event, "message_obj", None), "group_id", "") or "")
+        gid = _event_group_id(event)
         if not gid:
             return False
-        if not any("Image" in str(getattr(c, "type", "")) or "File" in str(getattr(c, "type", ""))
-                   for c in msgs):
+        if not _group_has_media(event, msgs):
             return False
         f_url, f_name, f_img = _detect_media(event)
         if not f_url:
@@ -903,7 +1192,9 @@ def _stash_group_media(plugin, event, msgs) -> bool:
         for k in [k for k, v in slot.items() if now - v[0] > 60]:
             _drop_stash_file(v[1])
             slot.pop(k, None)
-        sender = str(event.get_sender_id())
+        sender = _event_sender_id(event)
+        if not sender:
+            return False
         slot[(gid, sender)] = (now, f_url, f_name, f_img)
         logger.info("Flow stash: gid=%s url=%s", gid, f_url[:50])
         return True
@@ -914,7 +1205,7 @@ def _stash_group_media(plugin, event, msgs) -> bool:
 def _take_paired_media(plugin, event):
     """@ 消息没带图时，配对同群同人 60s 内发的图；空文本或提到图才配对。"""
     try:
-        gid = str(getattr(getattr(event, "message_obj", None), "group_id", "") or "")
+        gid = _event_group_id(event)
         if not gid:
             return ()
         text = str(getattr(event, "message_str", "") or "").strip()
@@ -923,7 +1214,9 @@ def _take_paired_media(plugin, event):
         repo = getattr(plugin, "media_repo", None)
         if repo is not None:
             try:
-                sender = str(event.get_sender_id())
+                sender = _event_sender_id(event)
+                if not sender:
+                    return ()
                 try:
                     platform = str(event.get_platform_name() or "qq")
                 except Exception:
@@ -938,7 +1231,9 @@ def _take_paired_media(plugin, event):
         slot = getattr(plugin, "_recent_media", None)
         if not slot:
             return ()
-        sender = str(event.get_sender_id())
+        sender = _event_sender_id(event)
+        if not sender:
+            return ()
         st = slot.get((gid, sender))
         if not st or time.time() - st[0] > 60:
             return ()
