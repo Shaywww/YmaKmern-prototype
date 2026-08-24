@@ -481,8 +481,12 @@ def _cross_session_reply_dropped(plugin, event) -> bool:
 
 
 def _is_framework_command(event) -> bool:
-    """框架命令（/dududa_xxx、/reset 等）：WakingCheck 已剥掉 wake_prefix 并交由
-    命令处理器回复；chat 流跳过，避免双回复（QQ e2e 实测发现）。"""
+    """斜杠输入不进入聊天流。
+
+    已注册命令交给 AstrBot 命令处理器；未注册命令在多机器人群里可能属于
+    其他机器人，因此保持静默。默认 Agent 已由 ``_claim_astrbot_reply_route``
+    关闭，不会再以通用人格兜底。
+    """
     try:
         raw = str(getattr(getattr(event, "message_obj", None),
                           "message_str", "") or "")
@@ -491,11 +495,37 @@ def _is_framework_command(event) -> bool:
         return False
 
 
+def _claim_astrbot_reply_route(event) -> None:
+    """Prevent AstrBot's default Agent from replying behind Dududa.
+
+    AstrBot 4.x initializes ``event.call_llm`` to ``False`` and invokes its
+    default Agent after plugin handlers only while that flag is still false.
+    ``should_call_llm(True)`` therefore marks the event as already handled by
+    a plugin-owned LLM route.  It does not stop registered command handlers or
+    an explicit ``ProviderRequest`` yielded by another handler.
+
+    Dududa uses its own model router, so letting the framework fall through
+    would create a second, unstyled voice on the same QQ account.  This marker
+    is deliberately set even when Dududa is disabled or chooses not to reply:
+    silence is safer than bypassing its persona, privacy and group policies.
+    """
+    try:
+        marker = getattr(event, "should_call_llm", None)
+        if callable(marker):
+            marker(True)
+        else:
+            # Compatibility with lightweight tests and older adapters.
+            setattr(event, "call_llm", True)
+    except Exception:
+        logger.debug("Could not claim AstrBot reply route", exc_info=True)
+
+
 async def run_message_flow(plugin, event) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
     返回要发送的文本；None 表示不回复。
     """
+    _claim_astrbot_reply_route(event)
     if not plugin.enabled: return None
     if plugin._is_self_message(event): return None
     if _is_framework_command(event): return None

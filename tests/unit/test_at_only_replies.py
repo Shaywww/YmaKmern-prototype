@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """群聊 At-only 拦截 + stash 文件保活测试。"""
+import asyncio
 import os
 from types import SimpleNamespace
 
@@ -33,6 +34,36 @@ def test_is_framework_command_false_for_at_message():
 
 def test_is_framework_command_tolerates_missing_obj():
     assert h._is_framework_command(SimpleNamespace(message_obj=None)) is False
+
+
+def test_slash_command_suppresses_astrbot_default_agent():
+    """未知 /open 应保持静默，不能落入 AstrBot 的通用人格。"""
+    class _Event:
+        message_obj = SimpleNamespace(message_str="/open 热力学")
+
+        def __init__(self):
+            self.call_llm_markers = []
+
+        def should_call_llm(self, value):
+            self.call_llm_markers.append(value)
+
+    plugin = SimpleNamespace(
+        enabled=True,
+        _is_self_message=lambda event: False,
+    )
+    event = _Event()
+
+    assert asyncio.run(h.run_message_flow(plugin, event)) is None
+    assert event.call_llm_markers == [True]
+
+
+def test_disabled_dududa_does_not_fall_back_to_default_agent():
+    """关闭 Dududa 表示静默，而不是切换成 AstrBot 默认人格。"""
+    event = SimpleNamespace(call_llm=False)
+    plugin = SimpleNamespace(enabled=False)
+
+    assert asyncio.run(h.run_message_flow(plugin, event)) is None
+    assert event.call_llm is True
 
 
 def test_strip_tool_leak_dangling_source_is():
