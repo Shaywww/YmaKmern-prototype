@@ -51,6 +51,22 @@ def test_configured_sender_is_always_dropped_but_unscoped_is_allowed():
     assert private.reason == IngressReason.UNSCOPED
 
 
+def test_from_env_parses_static_ids_and_dynamic_thresholds():
+    guard = GroupIngressGuard.from_env({
+        "DUDUDA_GROUP_IGNORED_SENDER_IDS": " bot-1, bot-2 ,,",
+        "DUDUDA_LOOP_REPEAT_THRESHOLD": "4",
+        "DUDUDA_LOOP_BURST_THRESHOLD": "9",
+        "DUDUDA_LOOP_MAX_KEYS": "32",
+    })
+
+    assert _evaluate(guard, sender="bot-2", explicit=True).reason == (
+        IngressReason.CONFIGURED_SENDER)
+    for _ in range(3):
+        assert _evaluate(guard, sender="human", text="same").allowed is True
+    assert _evaluate(guard, sender="human", text="same").reason == (
+        IngressReason.REPEAT)
+
+
 def test_repeat_normalization_quarantines_then_expires_by_ttl():
     clock = FakeClock()
     guard = GroupIngressGuard(

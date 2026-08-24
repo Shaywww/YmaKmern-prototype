@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 import threading
 import time
 import unicodedata
 from collections import OrderedDict, deque
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 
 DEFAULT_REPEAT_WINDOW_SECONDS = 15.0
@@ -203,6 +204,35 @@ class GroupIngressGuard:
         self._allowed = 0
         self._dropped = 0
         self._explicit_at_bypasses = 0
+
+    @classmethod
+    def from_env(
+        cls, environment: Mapping[str, str] | None = None,
+    ) -> "GroupIngressGuard":
+        """Build the production defaults from Dududa environment settings."""
+        env = os.environ if environment is None else environment
+        ignored = {
+            value.strip()
+            for value in env.get(
+                "DUDUDA_GROUP_IGNORED_SENDER_IDS", "").split(",")
+            if value.strip()
+        }
+        return cls(
+            ignored_sender_ids=ignored,
+            repeat_window_seconds=float(env.get(
+                "DUDUDA_LOOP_REPEAT_WINDOW", "15")),
+            repeat_threshold=int(env.get(
+                "DUDUDA_LOOP_REPEAT_THRESHOLD", "3")),
+            burst_window_seconds=float(env.get(
+                "DUDUDA_LOOP_BURST_WINDOW", "10")),
+            burst_threshold=int(env.get(
+                "DUDUDA_LOOP_BURST_THRESHOLD", "6")),
+            sender_quarantine_ttl_seconds=float(env.get(
+                "DUDUDA_LOOP_SENDER_TTL", "60")),
+            group_circuit_ttl_seconds=float(env.get(
+                "DUDUDA_LOOP_GROUP_TTL", "30")),
+            max_keys=int(env.get("DUDUDA_LOOP_MAX_KEYS", "4096")),
+        )
 
     def evaluate(
         self,
