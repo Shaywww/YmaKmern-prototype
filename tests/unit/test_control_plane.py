@@ -100,7 +100,7 @@ class TestMCP:
         r = client.get("/mcp/services")
         assert r.status_code == 200
         data = r.json()
-        assert data["count"] == 12
+        assert data["count"] == 13
         assert "clock" in data["services"]
         assert "course_schedule" in data["services"]
 
@@ -147,7 +147,7 @@ class TestRuntime:
         data = r.json()
         assert "active_persona" in data
         assert data["persona_count"] >= 4
-        assert data["mcp_services"] == 12
+        assert data["mcp_services"] == 13
         assert data["evolution"]["mode"] == "shadow"
         assert data["evolution"]["auto_activate"] is False
 

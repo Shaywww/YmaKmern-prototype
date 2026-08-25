@@ -355,7 +355,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     def _rule_fallback_plan(self, state, candidates, intent):
         """LLM 规划失败/不可用时的确定性兜底（防 provider 抖动丢工具链）。
 
-        优先级：时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
+        优先级：评课社区 -> 时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
         仅当模型路径失败/输出非法时使用，模型合法空计划（无需工具）不触发。
         """
         if not candidates or not intent:
@@ -367,7 +367,15 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return None
         allowed = {c.capability.capability_id for c in candidates}
         cap_id, args = None, {}
-        if "mcp.clock" in allowed and any(k in text for k in
+        review_intent = (
+            "评课" in text
+            or (("老师" in text or "课程" in text or "课" in text)
+                and any(k in text for k in (
+                    "评价", "怎么样", "好不好", "值得选", "推荐吗",
+                    "给分", "作业多吗", "难不难", "收获"))))
+        if "mcp.icourse_reviews" in allowed and review_intent:
+            cap_id, args = "mcp.icourse_reviews", {"q": _clean_query(text), "limit": 3}
+        elif "mcp.clock" in allowed and any(k in text for k in
                 ("几点", "几号", "星期几", "日期", "什么时候", "现在几", "现在是")):
             cap_id, args = "mcp.clock", {}
         elif "mcp.weather" in allowed and any(k in text for k in
@@ -715,13 +723,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "核心是分层 Agent 架构（感知→社交决策→工具规划→执行→记忆→人格渲染）；"
             "对话模型走多角色路由（DeepSeek 为主，Claude/GPT 备用自动降级）；"
             "有受控记忆系统（短期/长期、敏感分级、写入门控）；"
-            "通过 MCP 工具链支持查时间、天气、联网搜索、翻译、新闻等能力；"
+            "通过 MCP 工具链支持查时间、天气、联网搜索、翻译、新闻和中科大评课等能力；"
             "还带用户画像与全链路轨迹追踪。可以主动分点讲，但别啰嗦。"
             "★ 介绍自己时严禁透露隐私：服务器地址/IP/端口、Token/密钥/模型 API Key、"
             "部署路径、作者个人信息、账单费用。只讲功能与架构。"
-            "★ 被问「评课社区 / 科大 / 教务 / 校园系统」时，必须如实回答："
-            "目前还没有接入中科大的任何系统（评课社区、教务、课表等都没接），"
-            "这些还在规划中，不要假装有相关功能或数据。"
+            "★ 已只读接入 USTC 评课社区的公开课程与教师评价查询；"
+            "可以根据工具结果整理评分、作业量、难度、给分与点评要点，并给出课程页面链接。"
+            "除此之外，中科大教务、个人课表、成绩等校园系统仍未接入；不要假装有这些数据。"
             "★ 永远保持嘟嘟哒的口吻；严禁「你好！有什么我可以帮你的吗？」"
             "这类通用客服式开场白；即使对方只回「好的」「嗯」「知道了」「ok」"
             "等简短收尾，也只回一两句嘟嘟哒式的话（如「好嘞～随时找我玩哦～」），"

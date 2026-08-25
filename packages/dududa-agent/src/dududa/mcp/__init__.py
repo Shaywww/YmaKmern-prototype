@@ -6,4 +6,5 @@ from .academic_calendar import AcademicCalendarService
 from .training_program import TrainingProgramService
 from .second_classroom import SecondClassroomService
 from .campus_notice import CampusNoticeService
+from .icourse_reviews import ICourseReviewsService
 from .registry import register_all_mcp_services

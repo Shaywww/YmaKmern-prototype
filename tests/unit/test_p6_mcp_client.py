@@ -506,7 +506,7 @@ class TestFactory:
         factory = create_unified_provider_factory({})
         reg = CapabilityRegistry()
         n = register_all_mcp_services(reg, provider_factory=factory)
-        assert n == 12
+        assert n == 13
         cap = reg.get("mcp.exam_schedule")
         assert cap is not None
         provider = reg.get_provider("mcp.exam_schedule")

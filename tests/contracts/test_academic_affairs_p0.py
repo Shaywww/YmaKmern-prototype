@@ -160,4 +160,4 @@ class TestProductionWiring:
         from dududa.core.capability import CapabilityRegistry
         from dududa.mcp.registry import register_all_mcp_services
         reg = CapabilityRegistry()
-        assert register_all_mcp_services(reg) == 12
+        assert register_all_mcp_services(reg) == 13

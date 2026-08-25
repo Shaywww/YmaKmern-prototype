@@ -434,11 +434,19 @@ class DududaCore:
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
+        review_markers = (
+            "评课", "课程评价", "值得选", "推荐吗", "推荐老师",
+            "给分怎么样", "作业多吗", "难不难", "好不好", "怎么样",
+        )
+        if ("评课" in combined
+                or (("老师" in combined or "课程" in combined or "课" in combined)
+                    and any(marker in combined for marker in review_markers))):
+            topics.append("course_review")
         intents = list(topics) if topics else ["chitchat"]
         # 工具意图门：命令词（_TOOL_KW）命中即触发工具链，与 _social_decision 对齐，
         # 避免「帮我查一下/查查XX」被判为纯闲聊；工具话题命中同样触发。
         has_command = any(a.act_type == "command" for a in acts)
-        needs_tools = has_command or any(t in ("course", "exam", "grade", "weather",
+        needs_tools = has_command or any(t in ("course", "course_review", "exam", "grade", "weather",
                                       "time", "notice", "activity", "calendar",
                                       "training", "news", "translate", "websearch")
                                       for t in topics)

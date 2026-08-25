@@ -14,6 +14,7 @@ from .web_search_service import WebSearchService
 from .weather_service import WeatherService
 from .news_service import NewsService
 from .translate_service import TranslateService
+from .icourse_reviews import ICourseReviewsService
 import time
 import os
 from typing import Any, Optional
@@ -112,6 +113,7 @@ def create_all_services() -> dict:
         "weather": WeatherService(),
         "news": NewsService(),
         "translate": TranslateService(),
+        "icourse_reviews": ICourseReviewsService(),
     }
     return _SERVICES
 
@@ -181,6 +183,7 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
         "news": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"limit":{"type":"integer"}}},
         "translate": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"text":{"type":"string"},"q":{"type":"string"},"target":{"type":"string"}}},
         "web_search": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"max_results":{"type":"integer"}},"required":["q"]},
+        "icourse_reviews": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":3}}},
     }
 
     count = 0

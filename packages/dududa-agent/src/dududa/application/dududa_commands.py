@@ -267,6 +267,7 @@ async def cmd_help_impl(plugin) -> str:
         "- 帮我解释一下量子纠缠",
         "- 总结这张图片/这个文件",
         "- 查一下今天的天气或新闻",
+        "- 查一下评课社区里的微积分I（张瑞）",
         f"当前可用能力（{len(available)}）: {', '.join(available[:12]) or '基础对话'}",
     ]
     if unavailable:

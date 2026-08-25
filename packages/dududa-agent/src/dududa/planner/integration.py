@@ -15,7 +15,17 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
 
     # Register common intent patterns
     planner.register_pattern(
-        ("查课", "课程查询", "课程信息", "什么课", "课程评价"),
+        ("评课社区", "评课", "课程评价", "老师怎么样", "老师好不好",
+         "课程怎么样", "课怎么样", "值得选", "推荐老师", "给分怎么样"),
+        {"name": "icourse_review_lookup",
+         "goal": "Find public USTC course and teacher reviews",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.icourse_reviews",
+                     "arguments": {"action": "search", "q": "{query}", "limit": 3},
+                     "purpose": "Search the USTC iCourse review community",
+                     "expected_output": "Course ratings and review summary with source link"}]},
+    )
+    planner.register_pattern(
+        ("查课", "课程查询", "课程信息", "什么课"),
         {"name": "course_lookup", "goal": "Find course information",
          "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
                      "arguments": {"action": "search"}, "purpose": "Search course database",
