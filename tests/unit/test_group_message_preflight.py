@@ -17,6 +17,7 @@ import pytest
 from dududa.application import dududa_handlers as h
 from dududa.application.dududa_core import DududaCore
 from dududa.core.group_policy import GroupPolicyStore
+from dududa.core.group_ambient import GroupAmbientTracker
 from dududa.core.idempotency import MessageIdempotencyRegistry
 from dududa.core.perception import PerceptionResult
 from dududa.core.state import SocialAction
@@ -210,6 +211,7 @@ class FlowPlugin:
         self.progress_delay = 60.0
         self.progress_messages = []
         self.group_policy = GroupPolicyStore(str(tmp_path / "group-policy.json"))
+        self.group_ambient = GroupAmbientTracker()
         # Absence of the attribute is intentional in compatibility tests.
         if with_guard:
             self.group_ingress_guard = guard
@@ -390,6 +392,41 @@ async def test_reply_rate_one_keeps_unmentioned_group_participation_reachable(
     monkeypatch.setattr(h, "_prune_stale_deliveries", lambda plugin_: asyncio.sleep(0))
 
     assert await h.run_message_flow(plugin, event) == "我也来补充一点～"
+
+
+def test_ambient_opt_in_promotes_only_busy_group_question(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for i in range(14):
+        event = GroupEvent(
+            f"普通讨论 {i}", message_id=f"ambient-fill-{i}",
+            sender_id=str(10000 + (i % 3)), at=False)
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    question = GroupEvent(
+        "明天几点集合？", message_id="ambient-question",
+        sender_id="10003", at=False)
+    assert h._preflight_group_message(
+        plugin, question, question.get_messages()) is True
+    assert question.is_at_or_wake_command is True
+    assert h._is_ambient_wake(question) is True
+
+
+def test_ambient_default_off_stays_silent(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    for i in range(14):
+        event = GroupEvent(
+            f"普通讨论 {i}", message_id=f"ambient-off-fill-{i}",
+            sender_id=str(10000 + (i % 3)), at=False)
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+    question = GroupEvent(
+        "明天几点集合？", message_id="ambient-off-question",
+        sender_id="10003", at=False)
+    assert h._preflight_group_message(
+        plugin, question, question.get_messages()) is False
+    assert h._is_ambient_wake(question) is False
 
 
 @pytest.mark.asyncio

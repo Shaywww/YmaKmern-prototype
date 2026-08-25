@@ -122,15 +122,18 @@ class TestGroupPolicyStore:
 
     def test_set_get_roundtrip(self, tmp_path):
         store = GroupPolicyStore(str(tmp_path / "gp.json"))
-        p = store.set("g1", mode="silent", reply_rate=0.3, meme_rate=0.8)
+        p = store.set("g1", mode="silent", reply_rate=0.3, meme_rate=0.8,
+                      ambient_enabled=True)
         assert isinstance(p, GroupPolicy)
         assert p.mode == "silent"
         assert p.reply_rate == 0.3
         assert p.meme_rate == 0.8
+        assert p.ambient_enabled is True
         got = store.get("g1")
         assert got.mode == "silent"
         assert got.reply_rate == 0.3
         assert got.meme_rate == 0.8
+        assert got.ambient_enabled is True
 
     def test_persist_across_reload(self, tmp_path):
         path = str(tmp_path / "gp.json")
@@ -370,3 +373,21 @@ class TestGroupPolicyCommands:
             _FakeEvent("@bot 你好", group="g1"))
         assert action == SocialAction.IGNORE
         assert reason == DecisionReason.GROUP_MODE_OFF.value
+
+    @pytest.mark.asyncio
+    async def test_cmd_ambient_owner_sets_current_group(self, plugin, monkeypatch):
+        monkeypatch.setattr(plugin._core, "_actor_for",
+                            lambda event: _OwnerActor())
+        reply = await dududa_commands.cmd_group_ambient_impl(
+            plugin, _FakeEvent("x", group="g1"), "on")
+        assert "已开启" in reply
+        assert plugin.group_policy.get("g1").ambient_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_cmd_ambient_denied_for_normal(self, plugin, monkeypatch):
+        monkeypatch.setattr(plugin._core, "_actor_for",
+                            lambda event: _NormalActor())
+        reply = await dududa_commands.cmd_group_ambient_impl(
+            plugin, _FakeEvent("x", group="g1"), "on")
+        assert "权限不足" in reply
+        assert plugin.group_policy.get("g1") is None

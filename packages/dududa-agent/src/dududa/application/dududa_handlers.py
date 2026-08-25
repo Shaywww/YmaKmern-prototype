@@ -666,6 +666,22 @@ def _group_policy_for_event(plugin, event, group_id: str):
     return None
 
 
+def _mark_ambient_wake(event) -> None:
+    try:
+        event.set_extra("dududa_ambient_wake", True)
+    except Exception:
+        setattr(event, "_dududa_ambient_wake", True)
+
+
+def _is_ambient_wake(event) -> bool:
+    try:
+        if event.get_extra("dududa_ambient_wake"):
+            return True
+    except Exception:
+        pass
+    return bool(getattr(event, "_dududa_ambient_wake", False))
+
+
 def _preflight_group_message(plugin, event, msgs) -> bool:
     """Return whether a group event is worth starting the full message flow.
 
@@ -728,6 +744,33 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
         return False
     if wake:
         return True
+
+    # Ambient participation is separate from random reply_rate: only the
+    # current clear question can be promoted, after an explicit per-group
+    # opt-in. The guard above has already rejected configured bot senders;
+    # framework commands and unaddressed media never reach this branch.
+    if (policy is not None
+            and str(getattr(policy, "mode", "normal")) == "normal"
+            and bool(getattr(policy, "ambient_enabled", False))):
+        tracker = getattr(plugin, "group_ambient", None)
+        observe = getattr(tracker, "observe", None)
+        if callable(observe):
+            try:
+                decision = observe(
+                    group_id=group_id,
+                    sender_id=sender_id,
+                    text=str(getattr(event, "message_str", "") or ""),
+                )
+                if bool(getattr(decision, "should_reply", False)):
+                    event.is_at_or_wake_command = True
+                    _mark_ambient_wake(event)
+                    logger.info(
+                        "Group ambient wake | group=%s messages=%s senders=%s",
+                        group_id, getattr(decision, "message_count", 0),
+                        getattr(decision, "unique_senders", 0))
+                    return True
+            except Exception:
+                logger.warning("Group ambient tracker failed closed", exc_info=True)
 
     # Passive participation is an explicit per-group opt-in.  The actual
     # probability remains owned by the social decision engine.
@@ -825,6 +868,8 @@ async def run_message_flow(plugin, event) -> str | None:
 
 async def _send_delayed_progress(plugin, event, task_key: str) -> None:
     try:
+        if _is_ambient_wake(event):
+            return
         await asyncio.sleep(float(getattr(plugin, "progress_delay", 3.0)))
         registry = getattr(plugin, "ux_tasks", None)
         active = registry.running(task_key) if registry is not None else None

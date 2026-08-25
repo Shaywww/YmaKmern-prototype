@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""群策略（文档 2.5.2 / 2.5.4）：mode / reply_rate / meme_rate 的存储与投影。
+"""群策略：mode / reply_rate / meme_rate / ambient 的存储与投影。
 
 - GroupPolicyStore：按 group_id 持久化 JSON（原子写，进程内线程安全）。
 - mode:
@@ -9,6 +9,7 @@
 - reply_rate: 0..1，未被 @ 时被动参与概率；默认 0.0（不主动插话，保持现状）。
 - meme_rate:  0..1，问候/单表情等轻松消息走 REACT 表情回复的比例；
     未命中回退 DIRECT_REPLY 文本回复（保证 @ 消息必回）；默认 1.0（保持现状）。
+- ambient_enabled: 忙碌群聊问题补位；默认 False，必须由群管理员主动开启。
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ class GroupPolicy:
     reply_rate: float = 0.0
     meme_rate: float = 1.0
     interruption_cost: float = 0.0
+    ambient_enabled: bool = False
     updated_at: float = 0.0
 
     @classmethod
@@ -51,6 +53,7 @@ class GroupPolicy:
             reply_rate=_clamp01(raw.get("reply_rate", 0.0)),
             meme_rate=_clamp01(raw.get("meme_rate", 1.0)),
             interruption_cost=_clamp01(raw.get("interruption_cost", 0.0)),
+            ambient_enabled=bool(raw.get("ambient_enabled", False)),
             updated_at=float(raw.get("updated_at", 0.0) or 0.0),
         )
 
@@ -111,7 +114,8 @@ class GroupPolicyStore:
     def set(self, group_id: str, mode: Optional[str] = None,
             reply_rate: Optional[float] = None,
             meme_rate: Optional[float] = None,
-            interruption_cost: Optional[float] = None) -> GroupPolicy:
+            interruption_cost: Optional[float] = None,
+            ambient_enabled: Optional[bool] = None) -> GroupPolicy:
         gid = str(group_id)
         if mode is not None and mode not in GROUP_MODES:
             raise ValueError("mode 必须是 normal/silent/off 之一")
@@ -125,6 +129,8 @@ class GroupPolicyStore:
                 raw["meme_rate"] = _clamp01(meme_rate)
             if interruption_cost is not None:
                 raw["interruption_cost"] = _clamp01(interruption_cost)
+            if ambient_enabled is not None:
+                raw["ambient_enabled"] = bool(ambient_enabled)
             raw["updated_at"] = time.time()
             self._groups[gid] = raw
             self._save()

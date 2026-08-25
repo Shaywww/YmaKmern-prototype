@@ -276,6 +276,7 @@ async def cmd_help_impl(plugin) -> str:
         "常用命令:",
         "/dududa_memory — 查看和控制记忆",
         "/dududa_subscribe — 自主管理订阅",
+        "/dududa_ambient — 群管理员控制忙碌群聊问题补位",
         "/dududa_cancel — 取消正在处理的任务",
         "/dududa_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
         "/dududa_help — 查看这份动态帮助",
@@ -391,9 +392,52 @@ async def cmd_group_impl(plugin, event, target=None) -> str:
         return "用法: dududa_group [群号]"
     policy = _group_store(plugin).get(gid)
     if policy is None:
-        return f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1）"
+        return f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1 / ambient=off）"
     return (f"群 {gid}: mode={policy.mode} reply_rate={policy.reply_rate} "
-            f"meme_rate={policy.meme_rate} interrupt_cost={policy.interruption_cost}")
+            f"meme_rate={policy.meme_rate} interrupt_cost={policy.interruption_cost} "
+            f"ambient={'on' if policy.ambient_enabled else 'off'}")
+
+
+async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
+    """控制当前群问题补位；开关、冷却与每日限额均持久化。"""
+    try:
+        gid = str(getattr(event.message_obj, "group", None) or "")
+    except Exception:
+        gid = ""
+    if not gid:
+        return "这个命令只能在群聊中使用。"
+    action = (action or "status").strip().lower()
+    action = {"开启": "on", "关闭": "off", "状态": "status"}.get(action, action)
+    if action not in ("on", "off", "status"):
+        return "用法: /dududa_ambient on|off|status"
+
+    policy = _group_store(plugin).get(gid)
+    enabled = bool(getattr(policy, "ambient_enabled", False))
+    if action in ("on", "off"):
+        res, conf = plugin._authorize_manage(
+            event, resource="group_policy",
+            payload={"ambient_enabled": action == "on", "group": gid})
+        if not res.allowed:
+            return _deny_hint(res, conf)
+        policy = _group_store(plugin).set(
+            gid, ambient_enabled=(action == "on"))
+        enabled = policy.ambient_enabled
+
+    tracker = getattr(plugin, "group_ambient", None)
+    status_fn = getattr(tracker, "status", None)
+    status = status_fn(gid) if callable(status_fn) else {}
+    state = "已开启" if enabled else "已关闭"
+    prefix = (f"本群问题补位{state}。" if action in ("on", "off")
+              else f"本群问题补位：{state}。")
+    return (
+        f"{prefix}\n"
+        "触发条件：4 分钟内至少 15 条真人消息、至少 3 人参与，"
+        "且最新消息是明确问题。\n"
+        f"当前窗口：{status.get('message_count', 0)} 条 / "
+        f"{status.get('unique_senders', 0)} 人；今日已回复 "
+        f"{status.get('daily_used', 0)}/{status.get('daily_limit', 2)} 次。\n"
+        "限制：不随机 @ 人；冷却 30 分钟；每天最多 2 次；只回复一轮。"
+    )
 
 
 async def cmd_group_mode_impl(plugin, event, group_id=None, mode=None) -> str:
