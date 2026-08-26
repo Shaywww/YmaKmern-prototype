@@ -5,11 +5,13 @@
 Main 只做事件适配与结果发送。
 """
 import asyncio
+import json
 import logging
 import random
 import re
 import threading
 import time
+from collections.abc import Mapping
 from uuid import uuid4
 
 from dududa.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
@@ -716,6 +718,129 @@ def _is_ambient_wake(event) -> bool:
     return bool(getattr(event, "_dududa_ambient_wake", False))
 
 
+_GROUP_SCENE_REPLIES = {
+    "new_member": (
+        "欢迎新同学来玩～先随便坐，想说话就说话呀 (≧▽≦)",
+        "欢迎欢迎～不用拘谨，跟大家一起聊天就好啦 ^^~",
+        "抓到一位新同学～欢迎来玩呀 (。・ω・。)",
+    ),
+    "red_packet": (
+        "哇，谢谢老板～(≧▽≦)",
+        "谢谢老板！这下群里有排面了 ^^~",
+        "老板大气～嘟嘟哒也来凑个热闹 (。・ω・。)",
+    ),
+    "poll": (
+        "我先站第一项～纯凑热闹，你们按自己想法投呀 (≧▽≦)",
+        "那我先押第一项啦～只是围观，不替大家做决定 ^^~",
+        "第一项先加我一个精神票～你们随意呀 (。・ω・。)",
+    ),
+    "late_night_checkin": (
+        "这个点还没睡啊？别熬太晚啦～",
+        "嚯，这么晚还有人冒泡呢～早点休息呀 ^^~",
+        "夜猫子被我抓到啦～聊归聊，别熬得太狠哦 (。・ω・。)",
+    ),
+}
+
+
+def _raw_event_mapping(event) -> Mapping:
+    """Return the adapter's original OneBot event when it is available."""
+    for raw in (
+        getattr(event, "raw_message", None),
+        getattr(getattr(event, "message_obj", None), "raw_message", None),
+    ):
+        if isinstance(raw, Mapping):
+            return raw
+    return {}
+
+
+def _jsonish_text(value) -> str:
+    """Bounded card serialization used only for strong scene signatures."""
+    try:
+        if isinstance(value, str):
+            return value[:20000].lower()
+        if isinstance(value, Mapping) or isinstance(value, (list, tuple)):
+            return json.dumps(value, ensure_ascii=False)[:20000].lower()
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
+def _detect_group_scene(event, msgs) -> str:
+    """Detect supported native group events without interpreting chat text."""
+    raw = _raw_event_mapping(event)
+    post_type = str(raw.get("post_type", "") or "").lower()
+    notice_type = str(raw.get("notice_type", "") or "").lower()
+    if (post_type == "notice"
+            and notice_type in ("group_increase", "group_member_increase")):
+        joined_id = str(raw.get("user_id", "") or "")
+        self_id = str(raw.get("self_id", "") or _event_bot_id(None, event))
+        return "" if joined_id and joined_id == self_id else "new_member"
+
+    segment_types = set()
+    card_texts = []
+    for segment in _raw_message_segments(event):
+        kind = str(segment.get("type", "") or "").lower()
+        segment_types.add(kind)
+        data = _segment_data(segment)
+        if kind in ("json", "ark", "xml", "wallet"):
+            card_texts.append(_jsonish_text(data))
+    for component in msgs or ():
+        kind = str(getattr(component, "type", "") or "").lower()
+        class_name = component.__class__.__name__.lower()
+        segment_types.update((kind, class_name))
+        if any(token in kind or token in class_name
+               for token in ("json", "ark", "xml", "wallet")):
+            card_texts.append(_jsonish_text(
+                getattr(component, "data", None)
+                or getattr(component, "content", None)
+                or getattr(component, "json", None)))
+
+    if segment_types.intersection(
+            {"redbag", "red_packet", "redpacket", "hongbao", "wallet"}):
+        return "red_packet"
+
+    card = "\n".join(text for text in card_texts if text)
+    if card:
+        red_packet_markers = ("redbag", "red_packet", "hongbao", "红包")
+        if any(marker in card for marker in red_packet_markers) and any(
+                marker in card for marker in ("wallet", "red", "红包")):
+            return "red_packet"
+        if ("投票" in card and any(marker in card for marker in (
+                "vote", "options", "option", "群投票"))) or any(
+                marker in card for marker in (
+                    "troopvote", "groupvote", "com.tencent.vote")):
+            return "poll"
+
+    raw_text = str(raw.get("raw_message", "") or "").lower()
+    if re.search(r"\[cq:(?:redbag|redpacket|red_packet)\b", raw_text):
+        return "red_packet"
+    return ""
+
+
+def _mark_group_scene_reply(event, reason: str) -> str:
+    choices = _GROUP_SCENE_REPLIES.get(str(reason or ""), ())
+    if not choices:
+        return ""
+    reply = random.choice(choices)
+    try:
+        event.set_extra("dududa_group_scene_reply", reply)
+        event.set_extra("dududa_group_scene_reason", reason)
+    except Exception:
+        setattr(event, "_dududa_group_scene_reply", reply)
+        setattr(event, "_dududa_group_scene_reason", reason)
+    return reply
+
+
+def _group_scene_reply(event) -> str:
+    try:
+        value = event.get_extra("dududa_group_scene_reply")
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return str(getattr(event, "_dududa_group_scene_reply", "") or "")
+
+
 def _preflight_group_message(plugin, event, msgs) -> bool:
     """Return whether a group event is worth starting the full message flow.
 
@@ -777,7 +902,40 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
         return False
 
     wake = bool(getattr(event, "is_at_or_wake_command", False))
-    if has_media and not wake:
+    if wake:
+        return True
+
+    scene_reason = _detect_group_scene(event, msgs)
+    if scene_reason:
+        # Native scenes are opt-in with ambient participation.  A recognised
+        # but disabled/rate-limited card is consumed rather than sent to the
+        # LLM as an empty or opaque message.
+        if not (policy is not None
+                and str(getattr(policy, "mode", "normal")) == "normal"
+                and bool(getattr(policy, "ambient_enabled", False))):
+            return False
+        tracker = getattr(plugin, "group_ambient", None)
+        reserve = getattr(tracker, "reserve_scene", None)
+        if not callable(reserve):
+            return False
+        try:
+            decision = reserve(group_id=group_id, reason=scene_reason)
+            if not bool(getattr(decision, "should_reply", False)):
+                logger.info(
+                    "Group scene suppressed | group=%s scene=%s reason=%s",
+                    group_id, scene_reason,
+                    getattr(decision, "reason", "limited"))
+                return False
+            event.is_at_or_wake_command = True
+            _mark_group_scene_reply(event, scene_reason)
+            logger.info("Group scene wake | group=%s scene=%s",
+                        group_id, scene_reason)
+            return True
+        except Exception:
+            logger.warning("Group scene tracker failed closed", exc_info=True)
+            return False
+
+    if has_media:
         # Even if persistence fails, consume the unaddressed media event.  It
         # must never fall through into a full LLM task merely because storage
         # is unavailable.
@@ -785,8 +943,6 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
             logger.info("Group media consumed without stash | group=%s",
                         group_id)
         return False
-    if wake:
-        return True
 
     if (policy is not None
             and str(getattr(policy, "mode", "normal")) == "normal"
@@ -818,10 +974,14 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                 )
                 if bool(getattr(decision, "should_reply", False)):
                     event.is_at_or_wake_command = True
-                    _mark_ambient_wake(event)
+                    reason = str(getattr(decision, "reason", "ambient"))
+                    if reason == "late_night_checkin":
+                        _mark_group_scene_reply(event, reason)
+                    else:
+                        _mark_ambient_wake(event)
                     logger.info(
                         "Group ambient wake | group=%s reason=%s messages=%s senders=%s",
-                        group_id, getattr(decision, "reason", "ambient"),
+                        group_id, reason,
                         getattr(decision, "message_count", 0),
                         getattr(decision, "unique_senders", 0))
                     return True
@@ -851,8 +1011,6 @@ async def run_message_flow(plugin, event) -> str | None:
     if plugin._is_self_message(event): return None
     if _is_framework_command(event): return None
     msgs = event.get_messages()
-    if not msgs:
-        if time.time() - plugin._last_file_ts < 3: return None
     msg_id = ""
     try: msg_id = str(event.message_obj.message_id)
     except Exception: pass
@@ -860,6 +1018,11 @@ async def run_message_flow(plugin, event) -> str | None:
     if _dedupe_message(plugin, event, msg_id): return None
     if _cross_session_reply_dropped(plugin, event): return None
     if not _preflight_group_message(plugin, event, msgs): return None
+    scene_reply = _group_scene_reply(event)
+    if scene_reply:
+        return _normalize_reply_style(scene_reply)
+    if not msgs:
+        if time.time() - plugin._last_file_ts < 3: return None
     ux_store = getattr(plugin, "ux_store", None)
     ux_tasks = getattr(plugin, "ux_tasks", None)
     task = asyncio.current_task()

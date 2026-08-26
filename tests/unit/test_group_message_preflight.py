@@ -65,6 +65,7 @@ class GroupEvent:
         group_id: str = GROUP_ID,
         at: bool = False,
         components=None,
+        raw_message=None,
     ):
         self.message_str = text
         self.message_id = message_id
@@ -78,6 +79,7 @@ class GroupEvent:
             message_str=text,
             self_id=str(bot_id),
             sender=SimpleNamespace(user_id=str(sender_id), role="member"),
+            raw_message=raw_message,
         )
         self.is_at_or_wake_command = at
         self._components = list(components) if components is not None else [
@@ -486,6 +488,95 @@ async def test_unmentioned_group_image_is_stashed_without_ux_progress_or_trace(
     stashed = plugin._recent_media[(GROUP_ID, "10010")]
     assert stashed[1:] == (url, "photo.jpg", True)
     _assert_zero_flow_side_effects(plugin, trace, created_tasks, prune_calls)
+
+
+@pytest.mark.asyncio
+async def test_new_member_notice_gets_opt_in_welcome_without_llm_work(
+    tmp_path, monkeypatch
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    event = GroupEvent(
+        "", message_id="join-1", sender_id="10020", components=[],
+        raw_message={
+            "post_type": "notice", "notice_type": "group_increase",
+            "group_id": int(GROUP_ID), "user_id": 10020,
+            "self_id": int(BOT_ID), "sub_type": "approve",
+        },
+    )
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
+
+    reply = await h.run_message_flow(plugin, event)
+
+    assert reply in h._GROUP_SCENE_REPLIES["new_member"]
+    _assert_zero_flow_side_effects(
+        plugin, trace, created_tasks, prune_calls)
+
+
+@pytest.mark.asyncio
+async def test_new_member_notice_stays_silent_when_ambient_is_off(
+    tmp_path, monkeypatch
+):
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent(
+        "", message_id="join-off", sender_id="10021", components=[],
+        raw_message={
+            "post_type": "notice", "notice_type": "group_increase",
+            "group_id": int(GROUP_ID), "user_id": 10021,
+            "self_id": int(BOT_ID),
+        },
+    )
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
+
+    assert await h.run_message_flow(plugin, event) is None
+    _assert_zero_flow_side_effects(
+        plugin, trace, created_tasks, prune_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message_id", "segment", "reason"),
+    [
+        ("red-1", {"type": "redbag", "data": {"title": "恭喜发财"}},
+         "red_packet"),
+        ("poll-1", {"type": "json", "data": {
+            "data": '{"app":"com.tencent.troopvote","prompt":"[群投票]去哪吃"}'
+        }}, "poll"),
+    ],
+)
+async def test_native_card_scenes_reply_without_starting_llm_work(
+    tmp_path, monkeypatch, message_id, segment, reason
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    event = GroupEvent(
+        "", message_id=message_id, components=[],
+        raw_message={
+            "post_type": "message", "message_type": "group",
+            "group_id": int(GROUP_ID), "user_id": 10030,
+            "self_id": int(BOT_ID), "message": [segment],
+        },
+    )
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
+
+    reply = await h.run_message_flow(plugin, event)
+
+    assert reply in h._GROUP_SCENE_REPLIES[reason]
+    _assert_zero_flow_side_effects(
+        plugin, trace, created_tasks, prune_calls)
+
+
+def test_ordinary_json_card_is_not_misclassified_as_poll():
+    event = GroupEvent(
+        "", message_id="json-share", components=[],
+        raw_message={
+            "post_type": "message", "message_type": "group",
+            "message": [{"type": "json", "data": {
+                "data": '{"app":"com.tencent.structmsg","prompt":"分享了一篇文章"}'
+            }}],
+        },
+    )
+    assert h._detect_group_scene(event, event.get_messages()) == ""
 
 
 def test_split_at_window_matches_same_sender():

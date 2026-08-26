@@ -9,7 +9,7 @@
 - reply_rate: 0..1，未被 @ 时被动参与概率；默认 0.0（不主动插话，保持现状）。
 - meme_rate:  0..1，问候/单表情等轻松消息走 REACT 表情回复的比例；
     未命中回退 DIRECT_REPLY 文本回复（保证 @ 消息必回）；默认 1.0（保持现状）。
-- ambient_enabled: 忙碌群聊问题补位；默认 False，必须由群管理员主动开启。
+- ambient_enabled: 自然参与与场景回应；默认 False，必须由群管理员主动开启。
 """
 from __future__ import annotations
 

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from dududa.core.group_ambient import GroupAmbientTracker
+from datetime import datetime
 
 
 def _fill(tracker, *, group="g1", start=1000.0, count=14):
@@ -102,3 +103,47 @@ def test_cooldown_and_daily_quota_survive_restart(tmp_path):
         group_id="g", sender_id="u2", text="为什么？", now=1003)
     assert blocked.reason == "cooldown"
     assert restarted.status("g", now=1003)["daily_used"] == 1
+
+
+def test_native_scenes_share_cooldown_and_daily_quota():
+    tracker = GroupAmbientTracker(cooldown_seconds=60, daily_limit=2)
+    first = tracker.reserve_scene(
+        group_id="g", reason="new_member", now=1000)
+    blocked = tracker.reserve_scene(
+        group_id="g", reason="poll", now=1001)
+    second = tracker.reserve_scene(
+        group_id="g", reason="red_packet", now=1061)
+    limited = tracker.reserve_scene(
+        group_id="g", reason="poll", now=1122)
+    assert first.should_reply is True
+    assert blocked.reason == "cooldown"
+    assert second.should_reply is True
+    assert limited.reason == "daily_limit"
+
+
+def test_late_night_checkin_requires_prior_activity_and_long_silence():
+    tracker = GroupAmbientTracker(
+        cooldown_seconds=60, daily_limit=2,
+        late_night_silence_seconds=1800)
+    late = datetime(2026, 8, 27, 1, 0).timestamp()
+    cold_start = tracker.observe(
+        group_id="g", sender_id="u1", text="居然还有人", now=late)
+    too_soon = tracker.observe(
+        group_id="g", sender_id="u2", text="我也在", now=late + 60)
+    after_silence = tracker.observe(
+        group_id="g", sender_id="u3", text="突然想起来一件事",
+        now=late + 1861)
+    assert cold_start.should_reply is False
+    assert too_soon.should_reply is False
+    assert after_silence.should_reply is True
+    assert after_silence.reason == "late_night_checkin"
+
+
+def test_late_night_sleep_closing_message_stays_silent():
+    tracker = GroupAmbientTracker(late_night_silence_seconds=1800)
+    late = datetime(2026, 8, 27, 1, 0).timestamp()
+    tracker.observe(group_id="g", sender_id="u1", text="我还在", now=late)
+    decision = tracker.observe(
+        group_id="g", sender_id="u2", text="晚安，我先睡了",
+        now=late + 1801)
+    assert decision.should_reply is False

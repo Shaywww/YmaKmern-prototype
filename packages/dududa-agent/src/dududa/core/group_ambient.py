@@ -24,6 +24,9 @@ _EMOTIONAL_BID_RE = re.compile(
     r"(?:好烦|烦死了?|累死了?|好累|崩溃了?|绷不住了?|难受|委屈|"
     r"心态炸了?|压力好大|想哭|受不了了?|撑不住了?)"
 )
+_SLEEP_CLOSING_RE = re.compile(
+    r"(?:晚安|睡了|睡觉去了?|准备睡|先睡|下线了?|不聊了)"
+)
 
 
 @dataclass(frozen=True)
@@ -40,13 +43,17 @@ class GroupAmbientTracker:
     def __init__(self, *, window_seconds: float = 240.0,
                  min_messages: int = 15, min_unique_senders: int = 3,
                  cooldown_seconds: float = 1800.0, daily_limit: int = 2,
+                 late_night_silence_seconds: float = 1800.0,
                  state_path: str | None = None):
         self.window_seconds = max(30.0, float(window_seconds))
         self.min_messages = max(2, int(min_messages))
         self.min_unique_senders = max(2, int(min_unique_senders))
         self.cooldown_seconds = max(60.0, float(cooldown_seconds))
         self.daily_limit = max(1, int(daily_limit))
+        self.late_night_silence_seconds = max(
+            300.0, float(late_night_silence_seconds))
         self._messages: dict[str, deque[tuple[float, str]]] = defaultdict(deque)
+        self._last_activity: dict[str, float] = {}
         self._last_reply: dict[str, float] = {}
         self._daily: dict[str, tuple[str, int]] = {}
         self._state_path = str(state_path or "")
@@ -124,6 +131,8 @@ class GroupAmbientTracker:
 
         with self._lock:
             queue = self._messages[gid]
+            previous_activity = self._last_activity.get(gid)
+            self._last_activity[gid] = ts
             queue.append((ts, uid))
             cutoff = ts - self.window_seconds
             while queue and queue[0][0] < cutoff:
@@ -132,32 +141,74 @@ class GroupAmbientTracker:
             unique = len({sender for _, sender in queue})
 
             emotional_bid = self.is_emotional_bid(value)
-            if not emotional_bid and not self.is_clear_question(value):
+            clear_question = self.is_clear_question(value)
+            late_night = bool(
+                not emotional_bid
+                and not clear_question
+                and previous_activity is not None
+                and ts - previous_activity >= self.late_night_silence_seconds
+                and datetime.fromtimestamp(ts).hour in (0, 1, 2, 3, 4)
+                and not _SLEEP_CLOSING_RE.search(value)
+            )
+            if emotional_bid:
+                reason = "emotional_checkin"
+            elif clear_question:
+                if count < self.min_messages:
+                    return AmbientDecision(False, "not_busy", count, unique)
+                if unique < self.min_unique_senders:
+                    return AmbientDecision(False, "too_few_senders", count, unique)
+                reason = "busy_unanswered_question"
+            elif late_night:
+                reason = "late_night_checkin"
+            else:
                 return AmbientDecision(False, "latest_not_question", count, unique)
-            if not emotional_bid and count < self.min_messages:
-                return AmbientDecision(False, "not_busy", count, unique)
-            if not emotional_bid and unique < self.min_unique_senders:
-                return AmbientDecision(False, "too_few_senders", count, unique)
-            last_reply = self._last_reply.get(gid)
-            if (last_reply is not None
-                    and ts - last_reply < self.cooldown_seconds):
-                return AmbientDecision(False, "cooldown", count, unique)
+            return self._reserve_locked(
+                gid=gid, ts=ts, reason=reason,
+                message_count=count, unique_senders=unique)
 
-            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-            saved_day, used = self._daily.get(gid, (day, 0))
-            if saved_day != day:
-                used = 0
-            if used >= self.daily_limit:
-                self._daily[gid] = (day, used)
-                return AmbientDecision(False, "daily_limit", count, unique)
+    def reserve_scene(self, *, group_id: str, reason: str,
+                      now: float | None = None) -> AmbientDecision:
+        """Reserve a native scene reply under the shared cooldown/quota.
 
-            # Reserve atomically so simultaneous messages cannot create a burst.
-            self._last_reply[gid] = ts
-            self._daily[gid] = (day, used + 1)
-            self._save_state_locked()
-            reason = ("emotional_checkin" if emotional_bid
-                      else "busy_unanswered_question")
-            return AmbientDecision(True, reason, count, unique)
+        New-member notices, red packets and poll cards do not contain normal
+        human text, so they cannot go through :meth:`observe`.  Keeping them on
+        the same limiter prevents several kinds of proactive reply from
+        combining into a burst.
+        """
+        ts = time.time() if now is None else float(now)
+        gid = str(group_id or "")
+        scene_reason = str(reason or "").strip()
+        if not gid or not scene_reason:
+            return AmbientDecision(False, "missing_identity")
+        with self._lock:
+            return self._reserve_locked(
+                gid=gid, ts=ts, reason=scene_reason,
+                message_count=0, unique_senders=0)
+
+    def _reserve_locked(self, *, gid: str, ts: float, reason: str,
+                        message_count: int,
+                        unique_senders: int) -> AmbientDecision:
+        last_reply = self._last_reply.get(gid)
+        if (last_reply is not None
+                and ts - last_reply < self.cooldown_seconds):
+            return AmbientDecision(
+                False, "cooldown", message_count, unique_senders)
+
+        day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        saved_day, used = self._daily.get(gid, (day, 0))
+        if saved_day != day:
+            used = 0
+        if used >= self.daily_limit:
+            self._daily[gid] = (day, used)
+            return AmbientDecision(
+                False, "daily_limit", message_count, unique_senders)
+
+        # Reserve atomically so simultaneous messages cannot create a burst.
+        self._last_reply[gid] = ts
+        self._daily[gid] = (day, used + 1)
+        self._save_state_locked()
+        return AmbientDecision(
+            True, reason, message_count, unique_senders)
 
     def status(self, group_id: str, *, now: float | None = None) -> dict:
         ts = time.time() if now is None else float(now)

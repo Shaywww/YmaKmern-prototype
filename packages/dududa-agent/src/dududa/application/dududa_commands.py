@@ -276,7 +276,7 @@ async def cmd_help_impl(plugin) -> str:
         "常用命令:",
         "/dududa_memory — 查看和控制记忆",
         "/dududa_subscribe — 自主管理订阅",
-        "/dududa_ambient — 群管理员控制忙碌群聊问题补位",
+        "/dududa_ambient — 群管理员控制自然参与和场景回应",
         "/dududa_cancel — 取消正在处理的任务",
         "/dududa_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
         "/dududa_help — 查看这份动态帮助",
@@ -399,7 +399,7 @@ async def cmd_group_impl(plugin, event, target=None) -> str:
 
 
 async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
-    """控制当前群问题补位；开关、冷却与每日限额均持久化。"""
+    """控制当前群自然参与；开关、冷却与每日限额均持久化。"""
     try:
         gid = str(getattr(event.message_obj, "group", None) or "")
     except Exception:
@@ -427,12 +427,14 @@ async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
     status_fn = getattr(tracker, "status", None)
     status = status_fn(gid) if callable(status_fn) else {}
     state = "已开启" if enabled else "已关闭"
-    prefix = (f"本群问题补位{state}。" if action in ("on", "off")
-              else f"本群问题补位：{state}。")
+    prefix = (f"本群自然参与{state}。" if action in ("on", "off")
+              else f"本群自然参与：{state}。")
     return (
         f"{prefix}\n"
-        "触发条件：4 分钟内至少 15 条真人消息、至少 3 人参与，"
-        "且最新消息是明确问题。\n"
+        "可触发：昵称招呼、明确情绪求助、忙碌群聊问题补位，"
+        "以及新人入群、红包、群投票和深夜冒泡。\n"
+        "深夜搭话仅限 0–5 点且此前沉默至少 30 分钟；"
+        "投票只口头凑热闹，不会代替用户投票。\n"
         f"当前窗口：{status.get('message_count', 0)} 条 / "
         f"{status.get('unique_senders', 0)} 人；今日已回复 "
         f"{status.get('daily_used', 0)}/{status.get('daily_limit', 2)} 次。\n"
