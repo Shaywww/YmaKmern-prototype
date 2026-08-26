@@ -55,7 +55,7 @@ def test_gateway_reachable_deepseek():
 
 def test_gateway_reachable_fallback():
     """降级网关 HTTPS 可达（真实网络）。"""
-    r = httpx.get("https://www.mhcoding.xyz", timeout=8,
+    r = httpx.get("https://www.mhcoding.ai", timeout=8,
                   follow_redirects=True)
     assert r.status_code < 500, f"降级网关异常: HTTP {r.status_code}"
 
