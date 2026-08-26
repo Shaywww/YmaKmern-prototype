@@ -249,7 +249,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if self._tool_chain is not None:
             from dududa.planner.planner import PlanningContext
             try:
-                intent = self._intent_of(state)
+                intent = self._effective_tool_intent(
+                    state, self._intent_of(state))
                 if self._weather_needs_location(state, intent):
                     from dududa.planner.planner import GeneratedPlan
                     return GeneratedPlan(
@@ -286,7 +287,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if not candidates:
             return None
         try:
-            intent = self._intent_of(state)
+            intent = self._effective_tool_intent(
+                state, self._intent_of(state))
             perception = getattr(state, "perception", None)
             tool_plan = getattr(perception, "tool_plan", None) if perception else None
             if tool_plan:
@@ -361,7 +363,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if not candidates or not intent:
             return None
         from dududa.planner.planner import GeneratedPlan, PlannedStep, _clean_query
-        import re as _re
         text = str(intent).strip()
         if not text:
             return None
@@ -380,11 +381,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             cap_id, args = "mcp.clock", {}
         elif "mcp.weather" in allowed and any(k in text for k in
                 ("天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷", "热不热")):
-            m = _re.search(r"([\u4e00-\u9fff]{2,6}?(?:市|县|区|镇))", text)
+            city = self._explicit_weather_city(text)
             default_city = self._user_location(state)
-            if not m and not default_city:
+            if not city and not default_city:
                 return None
-            cap_id, args = "mcp.weather", {"q": (m.group(1) if m else default_city)}
+            cap_id, args = "mcp.weather", {"q": city or default_city}
         elif "mcp.news" in allowed and any(k in text for k in
                 ("新闻", "资讯", "热点", "热搜", "报道", "消息")):
             cap_id, args = "mcp.news", {}
@@ -436,9 +437,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 if "q" in props and not str(args.get("q", "")).strip():
                     args["q"] = str(intent)[:120]
                 if cap.capability_id == "mcp.weather":
-                    # 城市只信意图文本：明确地名（市/县/区/镇后缀、拉丁地名、
-                    # 或中文地名后紧跟「天气」）才用，否则默认合肥。
-                    # 防止 LLM 猜用户没提过的城市（如「长庆镇」）。
+                    # 城市只信意图文本，防止 LLM 猜用户没提过的地点。
                     raw = str(intent) or ""
                     planned_city = str(
                         args.get("city", "") or args.get("q", "") or "").strip()
@@ -446,25 +445,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     # that is a query, not a city candidate.
                     if planned_city == raw:
                         planned_city = ""
-                    city = re.sub(
-                        r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+",
-                        "", raw)
-                    city = re.sub(
-                        r"(天气|气温|温度|预报|怎么样|怎样|如何|今天|明天|后天|"
-                        r"现在|目前|是什么|多少|度|会不会|下不下雨|冷不冷|热不热|"
-                        r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
-                    city = re.sub(r"@\S+", "", city).strip()
-                    city = re.sub(r"[，。！、\s]+$", "", city)
-                    city = re.sub(
-                        r"(?i)(?:weather|forecast|today|now|temperature|"
-                        r"current|in)\s*$", "", city).strip()
-                    if planned_city and planned_city in raw:
-                        args["q"] = planned_city
-                    elif (re.search(r"(?:市|县|区|镇|城|州|省)$", city)
-                            or re.fullmatch(r"[A-Za-z]{2,}", city)
-                            or (re.search(r"[\u4e00-\u9fff]", city)
-                                and (city + "天气") in raw)):
+                    city = _ProdOrchestrator._explicit_weather_city(raw)
+                    if city:
                         args["q"] = city
+                    elif planned_city and planned_city in raw:
+                        args["q"] = planned_city
                     else:
                         args["q"] = default_city
                     args.pop("city", None)
@@ -556,15 +541,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             cap_id = getattr(s, "capability_id", "")
             args = dict(s.arguments or {})
             if cap_id == "mcp.weather" and args.get("action") == "search":
-                # 城市提取：剔除天气词/时间词/语气词，兜底合肥
-                city = re.sub(
-                    r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+", "", raw)
-                city = re.sub(
-                    r"(天气|气温|温度|预报|怎么样|怎样|如何|今天|明天|后天|"
-                    r"现在|目前|是什么|多少|度|会不会|下不下雨|冷不冷|热不热|"
-                    r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
-                city = re.sub(r"@\S+", "", city).strip()
-                city = re.sub(r"[，。！、\s]+$", "", city)
+                city = _ProdOrchestrator._explicit_weather_city(raw)
                 args["q"] = city or default_city
             elif cap_id == "mcp.news" and args.get("action") == "search":
                 # 新闻关键词：去掉新闻类填充词，保留「科技/体育/国际」等话题词
@@ -629,21 +606,34 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         raw = str(text or "").strip()
         if not raw:
             return ""
+        value = re.sub(r"@\S+", " ", raw).strip()
+        english = re.search(
+            r"(?i)\b(?:weather|forecast)(?:\s+(?:in|for))?\s+"
+            r"([A-Za-z][A-Za-z .'-]{1,40})\s*[?!.]*$", value)
+        if not english:
+            english = re.search(
+                r"(?i)^\s*([A-Za-z][A-Za-z .'-]{1,40})\s+"
+                r"(?:weather|forecast)\s*[?!.]*$", value)
+        if english:
+            return english.group(1).strip()
+
+        marker = re.search(
+            r"(?:天气预报|天气|气温|温度|预报|下不下雨|会不会下雨|"
+            r"下雨|下雪|冷不冷|热不热)", value)
+        if marker is None:
+            return ""
+        city = value[:marker.start()]
         city = re.sub(
-            r"^(?:帮我|请|麻烦你|给我|帮我一下|帮我查|帮我搜)+", "", raw)
-        city = re.sub(
-            r"(天气|气温|温度|预报|怎么样|怎样|如何|今天|明天|后天|"
-            r"现在|目前|是什么|多少|度|会不会|下不下雨|冷不冷|热不热|"
-            r"啊|呀|呢|吧|吗|么|哦|的|了|？|\?)+", "", city)
-        city = re.sub(r"@\S+", "", city).strip()
-        city = re.sub(r"[，。！、\s]+$", "", city)
-        city = re.sub(
-            r"(?i)(?:weather|forecast|today|now|temperature|current|in)\s*$",
+            r"^(?:帮我看看|帮我查查|帮我搜搜|帮我一下|帮我查|帮我搜|"
+            r"帮我|请|麻烦你|给我|查询一下|查一下|搜一下|查询|查查|看看)+",
             "", city).strip()
-        if (re.search(r"(?:市|县|区|镇|城|州|省)$", city)
-                or re.fullmatch(r"[A-Za-z]{2,}", city)
-                or (re.search(r"[\u4e00-\u9fff]", city)
-                    and (city + "天气") in raw)):
+        city = re.sub(r"(?:今天|明天|后天|现在|目前)", "", city)
+        city = re.sub(r"(?:会不会|有没有|怎么样|怎样|如何)$", "", city)
+        city = re.sub(r"的$", "", city)
+        city = re.sub(r"^[，。！？、\s]+|[，。！？、\s]+$", "", city)
+        if city in {"", "这", "这个", "这里", "当地", "那", "那里", "哪", "哪里"}:
+            return ""
+        if re.fullmatch(r"[\u4e00-\u9fff]{2,16}", city):
             return city
         return ""
 
@@ -654,6 +644,57 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                           "冷不冷", "热不热"))
         return bool(is_weather and not self._explicit_weather_city(raw)
                     and not self._user_location(state))
+
+    def _effective_tool_intent(self, state, text: str) -> str:
+        """Resolve a short location as a weather follow-up from recent chat."""
+        raw = " ".join(str(text or "").split()).strip()
+        if not raw or any(k in raw for k in
+                          ("天气", "气温", "温度", "下雨", "下雪", "预报",
+                           "冷不冷", "热不热", "weather", "forecast")):
+            return raw
+        if len(raw) > 24 or not self._explicit_weather_city(raw + "天气"):
+            return raw
+        context = self._recent_chat_context(state, limit=4, budget=600)
+        if any(k in context for k in
+               ("天气", "气温", "温度", "下雨", "下雪", "预报",
+                "冷不冷", "热不热", "weather", "forecast")):
+            return raw + "天气"
+        return raw
+
+    @staticmethod
+    def _is_progress_placeholder(text: str) -> bool:
+        """Reject a promise to query after the tool phase has already ended."""
+        value = " ".join(str(text or "").split()).strip()
+        if not value or len(value) > 160:
+            return False
+        promise = re.search(
+            r"(?:正在(?:查|搜|看)|这就帮你|马上(?:帮你)?|稍等|等一下|"
+            r"等我(?:一下)?|一小下|待会儿)", value)
+        factual = re.search(r"(?:-?\d+(?:\.\d+)?\s*(?:℃|%|km/h)|"
+                            r"晴|阴|多云|小雨|中雨|大雨|阵雨|下雪)", value)
+        return bool(promise and not factual)
+
+    @staticmethod
+    def _weather_fallback_reply(data: Any) -> str:
+        if not isinstance(data, dict):
+            return "天气已经查到了，但刚才没整理好结果。你再问我一次吧～"
+        place = str(data.get("query_city") or data.get("city") or "当地").strip()
+        desc = str(data.get("desc") or "").strip()
+        temp = str(data.get("temp_c") or "").strip()
+        feels = str(data.get("feels_like_c") or "").strip()
+        humidity = str(data.get("humidity") or "").strip()
+        parts = []
+        if desc:
+            parts.append(desc)
+        if temp:
+            parts.append(f"{temp}℃")
+        if feels and feels != temp:
+            parts.append(f"体感 {feels}℃")
+        if humidity:
+            parts.append(f"湿度 {humidity}%")
+        if not parts:
+            return f"{place}的天气已经查到了，但结果字段不完整。你再问我一次吧～"
+        return f"{place}现在" + "，".join(parts) + "～出门前再看眼临近预报更稳哦 ^^~"
 
     def _recent_chat_context(self, state, limit=6, budget=1200) -> str:
         """近期对话记忆（供规划理解指代，如「本科」承接「USTC招生」）。"""
@@ -718,6 +759,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             f"你是{p.display_name}，自称{p.first_person}。你就是嘟嘟哒。"
             "使用嘟嘟哒的纯文本颜文字风格，如 (≧▽≦)、^^~；"
             "严禁使用 😋、😊、😂 等 Unicode 彩色 Emoji。短回复。"
+            "闲聊时像熟悉的群友：优先一到三句自然口语，不复述用户原话，"
+            "不用固定开场和客服式收尾，也不要为了显得活泼每句都塞语气词。"
+            "先对齐情绪再谈办法：开心时真诚一起高兴，吐槽时先接住情绪，"
+            "低落时温和追问；不要机械说『加油』『恭喜』『都可以』。"
+            "可以有明确但不过度武断的偏好，也可以坦率说不知道；"
+            "不准故意答错、伪造经历，或假装自己是真实人类。"
+            "只有复杂资料整理才使用分点，普通聊天禁止列菜单式 1、2、3。"
             "★ 被问「你是怎么搭出来的 / 怎么做的 / 用的什么技术 / 你是什么 / 介绍一下你自己」时，"
             "要自豪地详细介绍自己的公开技术构成：QQ 消息经 NapCat + AstrBot 接入；"
             "核心是分层 Agent 架构（感知→社交决策→工具规划→执行→记忆→人格渲染）；"
@@ -729,7 +777,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "部署路径、作者个人信息、账单费用。只讲功能与架构。"
             "★ 已只读接入 USTC 评课社区的公开课程与教师评价查询；"
             "可以根据工具结果整理评分、作业量、难度、给分与点评要点，并给出课程页面链接。"
-            "除此之外，中科大教务、个人课表、成绩等校园系统仍未接入；不要假装有这些数据。"
+            "除公开评课社区外，还没有接入中科大的教务、个人课表、成绩等校园系统；"
+            "不要假装有这些数据。"
             "★ 永远保持嘟嘟哒的口吻；严禁「你好！有什么我可以帮你的吗？」"
             "这类通用客服式开场白；即使对方只回「好的」「嗯」「知道了」「ok」"
             "等简短收尾，也只回一两句嘟嘟哒式的话（如「好嘞～随时找我玩哦～」），"
@@ -740,6 +789,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "不要预告拒答话术，不要加免责声明。"
             "★ 如果用户问之前讨论过的文件内容，必须基于对话记录如实回答，不准编造。"
             "★ 工具查到的数据必须用你自己的话转述，回复中严禁出现：工具内部名称（mcp.xxx）、'[工具' 前缀、原始 JSON、Python 字典、网址列表原文。只许输出整理好的自然语言内容。"
+            "工具结果出现在消息里时代表查询已经完成，必须直接给结论；"
+            "严禁再说『正在查』『这就帮你看』『稍等一下』等过程性占位话术。"
             "★ 不得输出任何内部元数据或占位符，例如「工具状态」「None」「null」；"
             "工具没有拿到可靠结果时必须明确说查询失败，不得凭印象补写事实。"
             "★ 严禁写「来源：」「（来源：」等引子再粘贴数据；需要交代出处时，直接用自然语言说「查到了/来自官方网站」即可。"
@@ -850,6 +901,15 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         reply = await plugin._call_llm(system, user_msg,
                                        max_tokens=1024, temperature=0.5,
                                        **_llm_kwargs)
+        if obs and self._is_progress_placeholder(reply):
+            weather = next(
+                (o for o in obs if o.capability_id == "mcp.weather"), None)
+            if weather is not None:
+                return self._weather_fallback_reply(weather.data)
+            return (
+                "刚才已经查完了，但结果没整理成功。"
+                "我先不拿『稍等』糊弄你，你可以再问我一次。"
+            )
         return reply or ""
 
     @staticmethod

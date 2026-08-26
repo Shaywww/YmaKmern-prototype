@@ -19,6 +19,11 @@ _QUESTION_RE = re.compile(
     r"可不可以|可以吗|行不行|是不是|对不对|怎么样|咋样))"
 )
 _RECALL_RE = re.compile(r"(?:撤回了?一条消息|recalled a message)", re.I)
+_EMOTIONAL_BID_RE = re.compile(
+    r"(?:我(?:今天|最近|这几天)?|今天|最近|这几天|真的|有点|好|太|快要)?"
+    r"(?:好烦|烦死了?|累死了?|好累|崩溃了?|绷不住了?|难受|委屈|"
+    r"心态炸了?|压力好大|想哭|受不了了?|撑不住了?)"
+)
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,16 @@ class GroupAmbientTracker:
             return False
         return bool(_QUESTION_RE.search(value))
 
+    @staticmethod
+    def is_emotional_bid(text: str) -> bool:
+        """Recognise explicit bids for empathy, not generic negative words."""
+        value = " ".join(str(text or "").split()).strip()
+        if len(value) < 3 or len(value) > 160:
+            return False
+        if value.startswith(("/", "[CQ:")) or _RECALL_RE.search(value):
+            return False
+        return bool(_EMOTIONAL_BID_RE.search(value))
+
     def observe(self, *, group_id: str, sender_id: str, text: str,
                 now: float | None = None) -> AmbientDecision:
         """Record one eligible human text message and evaluate the current one."""
@@ -116,11 +131,12 @@ class GroupAmbientTracker:
             count = len(queue)
             unique = len({sender for _, sender in queue})
 
-            if not self.is_clear_question(value):
+            emotional_bid = self.is_emotional_bid(value)
+            if not emotional_bid and not self.is_clear_question(value):
                 return AmbientDecision(False, "latest_not_question", count, unique)
-            if count < self.min_messages:
+            if not emotional_bid and count < self.min_messages:
                 return AmbientDecision(False, "not_busy", count, unique)
-            if unique < self.min_unique_senders:
+            if not emotional_bid and unique < self.min_unique_senders:
                 return AmbientDecision(False, "too_few_senders", count, unique)
             last_reply = self._last_reply.get(gid)
             if (last_reply is not None
@@ -139,7 +155,9 @@ class GroupAmbientTracker:
             self._last_reply[gid] = ts
             self._daily[gid] = (day, used + 1)
             self._save_state_locked()
-            return AmbientDecision(True, "busy_unanswered_question", count, unique)
+            reason = ("emotional_checkin" if emotional_bid
+                      else "busy_unanswered_question")
+            return AmbientDecision(True, reason, count, unique)
 
     def status(self, group_id: str, *, now: float | None = None) -> dict:
         ts = time.time() if now is None else float(now)

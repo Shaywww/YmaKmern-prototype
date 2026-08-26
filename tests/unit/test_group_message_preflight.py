@@ -250,8 +250,10 @@ class FlowPlugin:
 @pytest.fixture(autouse=True)
 def _reset_split_at_tracker():
     h._AT_ONLY_TS.clear()
+    h._RECENT_GROUP_TEXT.clear()
     yield
     h._AT_ONLY_TS.clear()
+    h._RECENT_GROUP_TEXT.clear()
 
 
 def _install_side_effect_spies(monkeypatch):
@@ -369,6 +371,41 @@ async def test_dynamic_group_circuit_allows_human_explicit_at(
     assert signal["sender_id"] == "10086"
     assert signal["explicit_at_bot"] is True
     assert signal["has_media"] is False
+
+
+@pytest.mark.asyncio
+async def test_at_other_bot_is_dropped_even_when_framework_sets_wake(
+    tmp_path, monkeypatch
+):
+    """A broad adapter wake for @someone-else must not wake Dududa."""
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent(
+        "[At:3690063766]",
+        message_id="other-bot-at-1",
+        sender_id="10086",
+        at=True,
+        components=[_At("3690063766")],
+    )
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
+
+    assert await h.run_message_flow(plugin, event) is None
+    assert event.is_at_or_wake_command is False
+    _assert_zero_flow_side_effects(plugin, trace, created_tasks, prune_calls)
+
+
+def test_nickname_wakes_only_in_ambient_enabled_group(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent(
+        "嘟嘟哒你觉得呢？", message_id="nickname-off", at=False)
+    assert h._preflight_group_message(
+        plugin, event, event.get_messages()) is False
+
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    event = GroupEvent(
+        "嘟嘟哒你觉得呢？", message_id="nickname-on", at=False)
+    assert h._preflight_group_message(
+        plugin, event, event.get_messages()) is True
+    assert event.is_at_or_wake_command is True
 
 
 @pytest.mark.asyncio

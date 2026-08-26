@@ -57,6 +57,24 @@ def test_commands_recalls_and_ambiguous_short_text_are_ignored():
     assert tracker.is_clear_question("啥") is False
 
 
+def test_explicit_emotional_bid_can_trigger_without_busy_group():
+    tracker = GroupAmbientTracker(
+        min_messages=15, min_unique_senders=3,
+        cooldown_seconds=60, daily_limit=2)
+    decision = tracker.observe(
+        group_id="g", sender_id="u1", text="今天真的好烦，快崩溃了",
+        now=1000)
+    assert decision.should_reply is True
+    assert decision.reason == "emotional_checkin"
+
+
+def test_generic_negative_word_does_not_trigger_emotional_reply():
+    tracker = GroupAmbientTracker()
+    decision = tracker.observe(
+        group_id="g", sender_id="u1", text="这个方案不好", now=1000)
+    assert decision.should_reply is False
+
+
 def test_window_prunes_old_messages():
     tracker = GroupAmbientTracker(
         window_seconds=30, min_messages=2, min_unique_senders=2)

@@ -32,9 +32,11 @@ def _event(*, platform="qq", group="g1", sender="u1", bot="b1"):
 def _empty_tracker():
     with h._AT_ONLY_LOCK:
         h._AT_ONLY_TS.clear()
+        h._RECENT_GROUP_TEXT.clear()
     yield
     with h._AT_ONLY_LOCK:
         h._AT_ONLY_TS.clear()
+        h._RECENT_GROUP_TEXT.clear()
 
 
 def test_recent_window_is_consumed_once():
@@ -150,3 +152,21 @@ def test_remarking_same_scope_refreshes_without_growing(monkeypatch):
     assert len(h._AT_ONLY_TS) == 1
     assert h._recent_at_only(event) is True
 
+
+def test_text_before_at_window_is_consumed_once():
+    event = _event()
+    event.message_str = "查询一下西藏拉萨的天气"
+
+    h._mark_recent_group_text(event)
+
+    assert h._take_recent_group_text(event) == "查询一下西藏拉萨的天气"
+    assert h._take_recent_group_text(event) == ""
+
+
+def test_text_before_at_is_isolated_by_sender():
+    first = _event(sender="u1")
+    first.message_str = "帮我看看"
+    h._mark_recent_group_text(first)
+
+    assert h._take_recent_group_text(_event(sender="u2")) == ""
+    assert h._take_recent_group_text(first) == "帮我看看"

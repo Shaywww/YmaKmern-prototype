@@ -105,6 +105,35 @@ class TestProdEnrichArgs:
         plan = self._enrich("临泽县今天天气怎么样", "mcp.weather")
         assert plan.steps[0].arguments["q"] == "临泽县"
 
+    def test_weather_compound_city_and_chat_particle_extraction(self):
+        plan = self._enrich("查询一下西藏拉萨的天气喵", "mcp.weather")
+        assert plan.steps[0].arguments["q"] == "西藏拉萨"
+
+    def test_short_location_resolves_as_weather_followup(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        orch = object.__new__(_ProdOrchestrator)
+        orch._recent_chat_context = lambda *a, **k: (
+            "【近期对话】\n[用户]: 查询一下天气\n")
+        assert orch._effective_tool_intent(None, "西藏拉萨") == "西藏拉萨天气"
+
+    def test_short_location_without_weather_context_stays_plain(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        orch = object.__new__(_ProdOrchestrator)
+        orch._recent_chat_context = lambda *a, **k: ""
+        assert orch._effective_tool_intent(None, "西藏拉萨") == "西藏拉萨"
+
+    def test_weather_final_placeholder_has_deterministic_fallback(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        assert _ProdOrchestrator._is_progress_placeholder(
+            "好嘞～这就帮你看西藏拉萨的天气，稍等一下～")
+        reply = _ProdOrchestrator._weather_fallback_reply({
+            "query_city": "西藏拉萨", "desc": "晴",
+            "temp_c": "18", "feels_like_c": "17", "humidity": "35",
+        })
+        assert "西藏拉萨现在晴" in reply
+        assert "18℃" in reply
+        assert "稍等" not in reply
+
     def test_weather_default_city(self):
         plan = self._enrich("今天天气怎么样", "mcp.weather")
         assert plan.steps[0].arguments["q"] == ""

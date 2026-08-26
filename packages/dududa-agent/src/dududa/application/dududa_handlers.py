@@ -641,6 +641,40 @@ def _explicit_at_bot(plugin, event, msgs) -> bool:
         flags=re.IGNORECASE))
 
 
+def _message_at_targets(event, msgs) -> set[str]:
+    """Return concrete At targets without trusting a broad framework wake."""
+    targets: set[str] = set()
+    for component in msgs or ():
+        target = _component_at_target(component)
+        if target:
+            targets.add(target)
+    for segment in _raw_message_segments(event):
+        if str(segment.get("type", "") or "").lower() != "at":
+            continue
+        data = _segment_data(segment)
+        target = data.get("qq", data.get("target", data.get("user_id", "")))
+        if target not in (None, ""):
+            targets.add(str(target))
+    text = str(getattr(event, "message_str", "") or "")
+    targets.update(re.findall(r"\[At:(\d+)\]", text))
+    targets.update(re.findall(
+        r"\[CQ:at,[^\]]*\bqq=(\d+)(?:,|\])", text,
+        flags=re.IGNORECASE))
+    return targets
+
+
+_DUDUDA_NICKNAME_RE = re.compile(
+    r"(?:嘟嘟哒|小嘟|嘟嘟)(?:你|在不在|在吗|出来|帮|查|看|觉得|知道|"
+    r"说|听|能|会|是不是|怎么|为啥|为什么|啊|呀|呢|吧|，|,|！|!|？|\?|$)"
+)
+
+
+def _nickname_wake(text: str) -> bool:
+    """High-confidence nickname address; ordinary keyword chatter stays quiet."""
+    value = " ".join(str(text or "").split()).strip()
+    return bool(value and len(value) <= 220 and _DUDUDA_NICKNAME_RE.search(value))
+
+
 def _group_has_media(event, msgs) -> bool:
     for component in msgs or ():
         type_name = str(getattr(component, "type", "") or "").lower()
@@ -696,16 +730,20 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
     if not group_id:
         return True
 
+    at_targets = _message_at_targets(event, msgs)
     exact_at = _explicit_at_bot(plugin, event, msgs)
+    raw_wake = bool(getattr(event, "is_at_or_wake_command", False))
     split_at = False
-    if (not exact_at
-            and not bool(getattr(event, "is_at_or_wake_command", False))):
+    if not exact_at and not at_targets and not raw_wake:
         split_at = _recent_at_only(event)
-    if exact_at or split_at:
-        try:
-            event.is_at_or_wake_command = True
-        except Exception:
-            pass
+    # AstrBot's wake flag may mean "the message contains any At".  Replace it
+    # with a recipient-safe value whenever concrete At targets are available.
+    # Reply-chain/command wakes have no At target and retain the framework flag.
+    safe_wake = bool(exact_at or split_at or (raw_wake and not at_targets))
+    try:
+        event.is_at_or_wake_command = safe_wake
+    except Exception:
+        pass
 
     sender_id = _event_sender_id(event)
     has_media = _group_has_media(event, msgs)
@@ -729,6 +767,11 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
         except Exception:
             logger.warning("Group ingress guard failed open", exc_info=True)
 
+    if at_targets and not exact_at:
+        logger.info("Group ingress dropped | group=%s reason=directed_elsewhere",
+                    group_id)
+        return False
+
     policy = _group_policy_for_event(plugin, event, group_id)
     if str(getattr(policy, "mode", "normal")) == "off":
         return False
@@ -743,6 +786,18 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                         group_id)
         return False
     if wake:
+        return True
+
+    if (policy is not None
+            and str(getattr(policy, "mode", "normal")) == "normal"
+            and bool(getattr(policy, "ambient_enabled", False))
+            and _nickname_wake(
+                str(getattr(event, "message_str", "") or ""))):
+        try:
+            event.is_at_or_wake_command = True
+        except Exception:
+            pass
+        logger.info("Group nickname wake | group=%s", group_id)
         return True
 
     # Ambient participation is separate from random reply_rate: only the
@@ -765,8 +820,9 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                     event.is_at_or_wake_command = True
                     _mark_ambient_wake(event)
                     logger.info(
-                        "Group ambient wake | group=%s messages=%s senders=%s",
-                        group_id, getattr(decision, "message_count", 0),
+                        "Group ambient wake | group=%s reason=%s messages=%s senders=%s",
+                        group_id, getattr(decision, "reason", "ambient"),
+                        getattr(decision, "message_count", 0),
                         getattr(decision, "unique_senders", 0))
                     return True
             except Exception:
@@ -774,12 +830,15 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
 
     # Passive participation is an explicit per-group opt-in.  The actual
     # probability remains owned by the social decision engine.
-    return bool(
+    passive = bool(
         policy is not None
         and str(getattr(policy, "mode", "normal")) == "normal"
         and float(getattr(policy, "reply_rate", 0.0) or 0.0) > 0.0
         and float(getattr(policy, "interruption_cost", 0.0) or 0.0) < 1.0
     )
+    if not passive:
+        _mark_recent_group_text(event)
+    return passive
 
 
 async def run_message_flow(plugin, event) -> str | None:
@@ -901,7 +960,6 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
     if _cross_session_reply_dropped(plugin, event):
         return None
     if _is_at_only(event, msgs):
-        _mark_at_only_ts(event)
         # 纯@：优先配对同人 60s 内刚发的图（QQ 拆条），没图才回通用短句
         _at_paired = _take_paired_media(plugin, event)
         if _at_paired:
@@ -915,10 +973,23 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
                             run_id, trace_id, _at_reply[:80])
                 return _at_reply
             return None
-        _r = random.choice(_AT_ONLY_REPLIES)
-        logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
-                    run_id, trace_id, _r[:80])
-        return _r
+        _paired_text = _take_recent_group_text(event)
+        if _paired_text:
+            try:
+                event.message_str = _paired_text
+                obj = getattr(event, "message_obj", None)
+                if obj is not None:
+                    obj.message_str = _paired_text
+                logger.info("Flow text-before-at paired | chars=%s",
+                            len(_paired_text))
+            except Exception:
+                pass
+        else:
+            _mark_at_only_ts(event)
+            _r = random.choice(_AT_ONLY_REPLIES)
+            logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
+                        run_id, trace_id, _r[:80])
+            return _r
     if (not getattr(event, "is_at_or_wake_command", False)
             and _recent_at_only(event)):
         # QQ 把 @ 与文本拆成两条消息：窗口内文本补上被 @ 语义
@@ -1053,6 +1124,7 @@ _AT_ONLY_REPLIES = (
 #（OneBot v11 配对）。键必须隔离平台、群、发送者和 Bot，避免群里
 # 一个人的纯 @ 把其他人或另一个 Bot 的后续消息误当成拆条。
 _AT_ONLY_TS: dict[tuple[str, str, str, str], float] = {}
+_RECENT_GROUP_TEXT: dict[tuple[str, str, str, str], tuple[float, str]] = {}
 _AT_ONLY_WINDOW_SECONDS = 5.0
 _AT_ONLY_MAX_ENTRIES = 1024
 _AT_ONLY_LOCK = threading.Lock()
@@ -1114,6 +1186,40 @@ def _prune_at_only_ts(now: float) -> None:
                if now - marked_at >= _AT_ONLY_WINDOW_SECONDS]
     for key in expired:
         _AT_ONLY_TS.pop(key, None)
+    expired_text = [
+        key for key, (marked_at, _) in _RECENT_GROUP_TEXT.items()
+        if now - marked_at >= _AT_ONLY_WINDOW_SECONDS
+    ]
+    for key in expired_text:
+        _RECENT_GROUP_TEXT.pop(key, None)
+
+
+def _mark_recent_group_text(event) -> None:
+    """Keep a tiny bounded window for QQ clients that send text before At."""
+    key = _at_only_key(event)
+    value = " ".join(str(getattr(event, "message_str", "") or "").split()).strip()
+    if key is None or not value or len(value) > 500:
+        return
+    now = time.monotonic()
+    with _AT_ONLY_LOCK:
+        _prune_at_only_ts(now)
+        if (key not in _RECENT_GROUP_TEXT
+                and len(_RECENT_GROUP_TEXT) >= _AT_ONLY_MAX_ENTRIES):
+            oldest = min(_RECENT_GROUP_TEXT,
+                         key=lambda item: _RECENT_GROUP_TEXT[item][0])
+            _RECENT_GROUP_TEXT.pop(oldest, None)
+        _RECENT_GROUP_TEXT[key] = (now, value)
+
+
+def _take_recent_group_text(event) -> str:
+    key = _at_only_key(event)
+    if key is None:
+        return ""
+    now = time.monotonic()
+    with _AT_ONLY_LOCK:
+        _prune_at_only_ts(now)
+        stored = _RECENT_GROUP_TEXT.pop(key, None)
+    return stored[1] if stored is not None else ""
 
 
 def _mark_at_only_ts(event) -> None:
