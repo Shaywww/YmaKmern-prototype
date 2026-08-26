@@ -147,3 +147,40 @@ def test_late_night_sleep_closing_message_stays_silent():
         group_id="g", sender_id="u2", text="晚安，我先睡了",
         now=late + 1801)
     assert decision.should_reply is False
+
+
+def test_topic_keyword_requires_an_active_multi_person_conversation():
+    tracker = GroupAmbientTracker(
+        topic_reply_rate=1.0, topic_min_messages=4,
+        topic_min_unique_senders=2)
+    first = tracker.observe(
+        group_id="g", sender_id="u1", text="要不要点奶茶", now=1000)
+    tracker.observe(group_id="g", sender_id="u2", text="我刚回来", now=1001)
+    tracker.observe(group_id="g", sender_id="u1", text="今天挺热", now=1002)
+    ready = tracker.observe(
+        group_id="g", sender_id="u2", text="说起来我也想喝奶茶",
+        now=1003)
+    assert first.should_reply is False
+    assert first.reason == "topic_not_active"
+    assert ready.should_reply is True
+    assert ready.reason == "topic_milk_tea"
+
+
+def test_topic_keyword_can_be_sampled_out():
+    tracker = GroupAmbientTracker(
+        topic_reply_rate=0.0, topic_min_messages=2,
+        topic_min_unique_senders=2)
+    tracker.observe(group_id="g", sender_id="u1", text="刚忙完", now=1000)
+    decision = tracker.observe(
+        group_id="g", sender_id="u2", text="终于可以摸鱼了", now=1001)
+    assert decision.should_reply is False
+    assert decision.reason == "topic_sampled_out"
+
+
+def test_topic_categories_are_narrow_and_explicit():
+    assert GroupAmbientTracker.topic_category("想点个外卖") == "takeout"
+    assert GroupAmbientTracker.topic_category("终于下班") == "off_work"
+    assert GroupAmbientTracker.topic_category("喝杯奶茶") == "milk_tea"
+    assert GroupAmbientTracker.topic_category("摸会儿鱼") == "slacking"
+    assert GroupAmbientTracker.topic_category("周末看电影") == "movie"
+    assert GroupAmbientTracker.topic_category("讨论一下作业") == ""

@@ -579,6 +579,32 @@ def test_ordinary_json_card_is_not_misclassified_as_poll():
     assert h._detect_group_scene(event, event.get_messages()) == ""
 
 
+@pytest.mark.asyncio
+async def test_topic_keyword_can_make_a_low_cost_fixed_reply(
+    tmp_path, monkeypatch
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    plugin.group_ambient = GroupAmbientTracker(
+        topic_reply_rate=1.0, topic_min_messages=2,
+        topic_min_unique_senders=2)
+    opening = GroupEvent(
+        "刚回宿舍", message_id="topic-opening", sender_id="10040")
+    assert h._preflight_group_message(
+        plugin, opening, opening.get_messages()) is False
+
+    event = GroupEvent(
+        "说得我也想喝奶茶了", message_id="topic-milk-tea",
+        sender_id="10041")
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
+
+    reply = await h.run_message_flow(plugin, event)
+
+    assert reply in h._GROUP_SCENE_REPLIES["topic_milk_tea"]
+    _assert_zero_flow_side_effects(
+        plugin, trace, created_tasks, prune_calls)
+
+
 def test_split_at_window_matches_same_sender():
     first = GroupEvent(
         f"[At:{BOT_ID}]",

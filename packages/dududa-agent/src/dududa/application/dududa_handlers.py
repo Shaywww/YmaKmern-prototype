@@ -739,6 +739,31 @@ _GROUP_SCENE_REPLIES = {
         "嚯，这么晚还有人冒泡呢～早点休息呀 ^^~",
         "夜猫子被我抓到啦～聊归聊，别熬得太狠哦 (。・ω・。)",
     ),
+    "topic_takeout": (
+        "一聊外卖我就开始替你们纠结吃啥了～",
+        "外卖时间到？先别打开软件，不然又要挑半小时啦 (≧▽≦)",
+        "点外卖最难的从来不是付款，是决定吃什么 ^^~",
+    ),
+    "topic_off_work": (
+        "下班两个字，看着就让人精神了 (≧▽≦)",
+        "下班下班～今天的电量总算能留给自己啦 ^^~",
+        "听见下班，我的精神状态都跟着好了～",
+    ),
+    "topic_milk_tea": (
+        "奶茶我站三分糖～全糖对我来说太猛啦",
+        "奶茶局可以有！嘟嘟哒先投三分糖一票 (。・ω・。)",
+        "说到奶茶就很危险，越聊越想点啦～",
+    ),
+    "topic_slacking": (
+        "嘘，小点声摸～别把忙碌召唤过来啦 (≧▽≦)",
+        "合理摸鱼也是续航的一部分嘛 ^^~",
+        "摸一会儿可以，记得把窗口切换键准备好～",
+    ),
+    "topic_movie": (
+        "电影局可以有～但先说好，不许剧透呀",
+        "看电影最快乐的部分之一，是开场前抱着零食等灯暗下来～",
+        "电影话题我先搬个小板凳，安静听你们聊 (。・ω・。)",
+    ),
 }
 
 
@@ -975,7 +1000,7 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                 if bool(getattr(decision, "should_reply", False)):
                     event.is_at_or_wake_command = True
                     reason = str(getattr(decision, "reason", "ambient"))
-                    if reason == "late_night_checkin":
+                    if reason in _GROUP_SCENE_REPLIES:
                         _mark_group_scene_reply(event, reason)
                     else:
                         _mark_ambient_wake(event)

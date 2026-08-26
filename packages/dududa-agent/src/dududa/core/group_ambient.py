@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -27,6 +28,14 @@ _EMOTIONAL_BID_RE = re.compile(
 _SLEEP_CLOSING_RE = re.compile(
     r"(?:晚安|睡了|睡觉去了?|准备睡|先睡|下线了?|不聊了)"
 )
+_TOPIC_PATTERNS = (
+    ("takeout", re.compile(r"(?:外卖|点餐|点个饭|叫个饭)")),
+    ("off_work", re.compile(r"(?:下班|放工)")),
+    ("milk_tea", re.compile(r"(?:奶茶|果茶)")),
+    ("slacking", re.compile(
+        r"(?:摸(?:会儿|一会儿|会|点)?鱼|划(?:会儿|一会儿|会|点)?水)")),
+    ("movie", re.compile(r"(?:电影|影院|看剧|追剧)")),
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,10 @@ class GroupAmbientTracker:
                  min_messages: int = 15, min_unique_senders: int = 3,
                  cooldown_seconds: float = 1800.0, daily_limit: int = 2,
                  late_night_silence_seconds: float = 1800.0,
+                 topic_reply_rate: float = 0.35,
+                 topic_min_messages: int = 4,
+                 topic_min_unique_senders: int = 2,
+                 random_source=None,
                  state_path: str | None = None):
         self.window_seconds = max(30.0, float(window_seconds))
         self.min_messages = max(2, int(min_messages))
@@ -52,6 +65,11 @@ class GroupAmbientTracker:
         self.daily_limit = max(1, int(daily_limit))
         self.late_night_silence_seconds = max(
             300.0, float(late_night_silence_seconds))
+        self.topic_reply_rate = min(1.0, max(0.0, float(topic_reply_rate)))
+        self.topic_min_messages = max(2, int(topic_min_messages))
+        self.topic_min_unique_senders = max(
+            2, int(topic_min_unique_senders))
+        self._random = random_source or random.random
         self._messages: dict[str, deque[tuple[float, str]]] = defaultdict(deque)
         self._last_activity: dict[str, float] = {}
         self._last_reply: dict[str, float] = {}
@@ -118,6 +136,19 @@ class GroupAmbientTracker:
             return False
         return bool(_EMOTIONAL_BID_RE.search(value))
 
+    @staticmethod
+    def topic_category(text: str) -> str:
+        """Return a narrow persona topic category, or an empty string."""
+        value = " ".join(str(text or "").split()).strip()
+        if len(value) < 2 or len(value) > 160:
+            return ""
+        if value.startswith(("/", "[CQ:")) or _RECALL_RE.search(value):
+            return ""
+        for category, pattern in _TOPIC_PATTERNS:
+            if pattern.search(value):
+                return category
+        return ""
+
     def observe(self, *, group_id: str, sender_id: str, text: str,
                 now: float | None = None) -> AmbientDecision:
         """Record one eligible human text message and evaluate the current one."""
@@ -142,6 +173,7 @@ class GroupAmbientTracker:
 
             emotional_bid = self.is_emotional_bid(value)
             clear_question = self.is_clear_question(value)
+            topic_category = self.topic_category(value)
             late_night = bool(
                 not emotional_bid
                 and not clear_question
@@ -160,6 +192,18 @@ class GroupAmbientTracker:
                 reason = "busy_unanswered_question"
             elif late_night:
                 reason = "late_night_checkin"
+            elif topic_category:
+                if count < self.topic_min_messages:
+                    return AmbientDecision(
+                        False, "topic_not_active", count, unique)
+                if unique < self.topic_min_unique_senders:
+                    return AmbientDecision(
+                        False, "topic_too_few_senders", count, unique)
+                if (self.topic_reply_rate <= 0.0
+                        or self._random() >= self.topic_reply_rate):
+                    return AmbientDecision(
+                        False, "topic_sampled_out", count, unique)
+                reason = f"topic_{topic_category}"
             else:
                 return AmbientDecision(False, "latest_not_question", count, unique)
             return self._reserve_locked(
