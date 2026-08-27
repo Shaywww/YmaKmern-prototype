@@ -20,7 +20,7 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
          "goal": "Find current public offerings and community reviews",
          "steps": [
              {"step_id": "s1", "capability_id": "mcp.course_schedule",
-              "arguments": {"action": "search", "keyword": "{query}", "limit": 6},
+              "arguments": {"action": "search", "limit": 6},
               "purpose": "Search the public USTC course-offering snapshot"},
              {"step_id": "s2", "capability_id": "mcp.icourse_reviews",
               "arguments": {"action": "search", "q": "{query}", "limit": 3},
@@ -42,7 +42,7 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
          "谁教", "哪个老师", "上课时间", "上课地点"),
         {"name": "course_lookup", "goal": "Find public course offerings",
          "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                     "arguments": {"action": "search", "keyword": "{query}", "limit": 8},
+                     "arguments": {"action": "search", "limit": 8},
                      "purpose": "Search the public USTC course snapshot",
                      "expected_output": "Course details"}]},
     )
@@ -57,7 +57,7 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
         ("全校课表", "开课表", "课程安排", "schedule"),
         {"name": "schedule_lookup", "goal": "Find public course schedules",
          "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                     "arguments": {"action": "search", "keyword": "{query}", "limit": 8},
+                     "arguments": {"action": "search", "limit": 8},
                      "purpose": "Search public course schedules"}]},
     )
     planner.register_pattern(

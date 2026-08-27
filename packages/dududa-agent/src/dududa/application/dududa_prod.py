@@ -114,7 +114,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                      "哪个老师", "上课时间", "上课地点"),
                     {"name": "public_course_search", "goal": "Search public USTC offerings",
                      "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                                "arguments": {"action": "search", "keyword": "{query}", "limit": 8},
+                                "arguments": {"action": "search", "limit": 8},
                                 "purpose": "Search public USTC course offerings"}]},
                 )
             except Exception:
