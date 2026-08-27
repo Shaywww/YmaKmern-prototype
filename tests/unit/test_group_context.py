@@ -57,6 +57,17 @@ def test_consecutive_stickers_require_distinct_senders():
     assert tracker.consecutive_media("g", now=1002)
 
 
+def test_visual_types_are_counted_and_rendered_distinctly():
+    tracker = GroupConversationTracker()
+    tracker.add(group_id="g", sender_id="u1", content="客机",
+                message_type="photo", now=1000)
+    tracker.add(group_id="g", sender_id="u2", content="操作过程",
+                message_type="video", now=1001)
+    assert tracker.stats("g", now=1001)["media_count"] == 2
+    rendered = tracker.render("g", now=1001)
+    assert "实拍照片" in rendered and "视频" in rendered
+
+
 def test_quiet_capture_removes_raw_messages_before_summary():
     tracker = GroupConversationTracker(ttl_seconds=300)
     tracker.add(group_id="g", sender_id="u1", content="原始消息一",

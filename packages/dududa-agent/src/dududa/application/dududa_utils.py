@@ -16,6 +16,7 @@ from dududa.application.dududa_log import get_logger as _get_logger
 logger = _get_logger("dududa20")
 
 _IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+_VIDEO_EXTS = {"mp4", "mov", "m4v", "webm", "mkv", "avi", "flv"}
 
 _IGNORE_PATTERNS = {
     "ok", "OK", "Ok", "嗯", "好", "好的", "行", "可以", "对",
@@ -157,6 +158,8 @@ def _detect_media_kind(event) -> str:
     for segment in _raw_message_segments(event):
         kind = str(segment.get("type", "") or "").lower()
         data = _segment_data(segment)
+        if kind in ("video", "shortvideo"):
+            return "video"
         if kind in ("face", "mface"):
             return "sticker"
         if kind != "image":
@@ -171,6 +174,17 @@ def _detect_media_kind(event) -> str:
         subtype = str(data.get("sub_type", "") or "").lower()
         if subtype in ("face", "mface", "sticker", "emoji"):
             return "sticker"
+        media_name = str(data.get("name", "") or data.get("file_name", "")
+                         or data.get("file", "") or data.get("url", ""))
+        if _file_ext(media_name.split("?", 1)[0]) == "gif":
+            return "gif"
+    try:
+        for component in event.get_messages() or ():
+            type_name = str(getattr(component, "type", "") or "").lower()
+            if "video" in type_name:
+                return "video"
+    except Exception:
+        pass
     return "image" if saw_image else "unknown"
 
 
@@ -181,7 +195,7 @@ def _detect_media(event) -> tuple:
         components = ()
     for c in components:
         t = str(getattr(c, "type", ""))
-        if "File" in t or "Image" in t:
+        if "File" in t or "Image" in t or "Video" in t:
             name = getattr(c, "name", "") or getattr(c, "file_name", "") or "media"
             is_image = "Image" in t
             # QQ official bot: url/file/path can be local or http
@@ -193,7 +207,7 @@ def _detect_media(event) -> tuple:
     # containing NapCat extension fields.  The raw OneBot segment still has a URL.
     for segment in _raw_message_segments(event):
         kind = str(segment.get("type", "") or "").lower()
-        if kind not in ("image", "mface", "file"):
+        if kind not in ("image", "mface", "file", "video", "shortvideo"):
             continue
         data = _segment_data(segment)
         is_image = kind in ("image", "mface")
@@ -207,7 +221,9 @@ def _detect_media(event) -> tuple:
         if not name:
             # NapCat's file field is frequently an opaque id, but can also be a path.
             name = os.path.basename(file_value.split("?", 1)[0]) or (
-                "image" if is_image else "media")
+                "image" if is_image else (
+                    "video.mp4" if kind in ("video", "shortvideo")
+                    else "media"))
         return url, name, is_image
     return "", "", False
 
@@ -215,7 +231,7 @@ def _detect_media(event) -> tuple:
 def _has_media_in_raw(event) -> bool:
     try:
         return any(str(item.get("type", "")).lower()
-                   in ("file", "image", "mface", "face")
+                   in ("file", "image", "mface", "face", "video", "shortvideo")
                    for item in _raw_message_segments(event))
     except Exception: pass
     return False

@@ -52,6 +52,21 @@ class _Image:
         self.file = url
 
 
+class _Video:
+    type = "ComponentType.Video"
+    text = ""
+
+    def __init__(self, url: str, name: str = "clip.mp4"):
+        self.url = url
+        self.name = name
+        self.file = url
+
+
+class _Reply:
+    type = "ComponentType.Reply"
+    text = ""
+
+
 class GroupEvent:
     """Small AstrBot-like group event with explicit sender/bot identity."""
 
@@ -512,7 +527,7 @@ def test_ambient_default_off_stays_silent(tmp_path):
     assert h._is_ambient_wake(question) is False
 
 
-def test_small_three_person_question_thread_opens_semantic_review(tmp_path):
+def test_small_two_person_question_thread_opens_semantic_review(tmp_path):
     plugin = FlowPlugin(tmp_path)
     plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
     events = (
@@ -524,15 +539,15 @@ def test_small_three_person_question_thread_opens_semantic_review(tmp_path):
             plugin, event, event.get_messages()) is False
 
     reaction = GroupEvent(
-        "不错", message_id="small-3", sender_id="10003")
+        "不错", message_id="small-3", sender_id="10001")
     assert h._preflight_group_message(
         plugin, reaction, reaction.get_messages()) is True
     assert h._semantic_chat_candidate(
-        reaction) == "small_group_question_thread"
+        reaction) == "small_group_context_thread"
     assert h._is_ambient_wake(reaction) is True
 
 
-def test_small_chat_rule_needs_three_people_and_an_earlier_question(tmp_path):
+def test_small_chat_rule_still_needs_a_semantic_anchor(tmp_path):
     plugin = FlowPlugin(tmp_path)
     plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
     for index, (sender, text) in enumerate((
@@ -550,7 +565,7 @@ def test_small_chat_rule_needs_three_people_and_an_earlier_question(tmp_path):
     for index, (sender, text) in enumerate((
         ("10001", "今天看到飞机了"),
         ("10002", "我也看到了"),
-        ("10003", "确实不错"),
+        ("10001", "确实不错"),
     )):
         event = GroupEvent(
             text, message_id=f"no-question-{index}", sender_id=sender)
@@ -581,6 +596,53 @@ def test_photo_after_small_question_exchange_opens_vision_review(tmp_path):
     assert h._is_ambient_wake(photo) is True
 
 
+def test_reply_chain_image_opens_delayed_visual_review(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    first = GroupEvent("这也太怪了", message_id="reply-1", sender_id="10001")
+    assert h._preflight_group_message(
+        plugin, first, first.get_messages()) is False
+    reply = GroupEvent(
+        "男人是这样的", message_id="reply-2", sender_id="10002",
+        components=[_Reply(), _Plain("男人是这样的")],
+        raw_message={"message": [
+            {"type": "reply", "data": {"id": "old"}},
+            {"type": "text", "data": {"text": "男人是这样的"}},
+        ]})
+    assert h._preflight_group_message(
+        plugin, reply, reply.get_messages()) is False
+
+    photo = GroupEvent(
+        "", message_id="reply-photo", sender_id="10002",
+        components=[_Image("https://example.test/reply.jpg")],
+        raw_message={"message": [{"type": "image", "data": {
+            "url": "https://example.test/reply.jpg", "file": "reply.jpg",
+        }}]})
+    assert h._preflight_group_message(
+        plugin, photo, photo.get_messages()) is True
+    assert h._semantic_media_candidate(photo) == "reply_chain_media"
+
+
+def test_two_person_video_context_opens_gpt_visual_review(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for event in (
+        GroupEvent("你们看这个", message_id="video-1", sender_id="10001"),
+        GroupEvent("又是什么", message_id="video-2", sender_id="10002"),
+    ):
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+    video = GroupEvent(
+        "", message_id="video-3", sender_id="10001",
+        components=[_Video("https://example.test/clip.mp4")],
+        raw_message={"message": [{"type": "video", "data": {
+            "url": "https://example.test/clip.mp4", "file": "clip.mp4",
+        }}]})
+    assert h._preflight_group_message(
+        plugin, video, video.get_messages()) is True
+    assert h._semantic_media_candidate(video) == "small_chat_video"
+
+
 @pytest.mark.asyncio
 async def test_deepseek_is_final_small_chat_judge_and_uses_shared_quota(
     tmp_path,
@@ -597,7 +659,7 @@ async def test_deepseek_is_final_small_chat_judge_and_uses_shared_quota(
             message_id=f"judge-{index}")
 
     async def approve(system, user, **kwargs):
-        assert "至少三名成员" in system
+        assert "至少两名成员" in system
         assert "10001" not in user and "10002" not in user
         assert kwargs["skip_render"] is True
         return (
@@ -608,7 +670,7 @@ async def test_deepseek_is_final_small_chat_judge_and_uses_shared_quota(
     plugin._call_llm = approve
     event = GroupEvent("不错", message_id="judge-final", sender_id="10003")
     reply = await h._semantic_chat_reply(
-        plugin, event, "small_group_question_thread")
+        plugin, event, "small_group_context_thread")
     assert reply == "飞机也端上桌了是吧～(≧▽≦)"
     assert plugin.group_ambient.status(GROUP_ID)["daily_used"] == 1
 
@@ -622,7 +684,7 @@ async def test_deepseek_is_final_small_chat_judge_and_uses_shared_quota(
     rejected.group_context = plugin.group_context
     rejected._call_llm = uncertain
     assert await h._semantic_chat_reply(
-        rejected, event, "small_group_question_thread") == ""
+        rejected, event, "small_group_context_thread") == ""
 
 
 def test_local_meme_match_only_opens_semantic_review_after_real_context(
