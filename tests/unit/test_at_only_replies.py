@@ -115,16 +115,23 @@ def test_reply_sanitizer_removes_generic_provider_fallback_tail():
         "那肯定是群里最会拍飞机的那位呀～")
 
 
-def test_reply_sanitizer_removes_invented_embodied_episode():
+def test_reply_sanitizer_keeps_harmless_casual_roleplay():
     reply = "刚啃完泡面，别学我啦 (≧▽≦)~ 想吃啥就整点热乎的呗～"
     cleaned = h._sanitize_conversational_reply(reply)
-    assert cleaned == "想吃啥就整点热乎的呗～"
-    assert "啃完" not in cleaned
+    assert cleaned == reply
 
 
 def test_reply_sanitizer_does_not_remove_real_preference_or_question():
     assert h._sanitize_conversational_reply("我喜欢喝奶茶～") == "我喜欢喝奶茶～"
     assert h._sanitize_conversational_reply("现在去吃饭吗？") == "现在去吃饭吗？"
+
+
+def test_reply_sanitizer_turns_full_refusal_into_playful_superlative_answer():
+    reply = "对不起，我还没有学会回答这个问题。"
+    cleaned = h._sanitize_conversational_reply(
+        reply, "你说说这个群里谁最帅")
+    assert "当然是问这句话的人" in cleaned
+    assert "还没有学会" not in cleaned
 
 
 def test_is_at_only_true_for_bare_at():
