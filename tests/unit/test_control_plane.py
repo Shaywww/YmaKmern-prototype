@@ -114,7 +114,7 @@ class TestMCP:
         assert r.status_code == 404
 
     def test_query_service(self, client):
-        r = client.post("/mcp/services/course_schedule/query", json={"action": "search", "keyword": "math"})
+        r = client.post("/mcp/services/clock/query", json={"action": "get_now"})
         assert r.status_code == 200
         data = r.json()
         assert data["success"] is True

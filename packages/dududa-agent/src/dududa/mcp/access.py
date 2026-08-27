@@ -12,7 +12,7 @@
       "users":  {"allow": ["u1"], "deny": ["u2"]}
     }
 
-判定优先级（仅约束 iCourse 服务；clock 等非 iCourse 服务恒允许）::
+判定优先级（仅约束需授权的校园服务；公开开课缓存、clock 等恒允许）::
 
     1) 用户 deny 名单      -> 拒绝
     2) 用户 allow 名单      -> 允许（个人放行优先于群）
@@ -33,9 +33,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger("dududa20.mcp.access")
 
-# iCourse 教学服务集合（受按群/按人策略约束）
+# 需授权/未正式公开的校园服务集合（受按群/按人策略约束）。
+# course_schedule 读取的是公开、只读、无个人数据的课程快照，不在此门禁中。
 ICOURSE_SERVICE_IDS = frozenset({
-    "course_schedule",
     "exam_schedule",
     "academic_calendar",
     "training_program",

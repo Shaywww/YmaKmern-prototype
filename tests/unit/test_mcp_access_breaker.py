@@ -44,12 +44,15 @@ def _cap(cid):
 
 
 class TestICourseSet:
-    def test_set_contains_seven_services(self):
-        assert len(ICOURSE_SERVICE_IDS) == 7
-        for svc in ("course_schedule", "exam_schedule", "academic_calendar",
+    def test_set_contains_six_restricted_services(self):
+        assert len(ICOURSE_SERVICE_IDS) == 6
+        for svc in ("exam_schedule", "academic_calendar",
                     "training_program", "second_classroom", "campus_notice",
                     "academic_affairs"):
             assert is_icourse_capability(f"mcp.{svc}")
+
+    def test_public_catalog_not_restricted(self):
+        assert not is_icourse_capability("mcp.course_schedule")
 
     def test_clock_not_icourse(self):
         assert not is_icourse_capability("mcp.clock")
@@ -65,15 +68,16 @@ class TestAccessPolicy:
     def test_no_config_allows_icourse_legacy(self, tmp_path):
         # 无配置文件：与历史行为一致，不限制 iCourse
         p = MCPAccessPolicy(config_path=str(tmp_path / "missing.json"))
-        assert p.is_allowed("mcp.course_schedule", "g1", "u1")
-        assert p.deny_reason("mcp.course_schedule", "g1", "u1")[1] == "no_config_allow"
+        assert p.is_allowed("mcp.exam_schedule", "g1", "u1")
+        assert p.deny_reason("mcp.exam_schedule", "g1", "u1")[1] == "no_config_allow"
 
     def test_config_default_deny_icourse(self, tmp_path):
         # 配置文件存在即启用策略：default deny（fail closed）
         cfg = _write_cfg(tmp_path / "c.json")
         p = MCPAccessPolicy(config_path=cfg)
-        assert not p.is_allowed("mcp.course_schedule", "g1", "u1")
-        assert p.deny_reason("mcp.course_schedule", "g1", "u1")[1] == "default_deny"
+        assert not p.is_allowed("mcp.exam_schedule", "g1", "u1")
+        assert p.deny_reason("mcp.exam_schedule", "g1", "u1")[1] == "default_deny"
+        assert p.is_allowed("mcp.course_schedule", "g1", "u1")
         assert p.status()["configured"] is True
 
     def test_user_allow_overrides_group_deny(self, tmp_path):
@@ -81,7 +85,7 @@ class TestAccessPolicy:
                          users={"allow": ["u1"], "deny": []},
                          groups={"allow": [], "deny": ["g1"]})
         p = MCPAccessPolicy(config_path=cfg)
-        assert p.is_allowed("mcp.course_schedule", "g1", "u1")
+        assert p.is_allowed("mcp.exam_schedule", "g1", "u1")
 
     def test_user_deny_wins(self, tmp_path):
         cfg = _write_cfg(tmp_path / "c.json",
@@ -94,28 +98,28 @@ class TestAccessPolicy:
         cfg = _write_cfg(tmp_path / "c.json",
                          groups={"allow": ["g1"], "deny": ["g2"]})
         p = MCPAccessPolicy(config_path=cfg)
-        assert p.is_allowed("mcp.course_schedule", "g1", "u9")
-        assert not p.is_allowed("mcp.course_schedule", "g2", "u9")
+        assert p.is_allowed("mcp.exam_schedule", "g1", "u9")
+        assert not p.is_allowed("mcp.exam_schedule", "g2", "u9")
 
     def test_group_prefix_normalized(self, tmp_path):
         cfg = _write_cfg(tmp_path / "c.json",
                          groups={"allow": ["123"], "deny": []})
         p = MCPAccessPolicy(config_path=cfg)
-        assert p.is_allowed("mcp.course_schedule", "group_123", "u9")
+        assert p.is_allowed("mcp.exam_schedule", "group_123", "u9")
 
     def test_default_allow_policy(self, tmp_path):
         cfg = _write_cfg(tmp_path / "c.json", default_policy="allow")
         p = MCPAccessPolicy(config_path=cfg)
-        assert p.is_allowed("mcp.course_schedule", "g9", "u9")
+        assert p.is_allowed("mcp.exam_schedule", "g9", "u9")
 
     def test_hot_reload_on_mtime(self, tmp_path):
         path = tmp_path / "c.json"
         _write_cfg(path)
         p = MCPAccessPolicy(config_path=str(path))
-        assert not p.is_allowed("mcp.course_schedule", "g1", "u1")
+        assert not p.is_allowed("mcp.exam_schedule", "g1", "u1")
         _write_cfg(path, users={"allow": ["u1"], "deny": []})
         os.utime(path, (time.time() + 5, time.time() + 5))
-        assert p.is_allowed("mcp.course_schedule", "g1", "u1")
+        assert p.is_allowed("mcp.exam_schedule", "g1", "u1")
 
     def test_ensure_seed_writes_owner_allow(self, tmp_path):
         path = tmp_path / "mcp_access.json"
@@ -123,14 +127,14 @@ class TestAccessPolicy:
         assert p.ensure_seed(owner_ids=("u1", "u2"))
         assert not p.ensure_seed(owner_ids=("u3",))  # 幂等：已存在不再写
         p2 = MCPAccessPolicy(config_path=str(path))
-        assert p2.is_allowed("mcp.course_schedule", "g1", "u2")
-        assert not p2.is_allowed("mcp.course_schedule", "g1", "u3")
+        assert p2.is_allowed("mcp.exam_schedule", "g1", "u2")
+        assert not p2.is_allowed("mcp.exam_schedule", "g1", "u3")
 
     def test_broken_config_falls_back_to_deny(self, tmp_path):
         path = tmp_path / "bad.json"
         Path(path).write_text("{not json", encoding="utf-8")
         p = MCPAccessPolicy(config_path=str(path))
-        assert not p.is_allowed("mcp.course_schedule", "g1", "u1")
+        assert not p.is_allowed("mcp.exam_schedule", "g1", "u1")
         assert p.status()["load_error"]
 
 
@@ -265,7 +269,7 @@ class TestOrchestratorScopeGating:
                 kind=MessageKind.GROUP),
             sender=Actor(
                 actor_id=actor, platform=Platform.QQ, display_name="t"),
-            text="帮我查一下课程",
+            text="帮我查一下考试",
         )
         return RuntimeState(envelope=env, budget=RuntimeBudget())
 
@@ -276,11 +280,12 @@ class TestOrchestratorScopeGating:
         new_state = orch._phase_list_capabilities(self._state("g1", "u1"))
         ids = {c.capability.capability_id
                for c in new_state.capability_candidates}
-        assert "mcp.course_schedule" in ids
+        assert "mcp.exam_schedule" in ids
         new_state = orch._phase_list_capabilities(self._state("g2", "u1"))
         ids = {c.capability.capability_id
                for c in new_state.capability_candidates}
-        assert "mcp.course_schedule" not in ids
+        assert "mcp.exam_schedule" not in ids
+        assert "mcp.course_schedule" in ids
         assert "mcp.clock" in ids
 
     def test_plan_pruned_for_denied_scope(self, tmp_path, monkeypatch):
@@ -288,7 +293,7 @@ class TestOrchestratorScopeGating:
         policy = MCPAccessPolicy(config_path=_write_cfg(tmp_path / "c.json"))
         orch = self._orch(policy, monkeypatch)
         plan = GeneratedPlan(goal="t", steps=(
-            PlannedStep(step_id="s1", capability_id="mcp.course_schedule",
+            PlannedStep(step_id="s1", capability_id="mcp.exam_schedule",
                         arguments={}, purpose="p"),
             PlannedStep(step_id="s2", capability_id="mcp.clock",
                         arguments={}, purpose="p"),
@@ -297,7 +302,7 @@ class TestOrchestratorScopeGating:
         assert pruned is not None
         assert [s.capability_id for s in pruned.steps] == ["mcp.clock"]
         all_denied = GeneratedPlan(goal="t", steps=(
-            PlannedStep(step_id="s1", capability_id="mcp.course_schedule",
+            PlannedStep(step_id="s1", capability_id="mcp.exam_schedule",
                         arguments={}, purpose="p"),))
         assert orch._scope_prune_plan(self._state("g9", "u9"), all_denied) is None
 
@@ -325,6 +330,7 @@ class TestOrchestratorScopeGating:
             register_all_mcp_services(reg)
             reg.unregister("mcp.clock")
             reg.unregister("mcp.web_search")
+            reg.unregister("mcp.course_schedule")  # 公开数据，不属于本组门禁测试
             for _g in ("mcp.weather", "mcp.news", "mcp.translate",
                        "mcp.icourse_reviews"):
                 reg.unregister(_g)  # 只留受 access 策略约束的校园服务，便于断言
@@ -345,11 +351,11 @@ class TestOrchestratorScopeGating:
         assert result.outcome == RunOutcome.SUCCEEDED
         assert orch._last_state.tool_observations == ()
 
-        # 正例：g1 已放行 -> 工具链正常执行 course_schedule
+        # 正例：g1 已放行 -> 受限校园工具链正常执行
         orch = _make_orch(denied_path)
         result = await orch.run(self._state("g1", "u9"))
         assert result.outcome == RunOutcome.SUCCEEDED
         assert any(
-            obs.capability_id == "mcp.course_schedule" and obs.success
+            obs.capability_id == "mcp.exam_schedule" and obs.success
             for obs in orch._last_state.tool_observations
         )

@@ -283,7 +283,7 @@ class TestNewSkillPatterns:
         assert plan.steps[0].capability_id == "mcp.web_search"
 
     def test_course_pattern_still_priority_over_definition(self):
-        plan = self._plan("课表是什么", ("mcp.course_schedule",))
+        plan = self._plan("开课表是什么", ("mcp.course_schedule",))
         assert plan.steps[0].capability_id == "mcp.course_schedule"
 
     def test_time_pattern_still_priority_over_definition(self):

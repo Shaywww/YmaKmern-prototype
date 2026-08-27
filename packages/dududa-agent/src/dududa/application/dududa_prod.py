@@ -108,13 +108,14 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         self._injected_perception = None
         if self._tool_chain is not None:
             try:
-                # 生产补充意图模式：'查一下XX课程' 类口语化查询
+                # 生产补充意图模式：公开开课查询。通用「查/搜」留给联网搜索。
                 self._tool_chain.planner.register_pattern(
-                    ("查一下", "查查", "搜一下", "搜搜", "帮我查", "帮我搜", "查", "搜"),
-                    {"name": "course_search", "goal": "Search courses by keyword",
+                    ("查课", "课程查询", "课程信息", "开课", "课程号", "谁教",
+                     "哪个老师", "上课时间", "上课地点"),
+                    {"name": "public_course_search", "goal": "Search public USTC offerings",
                      "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                                "arguments": {"action": "search"},
-                                "purpose": "Search courses by keyword"}]},
+                                "arguments": {"action": "search", "keyword": "{query}", "limit": 8},
+                                "purpose": "Search public USTC course offerings"}]},
                 )
             except Exception:
                 pass
@@ -359,7 +360,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     def _rule_fallback_plan(self, state, candidates, intent):
         """LLM 规划失败/不可用时的确定性兜底（防 provider 抖动丢工具链）。
 
-        优先级：评课社区 -> 时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
+        优先级：评课社区 -> 公开开课 -> 时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
         仅当模型路径失败/输出非法时使用，模型合法空计划（无需工具）不触发。
         """
         if not candidates or not intent:
@@ -376,8 +377,31 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 and any(k in text for k in (
                     "评价", "怎么样", "好不好", "值得选", "推荐吗",
                     "给分", "作业多吗", "难不难", "收获"))))
+        catalog_intent = any(k in text for k in (
+            "查课", "课程查询", "课程信息", "开课", "课程号", "谁教",
+            "哪个老师", "哪些老师", "上课时间", "上课地点", "全校课表", "开课表"))
+        if (review_intent and catalog_intent
+                and {"mcp.course_schedule", "mcp.icourse_reviews"} <= allowed):
+            query = _clean_query(text)
+            steps = (
+                PlannedStep(
+                    step_id="fb1", capability_id="mcp.course_schedule",
+                    arguments={"keyword": query, "limit": 8},
+                    purpose="Rule fallback: public USTC course offerings"),
+                PlannedStep(
+                    step_id="fb2", capability_id="mcp.icourse_reviews",
+                    arguments={"q": query, "limit": 3},
+                    purpose="Rule fallback: public USTC course reviews"),
+            )
+            return GeneratedPlan(
+                goal=text, steps=steps,
+                rationale="RuleFallback: combine public offerings and reviews")
         if "mcp.icourse_reviews" in allowed and review_intent:
             cap_id, args = "mcp.icourse_reviews", {"q": _clean_query(text), "limit": 3}
+        elif "mcp.course_schedule" in allowed and catalog_intent:
+            cap_id, args = "mcp.course_schedule", {
+                "keyword": _clean_query(text), "limit": 8,
+            }
         elif "mcp.clock" in allowed and any(k in text for k in
                 ("几点", "几号", "星期几", "日期", "什么时候", "现在几", "现在是")):
             cap_id, args = "mcp.clock", {}
@@ -799,14 +823,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "核心是分层 Agent 架构（感知→社交决策→工具规划→执行→记忆→人格渲染）；"
             "对话模型走多角色路由（DeepSeek 为主，Claude/GPT 备用自动降级）；"
             "有受控记忆系统（短期/长期、敏感分级、写入门控）；"
-            "通过 MCP 工具链支持查时间、天气、联网搜索、翻译、新闻和中科大评课等能力；"
+            "通过 MCP 工具链支持查时间、天气、联网搜索、翻译、新闻、中科大开课和评课等能力；"
             "还带用户画像与全链路轨迹追踪。可以主动分点讲，但别啰嗦。"
             "★ 介绍自己时严禁透露隐私：服务器地址/IP/端口、Token/密钥/模型 API Key、"
             "部署路径、作者个人信息、账单费用。只讲功能与架构。"
             "★ 已只读接入 USTC 评课社区的公开课程与教师评价查询；"
             "可以根据工具结果整理评分、作业量、难度、给分与点评要点，并给出课程页面链接。"
-            "除公开评课社区外，还没有接入中科大的教务、个人课表、成绩等校园系统；"
-            "不要假装有这些数据。"
+            "★ 已接入 USTC 公开开课数据缓存，可查询学期、课程号、教师、院系、学分、"
+            "上课时间地点与选课容量；这是带生成时间和 revision 的公开快照，不是实时教务数据。"
+            "开课信息和课程评价可结合回答，但不要把两者混为同一数据源。"
+            "仍未接入个人选课课表、成绩等需登录的校园系统；不要假装有这些数据。"
             "★ 永远保持嘟嘟哒的口吻；严禁「你好！有什么我可以帮你的吗？」"
             "这类通用客服式开场白；简短收尾只需自然结束，"
             "严禁列任务清单、分点菜单，严禁「随时告诉我」「尽管开口」"

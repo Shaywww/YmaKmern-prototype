@@ -323,7 +323,8 @@ class DududaCore:
     _TOOL_KW = ("帮我", "查", "搜", "算", "翻译", "了解", "介绍",
                  "是什么", "多少", "招生", "分数线", "排名",
                  "查询", "查查", "百度", "搜索", "找一下",
-                 "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下")
+                 "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下",
+                 "开课", "课程号", "谁教", "哪个老师", "上课时间", "上课地点")
 
     def _social_decision(self, event) -> tuple:
         try:
@@ -424,7 +425,9 @@ class DududaCore:
                     name=name, entity_type="person", confidence=0.9,
                     evidence=f"@{name}"))
         topics = []
-        topic_kw = {"课程": "course", "考试": "exam", "作业": "homework", "天气": "weather",
+        topic_kw = {"课程": "course", "开课": "course", "课程号": "course",
+                    "上课时间": "course", "上课地点": "course",
+                    "考试": "exam", "作业": "homework", "天气": "weather",
                     "文件": "file", "图片": "image", "成绩": "grade", "食堂": "canteen", "图书馆": "library",
                     "几点": "time", "时间": "time", "几号": "time", "星期几": "time",
                     "日期": "time", "什么时候了": "time", "现在是": "time", "现在几": "time",

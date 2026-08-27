@@ -88,7 +88,7 @@ COMPLEX_PATTERNS = {
         "goal": "Plan semester: calendar + courses + activities",
         "steps": [
             {"step_id": "s1", "capability_id": "mcp.academic_calendar", "arguments": {"action": "get_semester"}, "purpose": "Get semester dates"},
-            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "get_personal_schedule"}, "purpose": "Get course schedule", "depends_on": []},
+            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Search public semester offerings", "depends_on": []},
             {"step_id": "s3", "capability_id": "mcp.second_classroom", "arguments": {"action": "get_upcoming"}, "purpose": "Get upcoming activities", "depends_on": []},
             {"step_id": "s4", "capability_id": "mcp.academic_calendar", "arguments": {"action": "get_holidays"}, "purpose": "Get holidays", "depends_on": []},
         ],
@@ -98,7 +98,7 @@ COMPLEX_PATTERNS = {
         "goal": "Check degree progress against program requirements",
         "steps": [
             {"step_id": "s1", "capability_id": "mcp.training_program", "arguments": {"action": "get_program"}, "purpose": "Get degree requirements"},
-            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "get_personal_schedule"}, "purpose": "Get enrolled courses", "depends_on": []},
+            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Search public course offerings", "depends_on": []},
         ],
     },
 }

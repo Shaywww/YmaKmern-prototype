@@ -538,13 +538,6 @@ _ICOURSE_DENY_TOOLS = (
 )
 # action -> 工具名；None 或缺失 -> 该 action 不映射，降级 mock
 _CAP_TOOL_MAP: dict[str, dict[str, Optional[str]]] = {
-    "mcp.course_schedule": {
-        "default": "search_courses",
-        "search": "search_courses",
-        "get_course": "get_course",
-        "list_by_department": "search_courses",
-        "get_personal_schedule": None,
-    },
     "mcp.campus_notice": {
         "default": "search_site_courses",
         "search": "search_site_courses",
@@ -615,6 +608,10 @@ class ProviderFactory:
     def __call__(self, svc):
         from .registry import MCPProvider
         cap_id = f"mcp.{svc.name}"
+        # Public course offerings have their own revision-aware snapshot source.
+        # Do not route them through the separate iCourse review MCP server.
+        if cap_id == "mcp.course_schedule":
+            return MCPProvider(svc, server_id=svc.name)
         mapping = _CAP_TOOL_MAP.get(cap_id) or {}
         return UnifiedMCPProvider(
             self.registry, "icourse", cap_id, MCPProvider(svc), mapping)

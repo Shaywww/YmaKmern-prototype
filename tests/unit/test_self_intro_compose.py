@@ -109,10 +109,11 @@ class TestComposeSystemKnowledge:
         assert "服务器地址" in sysp
         assert "Token" in sysp
 
-    def test_ustc_not_integrated(self):
+    def test_ustc_public_sources_and_private_boundary(self):
         sysp = _ProdOrchestrator._build_compose_system(_STUB_PERSONA, "")
         assert "评课社区" in sysp
-        assert "还没有接入中科大" in sysp
+        assert "USTC 公开开课数据缓存" in sysp
+        assert "未接入个人选课课表、成绩" in sysp
 
     def test_style_redline(self):
         sysp = _ProdOrchestrator._build_compose_system(_STUB_PERSONA, "")
@@ -171,7 +172,8 @@ class TestComposeProdBehavior:
         plugin._call_llm = fake_llm
         await plugin.runtime._compose_prod_text(
             _state("@bot 你还没接科大的东西啊"))
-        assert "还没有接入中科大" in cap.system
+        assert "USTC 公开开课数据缓存" in cap.system
+        assert "未接入个人选课课表、成绩" in cap.system
 
     @pytest.mark.asyncio
     async def test_short_ack_not_support_staff(self, plugin):

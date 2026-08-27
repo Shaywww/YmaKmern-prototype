@@ -15,6 +15,19 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
 
     # Register common intent patterns
     planner.register_pattern(
+        ("开课情况和评价", "课程信息和评价", "开课老师评价", "开课和评课"),
+        {"name": "course_catalog_with_reviews",
+         "goal": "Find current public offerings and community reviews",
+         "steps": [
+             {"step_id": "s1", "capability_id": "mcp.course_schedule",
+              "arguments": {"action": "search", "keyword": "{query}", "limit": 6},
+              "purpose": "Search the public USTC course-offering snapshot"},
+             {"step_id": "s2", "capability_id": "mcp.icourse_reviews",
+              "arguments": {"action": "search", "q": "{query}", "limit": 3},
+              "purpose": "Search public USTC course and teacher reviews"},
+         ]},
+    )
+    planner.register_pattern(
         ("评课社区", "评课", "课程评价", "老师怎么样", "老师好不好",
          "课程怎么样", "课怎么样", "值得选", "推荐老师", "给分怎么样"),
         {"name": "icourse_review_lookup",
@@ -25,10 +38,12 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                      "expected_output": "Course ratings and review summary with source link"}]},
     )
     planner.register_pattern(
-        ("查课", "课程查询", "课程信息", "什么课"),
-        {"name": "course_lookup", "goal": "Find course information",
+        ("查课", "课程查询", "课程信息", "什么课", "开课", "课程号",
+         "谁教", "哪个老师", "上课时间", "上课地点"),
+        {"name": "course_lookup", "goal": "Find public course offerings",
          "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                     "arguments": {"action": "search"}, "purpose": "Search course database",
+                     "arguments": {"action": "search", "keyword": "{query}", "limit": 8},
+                     "purpose": "Search the public USTC course snapshot",
                      "expected_output": "Course details"}]},
     )
     planner.register_pattern(
@@ -39,10 +54,11 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                      "expected_output": "Exam timetable"}]},
     )
     planner.register_pattern(
-        ("课表", "schedule", "课程表", "什么课"),
-        {"name": "schedule_lookup", "goal": "Get course schedule",
+        ("全校课表", "开课表", "课程安排", "schedule"),
+        {"name": "schedule_lookup", "goal": "Find public course schedules",
          "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                     "arguments": {"action": "get_personal_schedule"}, "purpose": "Get personal schedule"}]},
+                     "arguments": {"action": "search", "keyword": "{query}", "limit": 8},
+                     "purpose": "Search public course schedules"}]},
     )
     planner.register_pattern(
         ("选课", "培养方案", "学分", "毕业要求"),

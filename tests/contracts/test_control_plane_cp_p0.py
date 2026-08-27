@@ -185,8 +185,8 @@ class TestMCPEntry:
             app = create_app()   # 重建 app，MCPAccessPolicy 读取新配置
             client = TestClient(app)
             client.headers.update({"Authorization": f"Bearer {TOKEN}"})
-            r = client.post("/mcp/services/course_schedule/query",
-                            json={"action": "search", "keyword": "math"})
+            r = client.post("/mcp/services/exam_schedule/query",
+                            json={"action": "get_all_exams"})
             assert r.status_code == 403
             # 非 iCourse（clock）不受策略限制
             r2 = client.post("/mcp/services/clock/query", json={"action": "get_now"})

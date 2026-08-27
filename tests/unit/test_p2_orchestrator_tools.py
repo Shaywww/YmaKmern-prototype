@@ -100,7 +100,7 @@ class TestToolChainRealExecution:
             delivery_manager=DeliveryManager(NoOpOutputAdapter()),
             planner_integration=integrate_with_orchestrator(None, reg),
         )
-        result = await orch.run(_make_envelope(text="帮我查一下课程信息"))
+        result = await orch.run(_make_envelope(text="帮我查一下现在时间"))
         assert result.outcome == RunOutcome.SUCCEEDED
         assert result.final_response is not None
         assert result.final_response.text.strip()
