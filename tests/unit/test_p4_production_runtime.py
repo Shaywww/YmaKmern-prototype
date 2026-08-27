@@ -26,7 +26,9 @@ from dududa.core.state import RuntimeBudget, RuntimePhase, RuntimeState
 from dududa.core.memory import InMemoryRepository, MemoryType, MemoryScope
 from dududa.core.delivery import DeliveryReceipt, DeliveryStatus
 from dududa.core.renderer import Persona
-from dududa.core.capability import CapabilityRegistry
+from dududa.core.capability import (
+    Capability, CapabilityCandidate, CapabilityRegistry, CapabilitySchema,
+)
 from dududa.core.context import ContextBuilder
 from dududa.core.persona.registry import PersonaRegistry
 from dududa.mcp.registry import register_all_mcp_services
@@ -173,6 +175,27 @@ class TestReplyAndToolGating:
 
         assert result.final_response
         assert result.outcome == main.RunOutcome.SUCCEEDED
+
+    def test_empty_tool_plan_is_not_tool_intent(self):
+        state = RuntimeState(
+            budget=RuntimeBudget(),
+            perception=PerceptionResult(
+                needs_tools=False, tool_plan={"steps": []}),
+        )
+        assert main._ProdOrchestrator._tool_intent_requested(state) is False
+
+    def test_plan_parser_rejects_internal_chat_capability(self):
+        candidate = CapabilityCandidate(
+            capability=Capability(
+                capability_id="chat", name="智能对话", description="internal",
+                schema=CapabilitySchema(input_schema={
+                    "properties": {"text": {"type": "string"}}})),
+            relevance_score=1.0, rank=1)
+        plan = main._ProdOrchestrator._parse_llm_plan(
+            {"steps": [{"capability_id": "chat",
+                         "arguments": {"text": "谁最帅"}}]},
+            (candidate,), 3)
+        assert plan is None
 
 
 class TestProdCapProvider:

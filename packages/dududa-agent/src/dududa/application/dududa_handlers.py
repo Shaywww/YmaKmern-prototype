@@ -211,6 +211,55 @@ def _normalize_reply_style(text: str) -> str:
     return cleaned.strip()
 
 
+_GENERIC_FALLBACK_MARKERS = (
+    "对不起，我还没有学会回答这个问题",
+    "抱歉，我还没有学会回答这个问题",
+    "如果你有其他问题，我非常乐意为你提供帮助",
+    "如果你有其他问题，我很乐意为你提供帮助",
+)
+
+
+def _sanitize_conversational_reply(text: str) -> str:
+    """Remove provider fallbacks and impossible first-person experiences.
+
+    Prompt rules remain the primary style control.  This is the deterministic
+    delivery boundary for two failures that must never reach QQ even if a
+    provider or a second-pass composer ignores the prompt.
+    """
+    if not text:
+        return text
+
+    cleaned = text.strip()
+    marker_positions = [
+        cleaned.find(marker) for marker in _GENERIC_FALLBACK_MARKERS
+        if marker in cleaned
+    ]
+    if marker_positions:
+        # Keep a useful answer that precedes the canned refusal.  If the whole
+        # answer is only a provider fallback, use an honest in-persona line.
+        cleaned = cleaned[:min(marker_positions)].rstrip(" \t\r\n，不过呢，。!！*~")
+        if not cleaned:
+            cleaned = "这个我还真拿不准，就不硬猜啦～"
+
+    # Models have no body or offline life.  Strip a leading invented episode
+    # such as “刚啃完泡面，别学我啦”, while preserving the actual suggestion
+    # that follows it.  The pattern is deliberately limited to the beginning
+    # of a reply to avoid altering quoted or hypothetical content later on.
+    embodied = re.compile(
+        r"^(?:(?:我|嘟嘟哒)?(?:今天|昨晚|昨天|刚刚|刚)\s*"
+        r"(?:吃|喝|啃|睡|逛|去过|去了|买了|上班|下班|做饭|洗澡)"
+        r"[^，。！!\n]{0,40}[，。！!]\s*)"
+        r"(?:别学我(?:啦|了|哦)?[～~!！,，。\s]*)?"
+        r"(?:\([^\n)]{1,20}\)[～~^\s]*)?"
+    )
+    without_episode = embodied.sub("", cleaned, count=1).strip()
+    if without_episode != cleaned:
+        cleaned = without_episode or "这个我没有亲身体验，还是按你的口味来挑吧～"
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 async def handle_media(plugin, event, url, name, is_image,
                        run_id="", trace_id="", media_kind="",
                        context_only=False) -> str:
@@ -2337,7 +2386,8 @@ async def run_message_flow(plugin, event) -> str | None:
     try:
         reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
-        reply = _normalize_reply_style(_strip_tool_leak(reply))
+        reply = _normalize_reply_style(
+            _sanitize_conversational_reply(_strip_tool_leak(reply)))
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               reply=(reply or "")[:200])

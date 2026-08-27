@@ -103,7 +103,28 @@ def test_reply_style_removes_color_emoji_and_keeps_kaomoji():
 def test_reply_style_preserves_factual_symbols():
     assert h._normalize_reply_style(
         "气温 24℃，评分 4.7，距离约 2 km") == (
-            "气温 24℃，评分 4.7，距离约 2 km")
+        "气温 24℃，评分 4.7，距离约 2 km")
+
+
+def test_reply_sanitizer_removes_generic_provider_fallback_tail():
+    reply = (
+        "那肯定是群里最会拍飞机的那位呀～\n"
+        "不过呢，对不起，我还没有学会回答这个问题。"
+        "如果你有其他问题，我非常乐意为你提供帮助。")
+    assert h._sanitize_conversational_reply(reply) == (
+        "那肯定是群里最会拍飞机的那位呀～")
+
+
+def test_reply_sanitizer_removes_invented_embodied_episode():
+    reply = "刚啃完泡面，别学我啦 (≧▽≦)~ 想吃啥就整点热乎的呗～"
+    cleaned = h._sanitize_conversational_reply(reply)
+    assert cleaned == "想吃啥就整点热乎的呗～"
+    assert "啃完" not in cleaned
+
+
+def test_reply_sanitizer_does_not_remove_real_preference_or_question():
+    assert h._sanitize_conversational_reply("我喜欢喝奶茶～") == "我喜欢喝奶茶～"
+    assert h._sanitize_conversational_reply("现在去吃饭吗？") == "现在去吃饭吗？"
 
 
 def test_is_at_only_true_for_bare_at():

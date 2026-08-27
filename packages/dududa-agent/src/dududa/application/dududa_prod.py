@@ -282,6 +282,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         plugin = getattr(self, "_plugin", None)
         if plugin is None or not hasattr(plugin, "_call_llm"):
             return None
+        internal_ids = {"chat", "vision", "file_reader"}
+        candidates = tuple(
+            candidate for candidate in candidates
+            if candidate.capability.capability_id not in internal_ids)
         if not candidates:
             return None
         try:
@@ -425,7 +429,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if plan is None or not getattr(plan, "steps", ()):
             return plan
         import re
-        allowed = {c.capability.capability_id: c.capability for c in candidates}
+        internal_ids = {"chat", "vision", "file_reader"}
+        allowed = {
+            c.capability.capability_id: c.capability for c in candidates
+            if c.capability.capability_id not in internal_ids
+        }
         steps = []
         for s in plan.steps:
             args = dict(s.arguments or {})
@@ -491,7 +499,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return GeneratedPlan(
                 goal="llm-no-tools", steps=(),
                 rationale="LLM: no tools needed")
-        allowed = {c.capability.capability_id: c.capability for c in candidates}
+        internal_ids = {"chat", "vision", "file_reader"}
+        allowed = {
+            c.capability.capability_id: c.capability for c in candidates
+            if c.capability.capability_id not in internal_ids
+        }
         steps = []
         for i, sr in enumerate(steps_raw[:max_steps]):
             if not isinstance(sr, dict):

@@ -39,6 +39,12 @@ _ACTION_MAP = {
 
 DEFAULT_MIN_MODEL_CONFIDENCE = 0.5
 
+# These are model/runtime primitives, not user-facing external tools.  A
+# perception model occasionally hallucinates ``chat`` as a tool step for an
+# ordinary opinion question; accepting that step sends the message through a
+# second chat call and can surface the provider's generic fallback text.
+INTERNAL_MODEL_CAPABILITIES = frozenset({"chat", "vision", "file_reader"})
+
 # 生产可选：模型感知信号的严格 JSON 指令（DUDUDA_PERCEPTION_MODEL=1 启用）
 PERCEPTION_SYSTEM_PROMPT = (
     "你是感知模块，只输出严格 JSON，不要任何其他文字。"
@@ -256,6 +262,20 @@ class PerceptionMerger:
                     name=e["name"], entity_type=e["entity_type"],
                     confidence=e["confidence"], evidence=e["evidence"]))
                 seen_entities.add(key)
+        model_tool_plan = signal.get("tool_plan")
+        if model_tool_plan:
+            external_steps = [
+                step for step in model_tool_plan.get("steps", ())
+                if step.get("capability_id") not in INTERNAL_MODEL_CAPABILITIES
+            ]
+            model_tool_plan = ({"steps": external_steps}
+                               if external_steps else None)
+        # A bare model ``needs_tools=true`` is not executable evidence.  The
+        # deterministic rules may still request discovery, while a model may
+        # promote a message only by proposing at least one external step that
+        # has already passed the strict schema validator above.
+        model_needs_tools = bool(
+            model_tool_plan and model_tool_plan.get("steps"))
         return PerceptionResult(
             schema_version=rule.schema_version,
             target_users=rule.target_users,
@@ -267,8 +287,8 @@ class PerceptionMerger:
             candidate_intents=tuple(dict.fromkeys(
                 list(rule.candidate_intents)
                 + signal.get("candidate_intents", []))),
-            needs_tools=rule.needs_tools or bool(signal.get("needs_tools", False)),
-            tool_plan=signal.get("tool_plan") or rule.tool_plan,
+            needs_tools=rule.needs_tools or model_needs_tools,
+            tool_plan=model_tool_plan or rule.tool_plan,
             suggested_capabilities=tuple(dict.fromkeys(
                 list(rule.suggested_capabilities)
                 + signal.get("suggested_capabilities", []))),

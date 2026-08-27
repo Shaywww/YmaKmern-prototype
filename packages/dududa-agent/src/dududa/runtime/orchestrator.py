@@ -527,10 +527,15 @@ class RuntimeOrchestrator:
     def _tool_intent_requested(state: RuntimeState) -> bool:
         """Do not enumerate or plan tools for ordinary conversation."""
         perception = getattr(state, "perception", None)
+        tool_plan = getattr(perception, "tool_plan", None) if perception else None
+        if isinstance(tool_plan, dict):
+            planned_steps = tool_plan.get("steps", ())
+        else:
+            planned_steps = getattr(tool_plan, "steps", ()) if tool_plan else ()
         return bool(
             state.social_decision == SocialAction.USE_TOOLS
             or (perception and getattr(perception, "needs_tools", False))
-            or (perception and getattr(perception, "tool_plan", None))
+            or planned_steps
         )
 
     def _phase_compose(self, state: RuntimeState) -> RuntimeState:

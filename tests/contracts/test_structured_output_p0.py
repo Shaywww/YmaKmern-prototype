@@ -80,6 +80,10 @@ _VALID_PERCEPTION = {
     "suggested_capabilities": ["mcp.course_schedule"],
     "needs_tools": True,
     "ambiguities": [],
+    "tool_plan": {"steps": [{
+        "capability_id": "mcp.course_schedule",
+        "arguments": {"q": "数据结构"},
+    }]},
 }
 
 
@@ -261,6 +265,30 @@ class TestPerceptionMerger:
         merged, used = merge_perception_with_model(rule, _VALID_PERCEPTION)
         assert used is True
         assert merged.topics == ("course",)
+
+    def test_empty_model_plan_cannot_promote_ordinary_chat_to_tools(self):
+        rule = PerceptionResult(needs_tools=False)
+        raw = dict(_VALID_PERCEPTION)
+        raw.update(needs_tools=True, tool_plan={"steps": []})
+
+        merged, used = merge_perception_with_model(rule, raw)
+
+        assert used is True
+        assert merged.needs_tools is False
+        assert merged.tool_plan is None
+
+    def test_internal_chat_plan_is_not_an_external_tool_request(self):
+        rule = PerceptionResult(needs_tools=False)
+        raw = dict(_VALID_PERCEPTION)
+        raw.update(needs_tools=True, tool_plan={"steps": [{
+            "capability_id": "chat", "arguments": {"text": "谁最帅"},
+        }]})
+
+        merged, used = merge_perception_with_model(rule, raw)
+
+        assert used is True
+        assert merged.needs_tools is False
+        assert merged.tool_plan is None
 
 
 # ---- 4. decision_from_signal ----
