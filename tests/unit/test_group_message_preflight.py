@@ -512,6 +512,119 @@ def test_ambient_default_off_stays_silent(tmp_path):
     assert h._is_ambient_wake(question) is False
 
 
+def test_small_three_person_question_thread_opens_semantic_review(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    events = (
+        GroupEvent("晚上吃什么", message_id="small-1", sender_id="10001"),
+        GroupEvent("飞机", message_id="small-2", sender_id="10002"),
+    )
+    for event in events:
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    reaction = GroupEvent(
+        "不错", message_id="small-3", sender_id="10003")
+    assert h._preflight_group_message(
+        plugin, reaction, reaction.get_messages()) is True
+    assert h._semantic_chat_candidate(
+        reaction) == "small_group_question_thread"
+    assert h._is_ambient_wake(reaction) is True
+
+
+def test_small_chat_rule_needs_three_people_and_an_earlier_question(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for index, (sender, text) in enumerate((
+        ("10001", "发张图看看"),
+        ("10001", "今天拍的"),
+        ("10002", "不错"),
+    )):
+        event = GroupEvent(
+            text, message_id=f"two-person-{index}", sender_id=sender)
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    no_question = FlowPlugin(tmp_path / "no-question")
+    no_question.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for index, (sender, text) in enumerate((
+        ("10001", "今天看到飞机了"),
+        ("10002", "我也看到了"),
+        ("10003", "确实不错"),
+    )):
+        event = GroupEvent(
+            text, message_id=f"no-question-{index}", sender_id=sender)
+        assert h._preflight_group_message(
+            no_question, event, event.get_messages()) is False
+
+
+def test_photo_after_small_question_exchange_opens_vision_review(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for event in (
+        GroupEvent("晚上吃什么", message_id="photo-q", sender_id="10001"),
+        GroupEvent("飞机", message_id="photo-a", sender_id="10002"),
+    ):
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    photo = GroupEvent(
+        "", message_id="plane-photo", sender_id="10002",
+        components=[_Image("https://example.test/plane.jpg")],
+        raw_message={"message": [{"type": "image", "data": {
+            "url": "https://example.test/plane.jpg",
+            "file": "plane.jpg", "sub_type": 0,
+        }}]})
+    assert h._preflight_group_message(
+        plugin, photo, photo.get_messages()) is True
+    assert h._semantic_media_candidate(photo) == "small_chat_image"
+    assert h._is_ambient_wake(photo) is True
+
+
+@pytest.mark.asyncio
+async def test_deepseek_is_final_small_chat_judge_and_uses_shared_quota(
+    tmp_path,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    for index, (sender, text) in enumerate((
+        ("10001", "晚上吃什么"),
+        ("10002", "飞机"),
+        ("10003", "不错"),
+    )):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id=sender, content=text,
+            message_id=f"judge-{index}")
+
+    async def approve(system, user, **kwargs):
+        assert "至少三名成员" in system
+        assert "10001" not in user and "10002" not in user
+        assert kwargs["skip_render"] is True
+        return (
+            '{"scene":"casual_meme","should_reply":true,'
+            '"confidence":0.91,"reply":"飞机也端上桌了是吧～(≧▽≦)"}'
+        )
+
+    plugin._call_llm = approve
+    event = GroupEvent("不错", message_id="judge-final", sender_id="10003")
+    reply = await h._semantic_chat_reply(
+        plugin, event, "small_group_question_thread")
+    assert reply == "飞机也端上桌了是吧～(≧▽≦)"
+    assert plugin.group_ambient.status(GROUP_ID)["daily_used"] == 1
+
+    async def uncertain(system, user, **kwargs):
+        return (
+            '{"scene":"unknown","should_reply":false,'
+            '"confidence":0.61,"reply":""}'
+        )
+
+    rejected = FlowPlugin(tmp_path / "rejected-small")
+    rejected.group_context = plugin.group_context
+    rejected._call_llm = uncertain
+    assert await h._semantic_chat_reply(
+        rejected, event, "small_group_question_thread") == ""
+
+
 def test_local_meme_match_only_opens_semantic_review_after_real_context(
     tmp_path,
 ):
