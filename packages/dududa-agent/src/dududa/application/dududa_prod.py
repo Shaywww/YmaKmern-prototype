@@ -713,7 +713,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if tracker is None:
             return ""
         try:
-            return tracker.render(self._conversation_id(state)) or ""
+            group_id = self._conversation_id(state)
+            warm = tracker.active_topic_context(group_id)
+            hot = tracker.render(group_id)
+            return "\n\n".join(part for part in (warm, hot) if part)
         except Exception:
             return ""
 

@@ -637,6 +637,110 @@ async def test_semantic_media_review_rejects_uncertain_scene(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_quiet_group_is_replaced_by_identity_free_topic_capsule(
+    tmp_path, monkeypatch,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker(ttl_seconds=300)
+    base = h.time.time() - 303
+    for index, (sender, text) in enumerate((
+        ("10091", "明天实验课是不是换教室了"),
+        ("10092", "听说可能换到综合楼"),
+        ("10091", "但是群通知还没发"),
+    )):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id=sender, content=text,
+            message_id=f"capsule-{index}", now=base + index)
+
+    async def no_wait(_seconds):
+        return None
+
+    async def summarise(system, user, **kwargs):
+        assert "10091" not in user and "10092" not in user
+        assert kwargs["skip_render"] is True
+        return (
+            '{"topic":"实验课教室变更",'
+            '"summary":"明天实验课可能换到综合楼，但还没有正式通知",'
+            '"core_points":["可能换到综合楼","群通知尚未发布"],'
+            '"unresolved":"等待正式通知确认","tone":"serious",'
+            '"confidence":0.94}'
+        )
+
+    monkeypatch.setattr(h.asyncio, "sleep", no_wait)
+    plugin._call_llm = summarise
+    await h._summarize_quiet_group_topic(plugin, GROUP_ID, base + 2)
+
+    assert plugin.group_context.snapshot(GROUP_ID) == ()
+    capsules = plugin.group_context.topic_capsules(GROUP_ID)
+    assert len(capsules) == 1
+    assert capsules[0].topic == "实验课教室变更"
+    assert "成员" not in capsules[0].summary
+
+
+@pytest.mark.asyncio
+async def test_warm_topic_only_attaches_after_high_confidence_continuity(
+    tmp_path,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    capsule = plugin.group_context.set_topic_capsule(
+        group_id=GROUP_ID, topic="实验课教室变更",
+        summary="实验课可能换到综合楼，但还没有正式通知",
+        core_points=("可能换教室",), unresolved="等待通知",
+        last_message_at=h.time.time() - 700)
+    event = GroupEvent(
+        "群通知还是没发吗？", message_id="continue-topic",
+        sender_id="10101", at=True)
+
+    async def approve(system, user, **kwargs):
+        return (
+            '{"continues_topic":true,"confidence":0.91,'
+            f'"capsule_id":"{capsule.capsule_id}"}}'
+        )
+
+    plugin._call_llm = approve
+    assert await h._prepare_topic_continuity(plugin, event) is True
+    rendered = h._group_context_text(plugin, event)
+    assert "实验课教室变更" in rendered
+    assert "等待通知" in rendered
+
+    rejected = FlowPlugin(tmp_path / "new-topic")
+    rejected.group_context = h.GroupConversationTracker()
+    rejected.group_context.set_topic_capsule(
+        group_id=GROUP_ID, topic="实验课教室变更",
+        summary="实验课可能换教室", last_message_at=h.time.time() - 700,
+        capsule_id=capsule.capsule_id)
+
+    async def uncertain(system, user, **kwargs):
+        return (
+            '{"continues_topic":false,"confidence":0.55,'
+            '"capsule_id":""}'
+        )
+
+    rejected._call_llm = uncertain
+    ambiguous = GroupEvent(
+        "确实", message_id="ambiguous-topic", sender_id="10102", at=True)
+    assert await h._prepare_topic_continuity(rejected, ambiguous) is False
+    assert rejected.group_context.active_capsule(GROUP_ID) is None
+
+
+def test_topic_capsule_never_wakes_an_unaddressed_message(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    plugin.group_context = h.GroupConversationTracker()
+    plugin.group_context.set_topic_capsule(
+        group_id=GROUP_ID, topic="实验课教室变更",
+        summary="实验课可能换教室", last_message_at=h.time.time() - 700)
+    event = GroupEvent(
+        "群通知还是没发", message_id="silent-continuation",
+        sender_id="10103", at=False)
+
+    assert h._preflight_group_message(
+        plugin, event, event.get_messages()) is False
+    assert plugin.group_context.active_capsule(GROUP_ID) is None
+
+
+@pytest.mark.asyncio
 async def test_unmentioned_group_image_is_stashed_without_ux_progress_or_trace(
     tmp_path, monkeypatch
 ):
