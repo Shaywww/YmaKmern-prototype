@@ -8,6 +8,7 @@ from dududa.application import dududa_commands
 from dududa.application.user_experience import UserExperienceStore
 from dududa.core.capability import Capability, CapabilityRegistry, CapProvider, ProviderType
 from dududa.core.memory import JSONMemoryRepository, MemoryRecord, MemoryScope, MemoryType
+from dududa.core.meme_library import MemeLibrary
 
 
 class Event:
@@ -86,4 +87,25 @@ async def test_broadcast_preview_never_sends_and_confirm_rechecks_opt_in(tmp_pat
     result = await dududa_commands.cmd_broadcast_confirm_impl(p, event, broadcast_id)
     assert result == "推送完成：成功 0，失败 0。"
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_group_meme_command_requires_review_and_scopes_entries(tmp_path):
+    allowed = SimpleNamespace(allowed=True)
+    p = SimpleNamespace(
+        meme_library=MemeLibrary(str(tmp_path / "memes.json")),
+        _authorize_manage=lambda *a, **kw: (allowed, None),
+    )
+    event = Event()
+    event.message_obj = SimpleNamespace(group="g1")
+    event.message_str = (
+        "/dududa_meme add 轨交之神 | 夸专业课答题很强 | 轨信之神")
+    added = await dududa_commands.cmd_group_meme_impl(p, event)
+    assert "已加入本群梗库" in added
+
+    event.message_str = "/dududa_meme list"
+    listed = await dududa_commands.cmd_group_meme_impl(p, event)
+    assert "轨交之神" in listed and "轨信之神" in listed
+    assert p.meme_library.match("轨信之神", group_id="g1") is not None
+    assert p.meme_library.match("轨信之神", group_id="g2") is None
 

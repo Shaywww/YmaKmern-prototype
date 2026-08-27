@@ -707,6 +707,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         except Exception:
             return ""
 
+    def _live_group_context(self, state) -> str:
+        """Five-minute in-memory group queue; never read from durable memory."""
+        tracker = getattr(self._plugin, "group_context", None)
+        if tracker is None:
+            return ""
+        try:
+            return tracker.render(self._conversation_id(state)) or ""
+        except Exception:
+            return ""
+
     def _profile_lines(self, state) -> tuple:
         """画像摘要（称呼/偏好/事实 + 会话活跃话题），注入 LLM 上下文。"""
         store = getattr(self, "_profile_store", None)
@@ -857,6 +867,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         elif perception and any(a.act_type == "noun_query"
                                 for a in perception.speech_acts):
             extra = "用户只发来一个词或短名词，视为在询问它的含义，请直接解释，不要当打招呼。"
+        live_group_context = self._live_group_context(state)
+        if live_group_context:
+            extra += (
+                " 群聊回复前先在内部判断场景：认真讨论时只答疑、简洁准确，"
+                "不要玩梗或主动打断；闲聊玩梗时用一到两句口语自然接话；"
+                "中性吐槽时先共情，不抬杠、不灌鸡汤。拿不准时按认真场景处理。"
+            )
         system = self._build_compose_system(p, extra)
         mem_prefix = plugin._read_memory(event)
         if any(kw in combined for kw in ["文件", "图片", "刚才", "之前", "刚刚", "那个", "这个"]):
@@ -867,6 +884,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         style_lines = self._style_lines(state)
         if style_lines:
             mem_prefix = ("\n".join(style_lines) + "\n") + (mem_prefix or "")
+        if live_group_context:
+            mem_prefix = live_group_context + "\n\n" + (mem_prefix or "")
         try:
             is_group = bool(getattr(getattr(event, "message_obj", None), "group", None))
         except Exception:

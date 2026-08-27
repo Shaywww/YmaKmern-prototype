@@ -10,6 +10,7 @@ from dududa.application.dududa_utils import (
     _detect_media_kind,
     _has_media_in_raw,
 )
+from dududa.core.group_context import GroupConversationTracker
 
 
 def _event(raw, text=""):
@@ -122,3 +123,36 @@ async def test_ambiguous_image_asks_vision_to_classify_silently():
     assert "先在内部根据画面判断" in plugin.system
     assert "不要把判断标签输出给用户" in plugin.system
     assert plugin.user == "这是什么地方"
+
+
+@pytest.mark.asyncio
+async def test_context_only_vision_returns_structured_summary_without_memory():
+    plugin = _Plugin()
+    plugin.group_context = GroupConversationTracker()
+    plugin.group_context.add(
+        group_id="1059231626", sender_id="10001",
+        content="[表情包，尚未识别]", message_type="sticker",
+        message_id="visual-1")
+    event = _event({"message": [{
+        "type": "image",
+        "data": {"url": "https://example.com/a.webp", "emoji_id": "1"},
+    }]})
+    event.group_id = "1059231626"
+    event.message_id = "visual-1"
+
+    async def structured_vision(system, user, b64, mime, **kwargs):
+        plugin.system, plugin.user = system, user
+        assert kwargs["skip_render"] is True
+        return (
+            '{"kind":"sticker","description":"一只猫歪头看着镜头",'
+            '"visible_text":"啊？","emotion":"疑惑和调侃"}'
+        )
+
+    plugin._call_vision = structured_vision
+    summary = await handlers.handle_image(
+        plugin, event, b"fake", "a.webp", "webp",
+        media_kind="sticker", context_only=True)
+
+    assert summary == "表情包摘要：一只猫歪头看着镜头；配文“啊？”；表达疑惑和调侃"
+    assert plugin.memory is None
+    assert plugin.group_context.snapshot("1059231626")[-1].content == summary

@@ -375,6 +375,50 @@ async def test_dynamic_group_circuit_allows_human_explicit_at(
     assert signal["has_media"] is False
 
 
+def test_directed_casual_sticker_routes_through_summary_then_deepseek(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    raw = {"message": [{"type": "image", "data": {
+        "url": "https://example.test/wave.webp", "file": "wave.webp",
+        "emoji_id": "wave", "summary": "[动画表情]",
+    }}]}
+    event = GroupEvent(
+        f"[At:{BOT_ID}]", message_id="direct-sticker", sender_id="10087",
+        at=True, components=[_At(BOT_ID)], raw_message=raw)
+
+    assert h._preflight_group_message(
+        plugin, event, event.get_messages()) is True
+    assert h._semantic_media_candidate(event) == "directed_media"
+    assert "尚未识别" in h._group_context_text(plugin, event)
+
+
+@pytest.mark.asyncio
+async def test_directed_media_reply_uses_summary_without_proactive_quota(
+    tmp_path,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.personas = SimpleNamespace(active=SimpleNamespace(
+        display_name="嘟嘟哒", first_person="嘟嘟哒"))
+    plugin.group_context = h.GroupConversationTracker()
+    plugin.group_context.add(
+        group_id=GROUP_ID, sender_id="10088",
+        content="表情包摘要：小狐狸挥手；表达打招呼",
+        message_type="sticker", message_id="direct-summary")
+    event = GroupEvent(
+        "", message_id="direct-summary", sender_id="10088")
+    calls = []
+
+    async def compose(system, user, **kwargs):
+        calls.append((system, user, kwargs))
+        return "哟，挥手收到啦～(≧▽≦)"
+
+    plugin._call_llm = compose
+    reply = await h._direct_group_media_reply(plugin, event)
+    assert reply == "哟，挥手收到啦～(≧▽≦)"
+    assert "小狐狸挥手" in calls[0][1]
+    assert plugin.group_ambient.status(GROUP_ID)["daily_used"] == 0
+
+
 @pytest.mark.asyncio
 async def test_at_other_bot_is_dropped_even_when_framework_sets_wake(
     tmp_path, monkeypatch
@@ -466,6 +510,130 @@ def test_ambient_default_off_stays_silent(tmp_path):
     assert h._preflight_group_message(
         plugin, question, question.get_messages()) is False
     assert h._is_ambient_wake(question) is False
+
+
+def test_local_meme_match_only_opens_semantic_review_after_real_context(
+    tmp_path,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    messages = (
+        GroupEvent("哈哈这个展开有点怪", message_id="meme-1",
+                   sender_id="10051"),
+        GroupEvent("确实越来越离谱了", message_id="meme-2",
+                   sender_id="10052"),
+    )
+    for event in messages:
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    candidate_event = GroupEvent(
+        "这也太绝绝紫了", message_id="meme-3", sender_id="10051")
+    assert h._preflight_group_message(
+        plugin, candidate_event, candidate_event.get_messages()) is True
+    candidate = h._semantic_candidate(candidate_event)
+    assert candidate["key"] == "绝绝子"
+    assert candidate_event.is_at_or_wake_command is True
+
+    rendered = h._group_context_text(plugin, candidate_event)
+    assert "成员1" in rendered and "成员2" in rendered
+    assert "10051" not in rendered and "10052" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_deepseek_is_final_meme_judge_and_fails_closed(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for index, (sender, text) in enumerate((
+        ("10061", "哈哈这展开太怪了"),
+        ("10062", "已经开始离谱了"),
+        ("10061", "这也太绝绝紫了"),
+    )):
+        event = GroupEvent(
+            text, message_id=f"review-{index}", sender_id=sender)
+        h._record_group_context(
+            plugin, event, event.get_messages(), GROUP_ID, sender)
+
+    calls = []
+
+    async def approve(system, user, **kwargs):
+        calls.append((system, user, kwargs))
+        return (
+            '{"scene":"casual_meme","is_meme":true,'
+            '"should_reply":true,"confidence":0.91,'
+            '"reply":"这展开确实有点绝绝子了～(≧▽≦)"}'
+        )
+
+    plugin._call_llm = approve
+    event = GroupEvent(
+        "这也太绝绝紫了", message_id="review-final", sender_id="10061")
+    reply = await h._semantic_meme_reply(
+        plugin, event, {"key": "绝绝子", "tier": "basic",
+                        "meaning": "强调很绝", "evidence": "拼音近似"})
+    assert reply == "这展开确实有点绝绝子了～(≧▽≦)"
+    assert calls[0][2]["skip_render"] is True
+    assert "成员1" in calls[0][1] and "10061" not in calls[0][1]
+
+    isolated = FlowPlugin(tmp_path / "rejected")
+    isolated.group_context = plugin.group_context
+
+    async def reject(system, user, **kwargs):
+        return (
+            '{"scene":"serious_discussion","is_meme":false,'
+            '"should_reply":false,"confidence":0.96,"reply":""}'
+        )
+
+    isolated._call_llm = reject
+    assert await h._semantic_meme_reply(
+        isolated, event, {"key": "绝绝子"}) == ""
+
+
+def test_second_distinct_sticker_opens_multimodal_review_only(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+
+    def sticker_event(message_id, sender_id):
+        raw = {
+            "message": [{"type": "image", "data": {
+                "url": f"https://example.test/{message_id}.webp",
+                "file": f"{message_id}.webp", "emoji_id": message_id,
+                "summary": "[动画表情]",
+            }}]
+        }
+        return GroupEvent(
+            "", message_id=message_id, sender_id=sender_id,
+            components=[], raw_message=raw)
+
+    first = sticker_event("sticker-a", "10071")
+    assert h._preflight_group_message(
+        plugin, first, first.get_messages()) is False
+
+    second = sticker_event("sticker-b", "10072")
+    assert h._preflight_group_message(
+        plugin, second, second.get_messages()) is True
+    assert h._semantic_media_candidate(second) == "sticker_chain"
+    assert second.is_at_or_wake_command is True
+
+
+@pytest.mark.asyncio
+async def test_semantic_media_review_rejects_uncertain_scene(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent("", message_id="media-review", sender_id="10081")
+    plugin.group_context = h.GroupConversationTracker()
+    plugin.group_context.add(
+        group_id=GROUP_ID, sender_id="10081",
+        content="表情包摘要：一只猫歪头，表达疑惑",
+        message_type="sticker", message_id="media-review")
+
+    async def uncertain(system, user, **kwargs):
+        return (
+            '{"scene":"unknown","should_reply":false,'
+            '"confidence":0.51,"reply":""}'
+        )
+
+    plugin._call_llm = uncertain
+    assert await h._semantic_media_reply(
+        plugin, event, "sticker_chain") == ""
 
 
 @pytest.mark.asyncio

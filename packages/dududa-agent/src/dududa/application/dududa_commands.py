@@ -277,6 +277,7 @@ async def cmd_help_impl(plugin) -> str:
         "/dududa_memory — 查看和控制记忆",
         "/dududa_subscribe — 自主管理订阅",
         "/dududa_ambient — 群管理员控制自然参与和场景回应",
+        "/dududa_meme — 群管理员维护本群自定义梗库",
         "/dududa_cancel — 取消正在处理的任务",
         "/dududa_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
         "/dududa_help — 查看这份动态帮助",
@@ -432,9 +433,12 @@ async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
     return (
         f"{prefix}\n"
         "可触发：昵称招呼、明确情绪求助、忙碌群聊问题补位，"
-        "以及新人入群、红包、群投票、深夜冒泡和低频话题插话。\n"
+        "以及新人入群、红包、群投票、深夜冒泡、低频话题插话，"
+        "还可在高置信度闲聊语境中接梗或接连续表情包。\n"
         "话题插话只在多人已经聊起来时，从外卖、下班、奶茶、"
         "摸鱼和电影等少量人设话题中随机触发。\n"
+        "群聊上下文只在内存保留最近 7 条，5 分钟无消息自动清空；"
+        "自定义梗需管理员用 /dududa_meme 人工维护。\n"
         "深夜搭话仅限 0–5 点且此前沉默至少 30 分钟；"
         "投票只口头凑热闹，不会代替用户投票。\n"
         f"当前窗口：{status.get('message_count', 0)} 条 / "
@@ -442,6 +446,67 @@ async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
         f"{status.get('daily_used', 0)}/{status.get('daily_limit', 2)} 次。\n"
         "限制：不随机 @ 人；冷却 30 分钟；每天最多 2 次；只回复一轮。"
     )
+
+
+async def cmd_group_meme_impl(plugin, event) -> str:
+    """Review candidates and maintain group-scoped custom meme entries."""
+    try:
+        gid = str(getattr(event.message_obj, "group", None) or "")
+    except Exception:
+        gid = ""
+    if not gid:
+        return "这个命令只能在群聊中使用。"
+    raw = " ".join(str(getattr(event, "message_str", "") or "").split())
+    payload = raw.partition(" ")[2].strip()
+    action, _, rest = payload.partition(" ")
+    action = {"查看": "list", "候选": "candidates", "添加": "add",
+              "删除": "remove"}.get(action.lower(), action.lower())
+    if action not in ("list", "candidates", "add", "remove"):
+        return (
+            "用法：\n"
+            "/dududa_meme list\n"
+            "/dududa_meme candidates\n"
+            "/dududa_meme add 梗词 | 含义 | 别名1,别名2\n"
+            "/dududa_meme remove 梗词"
+        )
+    res, conf = plugin._authorize_manage(
+        event, resource="group_policy",
+        payload={"op": f"meme_{action}", "group": gid})
+    if not res.allowed:
+        return _deny_hint(res, conf)
+    library = getattr(plugin, "meme_library", None)
+    if library is None:
+        return "梗库尚未装配。"
+    if action == "list":
+        entries = library.custom_entries(gid)
+        if not entries:
+            return "本群还没有自定义梗。"
+        return "本群自定义梗：\n" + "\n".join(
+            f"- {key}：{meaning}（别名：{', '.join(aliases)}）"
+            for key, meaning, aliases in entries[:30])
+    if action == "candidates":
+        candidates = library.candidates(min_count=3, limit=30)
+        if not candidates:
+            return "暂时没有达到 3 次的陌生短语候选。"
+        return "待人工审核的陌生短语（仅含脱敏短语与频次）：\n" + "\n".join(
+            f"- {phrase}：{count} 次" for phrase, count in candidates)
+    if action == "remove":
+        key = rest.strip()
+        if not key:
+            return "用法：/dududa_meme remove 梗词"
+        return (f"已删除本群梗：{key}"
+                if library.remove_custom(gid, key)
+                else f"本群梗库中没有：{key}")
+
+    parts = [part.strip() for part in rest.split("|")]
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        return "用法：/dududa_meme add 梗词 | 含义 | 别名1,别名2"
+    aliases = tuple(
+        item.strip() for item in (parts[2].split(",") if len(parts) > 2 else ())
+        if item.strip())
+    if not library.add_custom(gid, parts[0], parts[1], aliases=aliases):
+        return "添加失败，请检查梗词和含义。"
+    return f"已加入本群梗库：{parts[0]}。它只会作为候选，仍需模型高置信度终审。"
 
 
 async def cmd_group_mode_impl(plugin, event, group_id=None, mode=None) -> str:
