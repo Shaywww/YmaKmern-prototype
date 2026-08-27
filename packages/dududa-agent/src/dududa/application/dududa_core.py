@@ -414,8 +414,15 @@ class DududaCore:
                         r"[，。！？、\s：:；;]", combined):
                     acts.append(SpeechAct(act_type="noun_query", confidence=0.6))
         entities = []
-        for m in re.finditer(r"@\S+", combined):
-            entities.append(EntityRef(name=m.group(1), entity_type="person", confidence=0.9, evidence=m.group(0)))
+        for m in re.finditer(r"@([^\s@]+)", combined):
+            # AstrBot may render a QQ mention as ``@昵称(123456789)``.  Keep
+            # the visible nickname as the entity and never copy the numeric
+            # platform id into perception evidence.
+            name = re.sub(r"\(\d{5,12}\)$", "", m.group(1)).strip()
+            if name:
+                entities.append(EntityRef(
+                    name=name, entity_type="person", confidence=0.9,
+                    evidence=f"@{name}"))
         topics = []
         topic_kw = {"课程": "course", "考试": "exam", "作业": "homework", "天气": "weather",
                     "文件": "file", "图片": "image", "成绩": "grade", "食堂": "canteen", "图书馆": "library",

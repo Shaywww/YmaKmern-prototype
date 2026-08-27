@@ -203,3 +203,10 @@ class TestSkillPerception:
 
     def test_greeting_no_tools(self):
         assert self._perceive("你好").needs_tools is False
+
+    def test_qq_mention_is_parsed_without_numeric_id(self):
+        result = self._perceive(
+            "原来你是嘟嘟哒，那 @走火入摩羯座♑(3296147894) 是谁")
+        assert len(result.entities) == 1
+        assert result.entities[0].name == "走火入摩羯座♑"
+        assert result.entities[0].evidence == "@走火入摩羯座♑"
