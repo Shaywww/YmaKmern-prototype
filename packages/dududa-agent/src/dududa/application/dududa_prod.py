@@ -110,7 +110,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             try:
                 # 生产补充意图模式：公开开课查询。通用「查/搜」留给联网搜索。
                 self._tool_chain.planner.register_pattern(
-                    ("查课", "课程查询", "课程信息", "开课", "课程号", "谁教",
+                    ("查课", "课程", "课表", "课程查询", "课程信息", "开课", "课程号", "谁教",
                      "哪个老师", "上课时间", "上课地点"),
                     {"name": "public_course_search", "goal": "Search public USTC offerings",
                      "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
@@ -378,7 +378,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     "评价", "怎么样", "好不好", "值得选", "推荐吗",
                     "给分", "作业多吗", "难不难", "收获"))))
         catalog_intent = any(k in text for k in (
-            "查课", "课程查询", "课程信息", "开课", "课程号", "谁教",
+            "查课", "课程", "课表", "课程查询", "课程信息", "开课", "课程号", "谁教",
             "哪个老师", "哪些老师", "上课时间", "上课地点", "全校课表", "开课表"))
         if (review_intent and catalog_intent
                 and {"mcp.course_schedule", "mcp.icourse_reviews"} <= allowed):

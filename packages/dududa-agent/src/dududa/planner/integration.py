@@ -38,7 +38,7 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                      "expected_output": "Course ratings and review summary with source link"}]},
     )
     planner.register_pattern(
-        ("查课", "课程查询", "课程信息", "什么课", "开课", "课程号",
+        ("查课", "课程", "课表", "课程查询", "课程信息", "什么课", "开课", "课程号",
          "谁教", "哪个老师", "上课时间", "上课地点"),
         {"name": "course_lookup", "goal": "Find public course offerings",
          "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
