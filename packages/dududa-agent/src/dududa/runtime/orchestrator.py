@@ -136,9 +136,7 @@ class RuntimeOrchestrator:
                 self._last_state = state
                 return self._result_from_state(state, RunOutcome.IGNORED)
 
-            if state.social_decision in (
-                SocialAction.ANSWER, SocialAction.ASK, SocialAction.USE_TOOLS,
-            ):
+            if self._tool_intent_requested(state):
                 state = self._phase_list_capabilities(state)
 
             if self._should_use_tools(state):
@@ -523,8 +521,17 @@ class RuntimeOrchestrator:
             return False
         if not state.capability_candidates:
             return False
-        return (getattr(state.perception, "needs_tools", False)
-                or state.social_decision == SocialAction.USE_TOOLS)
+        return self._tool_intent_requested(state)
+
+    @staticmethod
+    def _tool_intent_requested(state: RuntimeState) -> bool:
+        """Do not enumerate or plan tools for ordinary conversation."""
+        perception = getattr(state, "perception", None)
+        return bool(
+            state.social_decision == SocialAction.USE_TOOLS
+            or (perception and getattr(perception, "needs_tools", False))
+            or (perception and getattr(perception, "tool_plan", None))
+        )
 
     def _phase_compose(self, state: RuntimeState) -> RuntimeState:
         draft_text = self._build_draft_text(state)

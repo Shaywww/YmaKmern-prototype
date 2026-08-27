@@ -66,6 +66,9 @@ class _Reply:
     type = "ComponentType.Reply"
     text = ""
 
+    def __init__(self, message_id="quoted-1"):
+        self.id = str(message_id)
+
 
 class GroupEvent:
     """Small AstrBot-like group event with explicit sender/bot identity."""
@@ -897,6 +900,82 @@ async def test_warm_topic_only_attaches_after_high_confidence_continuity(
         "确实", message_id="ambiguous-topic", sender_id="10102", at=True)
     assert await h._prepare_topic_continuity(rejected, ambiguous) is False
     assert rejected.group_context.active_capsule(GROUP_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_reply_context_resolves_onebot_message_into_short_group_queue(
+    tmp_path,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    plugin.group_context = h.GroupConversationTracker()
+    event = GroupEvent(
+        "这个为什么？", message_id="reply-current", sender_id="10110",
+        at=True, components=[_Reply("778899"), _Plain("这个为什么？")],
+        raw_message=[
+            {"type": "reply", "data": {"id": "778899"}},
+            {"type": "text", "data": {"text": "这个为什么？"}},
+        ])
+
+    class Bot:
+        async def call_action(self, action, **kwargs):
+            assert action == "get_msg"
+            assert kwargs == {
+                "message_id": 778899, "self_id": int(BOT_ID)}
+            return {
+                "group_id": int(GROUP_ID),
+                "sender": {"user_id": "10086"},
+                "message": [
+                    {"type": "text", "data": {"text": "广场上还有太极"}},
+                    {"type": "image", "data": {"url": "https://secret.test/a"}},
+                ],
+            }
+
+    event.bot = Bot()
+    assert h._preflight_group_message(plugin, event, event.get_messages())
+    context = await h._resolve_reply_context(
+        plugin, event, event.get_messages())
+
+    assert context == "群成员：广场上还有太极[图片]"
+    rendered = h._group_context_text(plugin, event)
+    assert "回复内容：群成员：广场上还有太极[图片]" in rendered
+    assert "778899" not in rendered
+    assert "secret.test" not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", [True, False])
+async def test_short_reply_ack_is_consumed_without_llm(
+    tmp_path, monkeypatch, available,
+):
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent(
+        "那是", message_id=f"short-ack-{available}", sender_id="10111",
+        at=True, components=[_Reply("424432622"), _Plain("那是")],
+        raw_message=[
+            {"type": "reply", "data": {"id": "424432622"}},
+            {"type": "text", "data": {"text": "那是"}},
+        ])
+
+    if available:
+        class Bot:
+            async def call_action(self, action, **kwargs):
+                return {
+                    "group_id": int(GROUP_ID),
+                    "sender": {"user_id": BOT_ID},
+                    "message": [{
+                        "type": "text",
+                        "data": {"text": "这广场项目也太全套了"},
+                    }],
+                }
+        event.bot = Bot()
+
+    async def forbidden_text(*args, **kwargs):
+        raise AssertionError("short acknowledgement must not reach LLM")
+
+    monkeypatch.setattr(h, "handle_text", forbidden_text)
+    assert await h.run_message_flow(plugin, event) is None
+    assert bool(h._reply_context(event)) is available
 
 
 def test_topic_capsule_never_wakes_an_unaddressed_message(tmp_path):
