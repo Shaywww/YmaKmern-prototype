@@ -632,7 +632,7 @@ class RuntimeOrchestrator:
             candidates.append(MemoryCandidate(
                 proposed_record=MemoryRecord(
                     scope=scope_bot,
-                    content=f"[嘟嘟哒]: {state.final_response.text[:500]}",
+                    content=f"[YmaKmern]: {state.final_response.text[:500]}",
                     source="bot",
                     sensitivity=SensitivityLevel.INTERNAL,
                     evidence=(f"run:{state.run_id}",),

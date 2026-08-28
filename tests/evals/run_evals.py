@@ -28,7 +28,7 @@ def main() -> int:
                              "tool_runtime", "capability_retrieval",
                              "memory_writegate", "oc_render")}
     print("=" * 64)
-    print("Dududa 2.0 Eval（文档 2.5.10 / Phase 9 前半）")
+    print("YmaKmern Eval（文档 2.5.10 / Phase 9 前半）")
     print("fixture versions:", versions)
     print("=" * 64)
     all_ok = True

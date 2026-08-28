@@ -1,4 +1,4 @@
-"""嘟嘟哒 2.0 控制台 - Web Dashboard & API Server."""
+"""YmaKmern 控制台 - Web Dashboard & API Server."""
 from __future__ import annotations
 import json
 import os
@@ -136,7 +136,7 @@ async def lifespan(app: FastAPI):
     _trace_sink.write(TraceEvent(level="phase",phase="control_plane_shutdown"))
 
 def create_app() -> FastAPI:
-    app = FastAPI(title='嘟嘟哒 2.0 控制台',version='0.1.0',lifespan=lifespan)
+    app = FastAPI(title='YmaKmern 控制台',version='0.7.0',lifespan=lifespan)
     app.state.registry = _registry
     app.state.services = _services
     app.state.tracer = _tracer
@@ -253,7 +253,7 @@ def _playground_llm_cb():
             temperature=float(kw.get("temperature", 0.7)),
         )
         return await provider.complete(model, [
-            {"role": "system", "content": "你是嘟嘟哒（Dududa），请直接回答问题。"},
+            {"role": "system", "content": "你是 YmaKmern，请直接回答问题。"},
             {"role": "user", "content": prompt},
         ], config)
 
@@ -282,7 +282,7 @@ class _PlaygroundSandbox:
             if cap.risk == CapabilityRisk.DANGEROUS:
                 cap_registry.unregister(cap.capability_id)
         self.cap_registry = cap_registry
-        persona = OCPersona(persona_id="playground", version="1.0", name="嘟嘟哒")
+        persona = OCPersona(persona_id="playground", version="1.0", name="YmaKmern")
         self.orchestrator = RuntimeOrchestrator(
             memory_repo=self.memory,
             capability_registry=cap_registry,
@@ -782,7 +782,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dududa 2.0 - Control Plane</title>
+<title>YmaKmern - Control Plane</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
@@ -819,7 +819,7 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 </head>
 <body>
 <header>
-<h1>嘟嘟哒 2.0 控制台</h1>
+<h1>YmaKmern 控制台</h1>
 <div id="indicator" style="display:flex;align-items:center;gap:.6rem"><span class="status-dot ok"></span> 系统正常<button class="btn btn-s" onclick="showLogin()">Token</button></div>
 </header>
 <div class="grid">
@@ -862,7 +862,7 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 </div>
 </div>
 <div id="lg" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.94);z-index:50;align-items:center;justify-content:center"><div class="card" style="width:340px"><h2>控制台认证</h2><input id="lgt" placeholder="DUDUDA_CP_TOKEN" style="margin-bottom:.6rem"><div class="fr"><button class="btn btn-p" onclick="login()">进入</button></div></div></div>
-<footer>Dududa 2.0 Agent 运行状态 - v0.1.0</footer>
+<footer>YmaKmern Agent 运行状态 - v0.7.0</footer>
 <script>
 const A="";let TK=localStorage.getItem("cp_token")||"";function showLogin(){document.getElementById("lg").style.display="flex"}function hideLogin(){document.getElementById("lg").style.display="none"}async function login(){const t=document.getElementById("lgt").value.trim();if(!t)return alert("请输入 Token");TK=t;localStorage.setItem("cp_token",t);hideLogin();rf()}async function api(u,o){o=o||{};o.headers=Object.assign({},o.headers||{});if(TK)o.headers["Authorization"]="Bearer "+TK;const r=await fetch(A+u,o);if(r.status===401){showLogin();throw new Error("需要 Token")}if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()}
 async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th;const tw=await api("/metrics/tools");let toh='<div class="row"><span>窗口调用</span><strong>'+tw.window_calls+'</strong></div><div class="row"><span>失败率</span><strong>'+(tw.window_fail_rate*100).toFixed(1)+'%</strong></div>';if(!tw.by_tool.length)toh="<em>暂无工具调用</em>";for(const t of tw.by_tool.slice(0,6)){toh+='<div class="row"><span>'+escapeHtml(t.capability_id)+'</span><span>'+t.calls+' 次 · 失败 '+(t.fail_rate*100).toFixed(1)+'%</span></div>'}document.getElementById("tool").innerHTML=toh;const cw=await api("/metrics/costs");let coh='<div class="row"><span>窗口调用</span><strong>'+cw.window_events+'</strong></div><div class="row"><span>估算成本</span><strong>¥'+cw.est_cost_yuan.toFixed(4)+'</strong></div>';if(!cw.weekly.length)coh+="<em>暂无模型调用</em>";for(const w of cw.weekly.slice(0,6)){coh+='<div class="row"><span>'+escapeHtml(w.week)+'</span><span>'+w.calls+' 次 · ¥'+w.est_cost_yuan.toFixed(4)+'</span></div>'}document.getElementById("cost").innerHTML=coh;const ev=await api("/evolution/status");document.getElementById("evo").innerHTML='<div class="row"><span>模式</span><strong>'+ev.mode+'</strong></div><div class="row"><span>脱敏经验</span><strong>'+ev.experience_count+'</strong></div><div class="row"><span>待审候选</span><strong>'+ev.candidate_count+'</strong></div><div class="row"><span>自动生效 / 部署</span><strong>关闭 / 关闭</strong></div>'}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}

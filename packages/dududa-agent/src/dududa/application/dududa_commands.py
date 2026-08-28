@@ -18,11 +18,17 @@ from dududa.application.dududa_log import get_logger as _get_logger
 logger = _get_logger("dududa20")
 
 
+def _public_persona_id(persona_id: str) -> str:
+    """Expose the new brand while stable storage ids remain compatible."""
+    value = str(persona_id or "")
+    return "ymakmern_" + value[len("dududa_"):] if value.startswith("dududa_") else value
+
+
 def _deny_hint(res, conf) -> str:
     if (res.decision == AuthorizationDecision.REQUIRE_CONFIRMATION
             and conf is not None):
         return (f"该操作需要管理员确认，确认码: {conf.confirmation_id}"
-                "（管理员回复 dududa_confirm 确认码 后，发起者重试即可）")
+                "（管理员回复 ymakmern_confirm 确认码 后，发起者重试即可）")
     return "权限不足（需要管理员）"
 
 
@@ -31,7 +37,8 @@ async def cmd_status_impl(plugin) -> str:
         n = plugin.memory.count()
     except Exception:
         n = "?"
-    return f"嘟嘟哒 2.0 | 人格: {plugin.personas.active_id} | 记忆: {n}"
+    persona = getattr(plugin.personas.active, "display_name", "YmaKmern")
+    return f"YmaKmern | 人格: {persona} | 记忆: {n}"
 
 
 async def cmd_mcp_impl(plugin) -> str:
@@ -78,7 +85,10 @@ async def cmd_health_impl(plugin) -> str:
 
 async def cmd_persona_impl(plugin, event, target) -> str:
     if not target:
-        return f"可用: {', '.join(plugin.personas.list_all())}"
+        return f"可用: {', '.join(_public_persona_id(pid) for pid in plugin.personas.list_all())}"
+    requested = str(target).strip()
+    target = ("dududa_" + requested[len("ymakmern_"):]
+              if requested.startswith("ymakmern_") else requested)
     res, conf = plugin._authorize_manage(
         event, resource="persona", payload={"target": target})
     if not res.allowed:
@@ -88,14 +98,14 @@ async def cmd_persona_impl(plugin, event, target) -> str:
         plugin.oc_renderer = OCRenderer(persona=plugin._persona_to_oc(plugin.personas.active))
         if getattr(plugin, "runtime", None) is not None:
             plugin.runtime._renderer = plugin.oc_renderer
-        return f"切换: {target}"
-    return f"不存在: {target}"
+        return f"切换: {_public_persona_id(target)}"
+    return f"不存在: {requested}"
 
 
 async def cmd_confirm_impl(plugin, event, confirmation_id) -> str:
     """管理员批准高风险操作确认（绑定发起者/会话/操作内容，单次使用）。"""
     if not confirmation_id:
-        return "用法: dududa_confirm <确认码>"
+        return "用法: ymakmern_confirm <确认码>"
     conf = plugin.confirmations.get(confirmation_id)
     if conf is None or conf.is_expired or conf.is_consumed:
         return "确认码不存在或已失效"
@@ -182,7 +192,7 @@ async def cmd_memory_impl(plugin, event, action="status", record_id=None) -> str
     records = _memory_records(plugin, event)
     if action == "status":
         return (f"记忆模式: {mode} | 当前会话中你的记忆: {len(records)} 条\n"
-                "用法: /dududa_memory list|active|paused|temporary|delete <ID>|clear")
+                "用法: /ymakmern_memory list|active|paused|temporary|delete <ID>|clear")
     if action == "list":
         if not records:
             return f"记忆模式: {mode}\n当前会话还没有与你相关的可见记忆。"
@@ -190,12 +200,12 @@ async def cmd_memory_impl(plugin, event, action="status", record_id=None) -> str
         for record in records[:10]:
             content = " ".join((record.content or "").split())[:100]
             lines.append(f"- {record.record_id[:8]}  {content}")
-        lines.append("删除单条: /dududa_memory delete <前8位ID>")
+        lines.append("删除单条: /ymakmern_memory delete <前8位ID>")
         return "\n".join(lines)
     if action == "delete":
         needle = (record_id or "").strip().lower()
         if len(needle) < 6:
-            return "请提供列表中的记忆 ID，例如 /dududa_memory delete a1b2c3d4"
+            return "请提供列表中的记忆 ID，例如 /ymakmern_memory delete a1b2c3d4"
         matches = [r for r in records if r.record_id.lower().startswith(needle)]
         if len(matches) != 1:
             return "未找到唯一匹配的记忆，请重新查看列表后再试。"
@@ -208,7 +218,7 @@ async def cmd_memory_impl(plugin, event, action="status", record_id=None) -> str
         else:
             count = sum(1 for rid in ids if plugin.memory.delete(rid))
         return f"已清除当前会话中与你相关的 {count} 条记忆。"
-    return "未知操作。用法: /dududa_memory list|active|paused|temporary|delete <ID>|clear"
+    return "未知操作。用法: /ymakmern_memory list|active|paused|temporary|delete <ID>|clear"
 
 
 async def cmd_cancel_impl(plugin, event) -> str:
@@ -239,12 +249,12 @@ async def cmd_subscribe_impl(plugin, event, action="list", topic="更新") -> st
             value = store.set_quiet_hours(event, topic)
             return f"免打扰时间已设置为 {value}。"
         except ValueError:
-            return "格式错误。示例: /dududa_subscribe quiet 22:30-08:00"
+            return "格式错误。示例: /ymakmern_subscribe quiet 22:30-08:00"
     value = store.get(store.key_for_event(event))
     topics = value.get("subscriptions", [])
     return (f"当前订阅: {', '.join(topics) if topics else '无'}\n"
             f"免打扰: {value.get('quiet_hours')} | 每日最多 {value.get('daily_limit')} 条\n"
-            "用法: /dududa_subscribe add 更新 | remove 更新 | quiet 22:30-08:00")
+            "用法: /ymakmern_subscribe add 更新 | remove 更新 | quiet 22:30-08:00")
 
 
 async def cmd_help_impl(plugin) -> str:
@@ -262,7 +272,7 @@ async def cmd_help_impl(plugin) -> str:
                 healthy = False
         (available if healthy else unavailable).append(capability.name)
     lines = [
-        "我是嘟嘟哒，可以聊天、查资料、看图片和读取常见文件。",
+        "我是 YmaKmern，可以聊天、查资料、看图片和读取常见文件。",
         "你可以试试：",
         "- 帮我解释一下量子纠缠",
         "- 总结这张图片/这个文件",
@@ -275,13 +285,14 @@ async def cmd_help_impl(plugin) -> str:
         lines.append(f"暂不可用: {', '.join(unavailable[:8])}")
     lines.extend([
         "常用命令:",
-        "/dududa_memory — 查看和控制记忆",
-        "/dududa_subscribe — 自主管理订阅",
-        "/dududa_ambient — 群管理员控制自然参与和场景回应",
-        "/dududa_meme — 群管理员维护本群自定义梗库",
-        "/dududa_cancel — 取消正在处理的任务",
-        "/dududa_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
-        "/dududa_help — 查看这份动态帮助",
+        "/ymakmern_memory — 查看和控制记忆",
+        "/ymakmern_subscribe — 自主管理订阅",
+        "/ymakmern_ambient — 群管理员控制自然参与和场景回应",
+        "/ymakmern_meme — 群管理员维护本群自定义梗库",
+        "/ymakmern_cancel — 取消正在处理的任务",
+        "/ymakmern_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
+        "/ymakmern_help — 查看这份动态帮助",
+        "原 /dududa_* 命令保留兼容。",
         "请不要发送密码、Token、Cookie 等敏感信息。",
         "主动订阅后会保存必要的会话路由；退订后不再发送。",
     ])
@@ -292,7 +303,7 @@ async def cmd_feedback_impl(plugin, summary: str = "") -> str:
     """用户主动提交改进线索；不保存身份、会话或原始附件。"""
     summary = (summary or "").strip()
     if not summary:
-        return ("用法: /dududa_feedback <问题说明>\n"
+        return ("用法: /ymakmern_feedback <问题说明>\n"
                 "反馈会先脱敏，只进入人工审核队列，不会自动修改或部署机器人。")
     evolution = getattr(plugin, "evolution", None)
     if evolution is None:
@@ -321,7 +332,7 @@ async def cmd_broadcast_prepare_impl(plugin, event, topic=None, message=None) ->
     topic = (topic or "").strip()[:24]
     message = (message or "").strip()
     if not topic or not message:
-        return "用法: /dududa_broadcast <主题> <消息正文>"
+        return "用法: /ymakmern_broadcast <主题> <消息正文>"
     res, conf = plugin._authorize_manage(
         event, resource="subscriber_broadcast", payload={"topic": topic})
     if not res.allowed:
@@ -337,7 +348,7 @@ async def cmd_broadcast_prepare_impl(plugin, event, topic=None, message=None) ->
     }
     return (f"推送预览 [{topic}]：\n{message[:500]}\n\n"
             f"符合订阅、免打扰和频率限制的接收者: {len(recipients)}\n"
-            f"确认发送: /dududa_broadcast_confirm {broadcast_id}")
+            f"确认发送: /ymakmern_broadcast_confirm {broadcast_id}")
 
 
 async def cmd_broadcast_confirm_impl(plugin, event, broadcast_id=None) -> str:
@@ -364,7 +375,7 @@ async def cmd_broadcast_confirm_impl(plugin, event, broadcast_id=None) -> str:
         if not _ux(plugin).eligible(key, item["topic"]):
             continue
         try:
-            await sender(origin, f"【嘟嘟哒·{item['topic']}】\n{item['message']}\n\n退订: /dududa_subscribe remove {item['topic']}")
+            await sender(origin, f"【YmaKmern·{item['topic']}】\n{item['message']}\n\n退订: /ymakmern_subscribe remove {item['topic']}")
             _ux(plugin).record_delivery(key)
             sent += 1
         except Exception as exc:
@@ -391,7 +402,7 @@ async def cmd_group_impl(plugin, event, target=None) -> str:
         except Exception:
             gid = ""
     if not gid:
-        return "用法: dududa_group [群号]"
+        return "用法: ymakmern_group [群号]"
     policy = _group_store(plugin).get(gid)
     if policy is None:
         return f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1 / ambient=off）"
@@ -411,7 +422,7 @@ async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
     action = (action or "status").strip().lower()
     action = {"开启": "on", "关闭": "off", "状态": "status"}.get(action, action)
     if action not in ("on", "off", "status"):
-        return "用法: /dududa_ambient on|off|status"
+        return "用法: /ymakmern_ambient on|off|status"
 
     policy = _group_store(plugin).get(gid)
     enabled = bool(getattr(policy, "ambient_enabled", False))
@@ -440,7 +451,7 @@ async def cmd_group_ambient_impl(plugin, event, action="status") -> str:
         "摸鱼和电影等少量人设话题中随机触发。\n"
         "群聊上下文只在内存保留最近 7 条，5 分钟无消息自动清空；"
         "之后仅保留无身份的话题摘要，2 小时后彻底过期；摘要不会主动触发回复。"
-        "自定义梗需管理员用 /dududa_meme 人工维护。\n"
+        "自定义梗需管理员用 /ymakmern_meme 人工维护。\n"
         "深夜搭话仅限 0–5 点且此前沉默至少 30 分钟；"
         "投票只口头凑热闹，不会代替用户投票。\n"
         f"当前窗口：{status.get('message_count', 0)} 条 / "
@@ -466,10 +477,10 @@ async def cmd_group_meme_impl(plugin, event) -> str:
     if action not in ("list", "candidates", "add", "remove"):
         return (
             "用法：\n"
-            "/dududa_meme list\n"
-            "/dududa_meme candidates\n"
-            "/dududa_meme add 梗词 | 含义 | 别名1,别名2\n"
-            "/dududa_meme remove 梗词"
+            "/ymakmern_meme list\n"
+            "/ymakmern_meme candidates\n"
+            "/ymakmern_meme add 梗词 | 含义 | 别名1,别名2\n"
+            "/ymakmern_meme remove 梗词"
         )
     res, conf = plugin._authorize_manage(
         event, resource="group_policy",
@@ -495,14 +506,14 @@ async def cmd_group_meme_impl(plugin, event) -> str:
     if action == "remove":
         key = rest.strip()
         if not key:
-            return "用法：/dududa_meme remove 梗词"
+            return "用法：/ymakmern_meme remove 梗词"
         return (f"已删除本群梗：{key}"
                 if library.remove_custom(gid, key)
                 else f"本群梗库中没有：{key}")
 
     parts = [part.strip() for part in rest.split("|")]
     if len(parts) < 2 or not parts[0] or not parts[1]:
-        return "用法：/dududa_meme add 梗词 | 含义 | 别名1,别名2"
+        return "用法：/ymakmern_meme add 梗词 | 含义 | 别名1,别名2"
     aliases = tuple(
         item.strip() for item in (parts[2].split(",") if len(parts) > 2 else ())
         if item.strip())
@@ -516,7 +527,7 @@ async def cmd_group_mode_impl(plugin, event, group_id=None, mode=None) -> str:
     gid = (group_id or "").strip()
     mode = (mode or "").strip().lower()
     if not gid or not mode:
-        return "用法: dududa_mode <群号> <normal|silent|off>"
+        return "用法: ymakmern_mode <群号> <normal|silent|off>"
     if mode not in GROUP_MODES:
         return "mode 无效（应为 normal/silent/off）"
     res, conf = plugin._authorize_manage(
@@ -539,7 +550,7 @@ async def cmd_group_reply_rate_impl(plugin, event, group_id=None, rate=None) -> 
     """设置被动参与概率 0~1（未 @ 时按此概率回应群消息）。"""
     gid = (group_id or "").strip()
     if not gid or rate is None:
-        return "用法: dududa_reply_rate <群号> <0~1>"
+        return "用法: ymakmern_reply_rate <群号> <0~1>"
     try:
         parsed = _parse_rate(rate)
     except (TypeError, ValueError):
@@ -557,7 +568,7 @@ async def cmd_group_meme_rate_impl(plugin, event, group_id=None, rate=None) -> s
     """设置表情回复比例 0~1（问候/轻松消息走 REACT 的概率，未命中回文本）。"""
     gid = (group_id or "").strip()
     if not gid or rate is None:
-        return "用法: dududa_meme_rate <群号> <0~1>"
+        return "用法: ymakmern_meme_rate <群号> <0~1>"
     try:
         parsed = _parse_rate(rate)
     except (TypeError, ValueError):
@@ -576,7 +587,7 @@ async def cmd_group_interrupt_cost_impl(plugin, event, group_id=None, cost=None)
     """设置打断成本 0~1（被动参与概率乘 (1-cost)）。"""
     gid = (group_id or "").strip()
     if not gid or cost is None:
-        return "用法: dududa_interrupt_cost <群号> <0~1>"
+        return "用法: ymakmern_interrupt_cost <群号> <0~1>"
     try:
         parsed = _parse_rate(cost)
     except (TypeError, ValueError):

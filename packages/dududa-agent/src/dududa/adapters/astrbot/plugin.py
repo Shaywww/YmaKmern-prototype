@@ -1,4 +1,7 @@
-"""AstrBot plugin entry - Dududa 2.0 Agent Runtime for QQ."""
+"""AstrBot plugin entry - YmaKmern Agent Runtime for QQ.
+
+The ``DududaPlugin`` Python symbol remains as a compatibility API.
+"""
 from __future__ import annotations
 import logging
 from typing import Optional
@@ -69,25 +72,29 @@ class DududaPlugin:
         text = event.message_str.strip()
         parts = text.split(maxsplit=1)
         cmd = parts[0].lstrip('/').lower() if parts else ''
-        if cmd == 'dududa_status':
+        if cmd in ('ymakmern_status', 'dududa_status'):
             return CommandResult.from_text(
-                'Dududa 2.0 running' + chr(10) +
-                'Persona: ' + self.persona_registry.active_id + chr(10) +
+                'YmaKmern running' + chr(10) +
+                'Persona: ' + self.persona_registry.active.display_name + chr(10) +
                 'MCP services: ' + str(sum(1 for _ in self.capability_registry.list_enabled()))
             )
-        elif cmd == 'dududa_persona':
+        elif cmd in ('ymakmern_persona', 'dududa_persona'):
             if len(parts) > 1:
-                target = parts[1].strip()
+                requested = parts[1].strip()
+                target = ('dududa_' + requested[len('ymakmern_'):]
+                          if requested.startswith('ymakmern_') else requested)
                 if self.persona_registry.switch(target):
-                    return CommandResult.from_text('Switched to: ' + target)
-                return CommandResult.from_text('Unknown persona: ' + target)
-            return CommandResult.from_text('Personas: ' + ', '.join(self.persona_registry.list_all()))
-        elif cmd == 'dududa_enable':
+                    return CommandResult.from_text('Switched to: ' + requested)
+                return CommandResult.from_text('Unknown persona: ' + requested)
+            public_ids = [pid.replace('dududa_', 'ymakmern_', 1)
+                          for pid in self.persona_registry.list_all()]
+            return CommandResult.from_text('Personas: ' + ', '.join(public_ids))
+        elif cmd in ('ymakmern_enable', 'dududa_enable'):
             self._enabled = True
-            return CommandResult.from_text('Dududa enabled')
-        elif cmd == 'dududa_disable':
+            return CommandResult.from_text('YmaKmern enabled')
+        elif cmd in ('ymakmern_disable', 'dududa_disable'):
             self._enabled = False
-            return CommandResult.from_text('Dududa disabled')
+            return CommandResult.from_text('YmaKmern disabled')
         return CommandResult.from_text('Unknown command: ' + cmd)
 
     def _to_astrbot_result(self, result, event: AstrMessageEvent) -> MessageEventResult:

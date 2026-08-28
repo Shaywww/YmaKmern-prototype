@@ -37,12 +37,12 @@ class TestCommandHandling:
     def test_status_command(self):
         p = DududaPlugin()
         ev = AstrMessageEvent(
-            message_str="/dududa_status",
+            message_str="/ymakmern_status",
             message_id="m1",
             sender=AstrSender(user_id="u1", nickname="u1"),
         )
         result = asyncio.run(p._handle_admin(ev))
-        assert "Dududa 2.0" in result.message_chain[0].text
+        assert "YmaKmern" in result.message_chain[0].text
 
     def test_persona_switch_command(self):
         p = DududaPlugin()

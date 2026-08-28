@@ -118,17 +118,22 @@ class TestPlugin:
 
     def test_admin_status(self):
         p = create_plugin()
+        r = asyncio.run(p.on_admin_command(_evt(text='/ymakmern_status', priv=True)))
+        assert isinstance(r, CommandResult) and 'YmaKmern' in r.message_chain[0].text
+
+    def test_legacy_admin_status_alias(self):
+        p = create_plugin()
         r = asyncio.run(p.on_admin_command(_evt(text='/dududa_status', priv=True)))
-        assert isinstance(r, CommandResult) and 'Dududa' in r.message_chain[0].text
+        assert isinstance(r, CommandResult) and 'YmaKmern' in r.message_chain[0].text
 
     def test_admin_persona_list(self):
         p = create_plugin()
-        r = asyncio.run(p.on_admin_command(_evt(text='/dududa_persona', priv=True)))
-        assert 'dududa_default' in r.message_chain[0].text
+        r = asyncio.run(p.on_admin_command(_evt(text='/ymakmern_persona', priv=True)))
+        assert 'ymakmern_default' in r.message_chain[0].text
 
     def test_admin_switch(self):
         p = create_plugin()
-        r = asyncio.run(p.on_admin_command(_evt(text='/dududa_persona dududa_serious', priv=True)))
+        r = asyncio.run(p.on_admin_command(_evt(text='/ymakmern_persona ymakmern_serious', priv=True)))
         assert 'Switched' in r.message_chain[0].text
         p.persona_registry.switch('dududa_default')
 

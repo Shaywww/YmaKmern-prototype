@@ -156,7 +156,7 @@ class OCRenderer:
         2.0 目标中，这里会调用模型基于 Persona 进行风格转换。
         """
         persona = self._persona or Persona(
-            persona_id="default", version="1.0", name="嘟嘟哒"
+            persona_id="default", version="1.0", name="YmaKmern"
         )
 
         # 确定性的基础渲染：保留草稿全文
@@ -237,7 +237,7 @@ class OCRenderer:
         仍失败回退确定性渲染（原文，事实安全）。llm 未配置时等同 render。"""
         start = time.time()
         persona = self._persona or Persona(
-            persona_id="default", version="1.0", name="嘟嘟哒"
+            persona_id="default", version="1.0", name="YmaKmern"
         )
         if self._llm is None:
             return self.render(draft)

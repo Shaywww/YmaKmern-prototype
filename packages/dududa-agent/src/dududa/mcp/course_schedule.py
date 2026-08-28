@@ -155,7 +155,7 @@ class CourseScheduleService(BaseMCPService):
             raise RuntimeError("课程快照地址必须使用 HTTPS")
         headers = {
             "Accept": "application/json",
-            "User-Agent": "Dududa20/0.6 USTC-public-catalog-reader",
+            "User-Agent": "YmaKmern/0.7 USTC-public-catalog-reader",
         }
         timeout = httpx.Timeout(self.config.timeout_seconds)
         ssl_context = ssl.create_default_context(cafile=certifi.where())

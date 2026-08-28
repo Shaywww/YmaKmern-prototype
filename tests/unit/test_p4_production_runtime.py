@@ -329,7 +329,7 @@ class TestProdOrchestrator:
         assert comp.memory_write_receipts, "投递成功后应写入 bot 记忆"
         scope = plugin._make_scope(event)
         records = memory.query(scope, limit=10)
-        assert any("[嘟嘟哒]" in r.content for r in records)
+        assert any("[YmaKmern]" in r.content for r in records)
         assert all(r.scope.bot_id == "bot1" for r in records)
 
     @pytest.mark.asyncio
@@ -348,7 +348,7 @@ class TestProdOrchestrator:
         comp = await orch.acknowledge_delivery(receipt)
         scope = plugin._make_scope(event)
         records = memory.query(scope, limit=10)
-        assert not any("[嘟嘟哒]" in r.content for r in records)
+        assert not any("[YmaKmern]" in r.content for r in records)
 
     @pytest.mark.asyncio
     async def test_tool_memory_episodic_and_bot_scoped(self):

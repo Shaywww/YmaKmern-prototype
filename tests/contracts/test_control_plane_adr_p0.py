@@ -63,4 +63,4 @@ class TestExistingControlPlaneStillPresent:
         import sys
         sys.path.insert(0, str(PROTO))
         from dududa.control_plane.app import DASHBOARD_HTML
-        assert "Dududa 2.0" in DASHBOARD_HTML
+        assert "YmaKmern" in DASHBOARD_HTML

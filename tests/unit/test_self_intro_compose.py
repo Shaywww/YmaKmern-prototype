@@ -117,6 +117,10 @@ class TestComposeSystemKnowledge:
 
     def test_style_redline(self):
         sysp = _ProdOrchestrator._build_compose_system(_STUB_PERSONA, "")
+        assert "YmaKmern" in sysp
+        assert "傲娇" in sysp and "嘴欠" in sysp
+        assert "求助、道歉、严肃冲突时收起嘴欠" in sysp
+        assert "不攻击外貌、能力、出身或真实痛点" in sysp
         assert "通用客服式开场白" in sysp
         assert "有什么我可以帮你的吗" in sysp
 
@@ -151,11 +155,11 @@ class TestComposeProdBehavior:
         async def fake_llm(system, user_msg, **kw):
             cap.system = system
             cap.user = user_msg
-            return "我是嘟嘟哒呀~"
+            return "我是 YmaKmern 呀～"
         plugin._call_llm = fake_llm
         reply = await plugin.runtime._compose_prod_text(
             _state("@bot 你是怎么搭出来的"))
-        assert reply == "我是嘟嘟哒呀~"
+        assert reply == "我是 YmaKmern 呀～"
         assert "分层 Agent 架构" in cap.system
         assert "NapCat + AstrBot" in cap.system
         assert "你是怎么搭出来的" in cap.user

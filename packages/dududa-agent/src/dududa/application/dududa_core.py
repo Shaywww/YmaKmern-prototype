@@ -43,10 +43,15 @@ logger = _get_logger("dududa20")
 def persona_to_oc(template):
     """PersonaTemplate -> OC Persona（纯转换，供装配层与用例层使用）。"""
     t = getattr(template, "traits", None)
-    try:
-        traits = tuple(t) if t else ()
-    except TypeError:
-        traits = ()
+    trait_names = {
+        "warmth": "温暖", "assertiveness": "有主见", "humor": "幽默",
+        "curiosity": "好奇", "politeness": "有分寸", "sassiness": "略嘴欠",
+        "seriousness": "严谨",
+    }
+    traits = tuple(
+        label for field, label in trait_names.items()
+        if float(getattr(t, field, 0.0) or 0.0) >= 0.6
+    ) if t else ()
     ft = getattr(template, "forbidden_topics", None)
     try:
         forbidden = tuple(ft) if ft else ()
@@ -55,7 +60,7 @@ def persona_to_oc(template):
     return OCPersona(
         persona_id=getattr(template, "persona_id", "default"),
         version=getattr(template, "version", "1.0"),
-        name=getattr(template, "display_name", "嘟嘟哒") or "嘟嘟哒",
+        name=getattr(template, "display_name", "YmaKmern") or "YmaKmern",
         traits=traits,
         speaking_style=getattr(template, "speaking_style", "") or "",
         forbidden_topics=forbidden,

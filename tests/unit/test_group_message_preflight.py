@@ -460,16 +460,17 @@ async def test_at_other_bot_is_dropped_even_when_framework_sets_wake(
 def test_nickname_wakes_only_in_ambient_enabled_group(tmp_path):
     plugin = FlowPlugin(tmp_path)
     event = GroupEvent(
-        "嘟嘟哒你觉得呢？", message_id="nickname-off", at=False)
+        "YmaKmern你觉得呢？", message_id="nickname-off", at=False)
     assert h._preflight_group_message(
         plugin, event, event.get_messages()) is False
 
     plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
     event = GroupEvent(
-        "嘟嘟哒你觉得呢？", message_id="nickname-on", at=False)
+        "YmaKmern你觉得呢？", message_id="nickname-on", at=False)
     assert h._preflight_group_message(
         plugin, event, event.get_messages()) is True
     assert event.is_at_or_wake_command is True
+    assert h._nickname_wake("嘟嘟哒你在吗") is True
 
 
 @pytest.mark.asyncio

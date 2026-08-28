@@ -40,12 +40,14 @@ class TestPersonaTemplate:
     def test_default_persona(self):
         p = PRESETS["dududa_default"]
         assert p.persona_id == "dududa_default"
-        assert p.name == "Dududa"
+        assert p.name == "YmaKmern"
+        assert 0.3 <= p.traits.sassiness <= 0.6
 
     def test_persona_render_prompt(self):
         p = PRESETS["dududa_default"]
         prompt = p.render_system_prompt()
-        assert "Dududa" in prompt
+        assert "YmaKmern" in prompt
+        assert "傲娇" in prompt and "嘴欠" in prompt
         assert "CRITICAL" in prompt or "MUST NOT" in prompt
         assert "emoji" in prompt.lower()
 
@@ -57,7 +59,7 @@ class TestPersonaTemplate:
     def test_tsundere_traits(self):
         p = PRESETS["dududa_tsundere"]
         assert p.traits.sassiness > 0.5
-        assert "Hmph" in " ".join(p.favorite_phrases)
+        assert "哼" in " ".join(p.favorite_phrases)
 
     def test_mentor_traits(self):
         p = PRESETS["dududa_mentor"]
@@ -137,7 +139,7 @@ class TestPersonaRegistry:
     def test_get_system_prompt(self):
         reg = PersonaRegistry()
         prompt = reg.get_system_prompt()
-        assert "Dududa" in prompt
+        assert "YmaKmern" in prompt
 
 
 class TestEmojiStrategy:
@@ -197,7 +199,7 @@ class TestExpressionLibrary:
         lib = ExpressionLibrary(PRESETS["dududa_default"])
         g = lib.greeting()
         assert len(g) > 0
-        assert "?" in g or "~" in g or "!" in g
+        assert any(mark in g for mark in ("?", "~", "!", "？", "～", "！"))
 
     def test_refusal_with_reason(self):
         lib = ExpressionLibrary(PRESETS["dududa_tsundere"])

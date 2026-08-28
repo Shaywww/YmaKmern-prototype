@@ -184,6 +184,6 @@ class TestDashboard:
         r = client.get("/")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
-        assert "Dududa 2.0" in r.text
+        assert "YmaKmern" in r.text
 
 print("Test file ready")

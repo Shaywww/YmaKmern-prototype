@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dududa-agent"
-version = "0.1.0"
-description = "dududa 2.0 Agent Runtime prototype"
+name = "ymakmern-agent"
+version = "0.7.0"
+description = "YmaKmern Agent Runtime for QQ"
 requires-python = ">=3.10"
 dependencies = [
     "certifi>=2024.0.0",

@@ -28,7 +28,7 @@ _VOID_TAGS = frozenset({
     "link", "meta", "param", "source", "track", "wbr",
 })
 _USER_AGENT = (
-    "DududaBot/0.3 (+https://github.com/Shaywww/dududa20-prototype; "
+    "YmaKmernBot/0.7 (+https://github.com/Shaywww/YmaKmern-prototype; "
     "read-only course review lookup)"
 )
 
