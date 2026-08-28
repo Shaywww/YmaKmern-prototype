@@ -18,7 +18,8 @@ async def test_feedback_command_is_explicit_and_shadow_only(tmp_path):
     assert plugin.evolution.status()["experience_count"] == 1
 
     help_text = await cmd_help_impl(plugin)
-    assert "/dududa_feedback" in help_text
+    assert "/ymakmern_feedback" in help_text
+    assert "/dududa_*" in help_text
 
 
 @pytest.mark.asyncio

@@ -57,8 +57,9 @@ async def test_dynamic_help_uses_registry_health(tmp_path):
     p, _ = plugin(tmp_path)
     text = await dududa_commands.cmd_help_impl(p)
     assert "智能对话" in text
-    assert "/dududa_memory" in text
-    assert "/dududa_cancel" in text
+    assert "/ymakmern_memory" in text
+    assert "/ymakmern_cancel" in text
+    assert "/dududa_*" in text
 
 
 @pytest.mark.asyncio
