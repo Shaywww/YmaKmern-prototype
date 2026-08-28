@@ -2790,6 +2790,13 @@ def _recent_at_only(event) -> bool:
 def _is_at_only(event, msgs) -> bool:
     """@ 了机器人但没有任何文本/媒体（QQ 拆条：@ 和图片分开发）。"""
     import re as _re
+    # Ambient semantic review promotes an unmentioned image/sticker by setting
+    # the framework wake flag.  That flag is not evidence of a bare @.  In
+    # particular, AstrBot represents QQ built-in faces outside the Image class,
+    # so the component-name loop below used to miss them and return a random
+    # "在的在的" reply before the media path had a chance to inspect the event.
+    if _semantic_media_candidate(event) or _group_has_media(event, msgs):
+        return False
     text = str(getattr(event, "message_str", "") or "")
     cleaned = _re.sub(r"\[At:\d+\]", "", text).strip()
     for c in msgs:

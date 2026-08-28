@@ -795,6 +795,34 @@ def test_second_distinct_sticker_opens_multimodal_review_only(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ambient_qq_face_never_falls_back_to_bare_at_reply(tmp_path):
+    """A semantic-media wake is not a user addressing the bot with a bare @."""
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for index, (sender, text) in enumerate((
+        ("10071", "哈哈肥西路没有"),
+        ("10072", "皇后大道就有"),
+    )):
+        event = GroupEvent(
+            text, message_id=f"face-context-{index}", sender_id=sender)
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    face = GroupEvent(
+        "", message_id="qq-face-5", sender_id="10071", components=[],
+        raw_message={
+            "message": [{"type": "face", "data": {"id": "5"}}],
+        },
+    )
+
+    reply = await h.run_message_flow(plugin, face)
+
+    assert h._semantic_media_candidate(face) == "casual_context_image"
+    assert face.is_at_or_wake_command is True
+    assert reply is None
+
+
+@pytest.mark.asyncio
 async def test_semantic_media_review_rejects_uncertain_scene(tmp_path):
     plugin = FlowPlugin(tmp_path)
     event = GroupEvent("", message_id="media-review", sender_id="10081")
