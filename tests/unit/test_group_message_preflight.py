@@ -823,6 +823,120 @@ async def test_ambient_qq_face_never_falls_back_to_bare_at_reply(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_proactive_group_task_does_not_register_user_busy_state(
+    tmp_path, monkeypatch,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    for index, (sender, text) in enumerate((
+        ("10001", "晚上吃什么"),
+        ("10002", "飞机"),
+    )):
+        event = GroupEvent(
+            text, message_id=f"silent-bg-{index}", sender_id=sender)
+        assert h._preflight_group_message(
+            plugin, event, event.get_messages()) is False
+
+    async def silent_inner(*args):
+        return None
+
+    monkeypatch.setattr(h, "_run_flow_inner", silent_inner)
+    event = GroupEvent(
+        "不错", message_id="silent-bg-final", sender_id="10001")
+
+    assert await h.run_message_flow(plugin, event) is None
+    assert h._is_ambient_wake(event) is True
+    assert plugin.ux_tasks.register_calls == []
+    assert plugin.ux_tasks.finish_calls == []
+
+
+@pytest.mark.asyncio
+async def test_group_multimodal_flow_never_sends_progress(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.progress_delay = 0
+    event = GroupEvent(
+        "", message_id="no-media-progress", sender_id="10001", at=True,
+        components=[_Image("https://example.test/no-progress.jpg")])
+
+    await h._send_delayed_progress(plugin, event, "unused")
+
+    assert plugin.progress_messages == []
+
+
+@pytest.mark.asyncio
+async def test_group_photo_burst_is_batched_then_cooled_down(tmp_path):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_media_batch_window = 0.05
+    plugin.group_media_batch_max_items = 4
+    plugin.group_media_batch_cooldown = 180
+
+    def photo(message_id):
+        event = GroupEvent(
+            "", message_id=message_id, sender_id="10001",
+            components=[_Image(f"https://example.test/{message_id}.jpg")],
+            raw_message={"message": [{"type": "image", "data": {
+                "url": f"https://example.test/{message_id}.jpg",
+                "file": f"{message_id}.jpg",
+            }}]},
+        )
+        h._mark_semantic_media_candidate(event, "reply_chain_media")
+        h._mark_ambient_wake(event)
+        return event
+
+    leader = asyncio.create_task(
+        h._collect_group_photo_batch(plugin, photo("batch-1")))
+    await asyncio.sleep(0.01)
+    assert await h._collect_group_photo_batch(
+        plugin, photo("batch-2")) == ()
+    items = await leader
+
+    assert len(items) == 2
+    assert [item["message_id"] for item in items] == ["batch-1", "batch-2"]
+    assert await h._collect_group_photo_batch(
+        plugin, photo("batch-cooldown")) == ()
+
+
+@pytest.mark.asyncio
+async def test_group_photo_batch_uses_one_vision_request(tmp_path):
+    from io import BytesIO
+    from PIL import Image
+
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    for message_id in ("vision-batch-1", "vision-batch-2"):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id="10001",
+            content="[图片，尚未识别]", message_type="image",
+            message_id=message_id)
+    payload = BytesIO()
+    Image.new("RGB", (12, 12), "skyblue").save(payload, format="PNG")
+    calls = []
+
+    async def vision(system, user, image_b64, mime, **kwargs):
+        calls.append((system, user, image_b64, mime, kwargs))
+        return (
+            '{"kind":"photo","animated":false,'
+            '"description":"两张蓝天风景照片","visible_text":"",'
+            '"emotion":"轻松分享","confidence":0.96}'
+        )
+
+    plugin._call_vision = vision
+    event = GroupEvent(
+        "", message_id="vision-batch-1", sender_id="10001")
+    items = (
+        {"url": payload.getvalue(), "message_id": "vision-batch-1"},
+        {"url": payload.getvalue(), "message_id": "vision-batch-2"},
+    )
+
+    summary = await h.handle_group_photo_batch(plugin, event, items)
+
+    assert len(calls) == 1
+    assert "群聊连续图片（2张）" in summary
+    assert "两张蓝天风景照片" in summary
+    assert "两张蓝天风景照片" in plugin.group_context.snapshot(GROUP_ID)[-1].content
+
+
+@pytest.mark.asyncio
 async def test_semantic_media_review_rejects_uncertain_scene(tmp_path):
     plugin = FlowPlugin(tmp_path)
     event = GroupEvent("", message_id="media-review", sender_id="10081")
