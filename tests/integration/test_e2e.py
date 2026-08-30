@@ -1,5 +1,5 @@
 """End-to-end integration tests - full message-to-reply pipeline."""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import pytest
 from dududa.core.envelope import MessageEnvelope, Actor, Platform, MessageKind, ConversationRef
 from dududa.core.state import RunOutcome, RuntimeBudget

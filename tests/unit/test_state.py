@@ -1,5 +1,5 @@
-﻿"""测试 RuntimeState 状态机。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 RuntimeState 状态机。"""
+import sys
 import pytest
 from dududa.core.state import (
     RuntimeState, RuntimePhase, RunOutcome, SocialAction,

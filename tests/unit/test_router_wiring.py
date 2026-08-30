@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """Model Router 生产接线（文档 2.5.7）。
 
@@ -7,12 +8,11 @@
 - main.py 装配：8 类角色、主模型/降级/视觉角色、ROUTER_ENABLED 开关
 """
 import os, sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_wiring", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_wiring", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

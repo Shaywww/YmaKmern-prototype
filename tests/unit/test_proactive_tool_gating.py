@@ -1,13 +1,14 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P0 修复回归：工具意图门（needs_tools 对齐 _TOOL_KW）、LLM 规划失败规则兜底、
 tool_result 失败错误详情、搜索相关性重排。"""
 import pathlib, sys, types
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_ptg", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_ptg", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

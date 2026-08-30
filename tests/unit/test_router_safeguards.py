@@ -1,5 +1,5 @@
-﻿"""测试 Model Router 与 Safeguards。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 Model Router 与 Safeguards。"""
+import sys
 import pytest
 from dududa.router.router import (
     ModelRole, ModelConfig, RouterConfig, ModelRouter,
@@ -34,6 +34,15 @@ class TestModelRouter:
         router = ModelRouter()
         response = await router.route(ModelRole.DECISION, [{"role": "user", "content": "test"}])
         assert "ignore" in response
+
+    @pytest.mark.asyncio
+    async def test_direct_chat_stub_never_echoes_user(self):
+        router = ModelRouter()
+        user_text = "把这句话原样复读给我"
+        response = await router.route(
+            ModelRole.DIRECT_CHAT, [{"role": "user", "content": user_text}])
+        assert response != user_text
+        assert "有点卡" in response
 
 
 class TestIdentityValidator:

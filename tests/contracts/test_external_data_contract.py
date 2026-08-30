@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P0 外部内容「只作数据」契约（文档 2.5.9 收尾）。
 
@@ -7,12 +8,11 @@
 在到达 Provider 前不进入 system role。
 """
 import os, sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_ext", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_ext", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

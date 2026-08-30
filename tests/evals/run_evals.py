@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""独立运行五组件 Eval；任一阈值不过则退出码 1。
+"""独立运行组件 Eval；任一阈值不过则退出码 1。
 
-用法: cd /opt/dududa20-prototype && python3.12 -m tests.evals.run_evals
+用法: 在仓库根目录运行 ``python -m tests.evals.run_evals``。
 """
 import asyncio
 import os
 import sys
 from pathlib import Path
+
+from tests.path_config import configure_import_paths
 
 # Eval 自身的 Trace 事件写入独立目录，不污染生产 data/traces（文档 2.5.10）
 os.environ.setdefault(
@@ -15,8 +17,7 @@ os.environ.setdefault(
     str(Path(__file__).resolve().parents[2] / "data" / "traces-eval"),
 )
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+configure_import_paths()
 
 from tests.evals import evals
 
@@ -42,15 +43,17 @@ def main() -> int:
         ("oc_render", evals.run_oc_render),
     ):
         metric = runner()
-        ok, failures = evals.check(name, metric, thresholds)
-        all_ok = all_ok and ok
-        print(f"\n[{name}] {'PASS' if ok else 'FAIL'}")
+        result = evals.check(name, metric, thresholds)
+        all_ok = all_ok and result.ok
+        print(f"\n[{name}] {result.status.upper()}")
         for k, v in metric.items():
             if k in ("details", "version"):
                 continue
             print(f"  {k}: {v}")
-        for f in failures:
+        for f in result.failures:
             print(f"  !! {f}")
+        for item in result.skipped:
+            print(f"  -- SKIP {item}")
     print("\n" + ("ALL EVALS PASS" if all_ok else "EVALS FAILED"))
     return 0 if all_ok else 1
 

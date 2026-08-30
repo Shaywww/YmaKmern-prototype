@@ -1,5 +1,5 @@
-﻿"""测试 Capability Registry 与 ToolPlanValidator。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 Capability Registry 与 ToolPlanValidator。"""
+import sys
 import pytest
 from dududa.core.capability import (
     Capability, CapabilityRegistry, CapabilitySchema,

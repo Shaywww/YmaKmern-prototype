@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P0：持久确认 Durable Confirmation（文档 2.4.12 / 2.4.23 / 2.5.9）。
 
@@ -9,7 +10,6 @@ token 显式携带）、legacy confirmed_ids 兼容、orchestrator/生产接线�
 import sys
 from types import SimpleNamespace as _NS
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 
@@ -341,10 +341,10 @@ class TestOrchestratorConfirmation:
 class TestProdWiring:
     @staticmethod
     def _make_main():
-        sys.path.insert(0, "/root/data/plugins/dududa20")
+        sys.path.insert(0, str(PLUGIN_DIR))
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "dududa_main_conf", "/root/data/plugins/dududa20/main.py")
+            "dududa_main_conf", str(PLUGIN_MAIN))
         main = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(main)
         try:

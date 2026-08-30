@@ -54,13 +54,5 @@ class ExpressionLibrary:
         return random.choice(templates)
 
     def wrap_response(self, draft_text: str, mood: str = "neutral") -> str:
-        if self._persona is None:
-            return draft_text
-        text = draft_text
-        if self._persona.favorite_phrases and random.random() < 0.15:
-            phrase = random.choice(self._persona.favorite_phrases)
-            if random.random() < 0.5:
-                text = f"{phrase} {text}"
-            else:
-                text = f"{text} {phrase}"
-        return text
+        """Keep fallback output stable; personality belongs to model compose."""
+        return draft_text

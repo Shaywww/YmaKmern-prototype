@@ -1,4 +1,5 @@
-﻿# -*- coding: utf-8 -*-
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
+# -*- coding: utf-8 -*-
 """P0 安全补齐：Prompt Injection 负向测试 + 工具结果脱敏（文档 2.5.9）。
 
 - 用户注入文本永远留在 user role，不进 system prompt（角色隔离）
@@ -7,12 +8,11 @@
 - 工具（MCP）返回的凭证不进入记忆、草稿与事实锚点
 """
 import os, sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_inj", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_inj", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

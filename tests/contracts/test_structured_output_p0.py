@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P0 Structured Output：Validator / 规则-模型 Merger / 安全降级（文档 2.5.4）。
 
@@ -6,12 +7,11 @@
 - 模型缺失、非法或置信度不足 -> 只用规则（模型失败时减少主动回复）。
 """
 import sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_so", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_so", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 
@@ -350,12 +350,12 @@ class TestEngineModelDecision:
             reason_codes=(DecisionReason.SAFETY_BLOCK,), confidence=0.9)
         d = engine.decide(perception=PerceptionResult(),
                           model_decision=model_d)
-        assert d.action == SocialAction.REACT  # 回落到概率路径
+        assert d.action == SocialAction.IGNORE
 
     def test_no_model_unchanged(self):
         engine = SocialDecisionEngine(reply_probability=1.0)
         d = engine.decide(perception=PerceptionResult())
-        assert d.action == SocialAction.REACT
+        assert d.action == SocialAction.IGNORE
 
 
 # ---- 6. 生产接线：_perceive_with_model ----

@@ -362,15 +362,19 @@ class DududaCore:
         # 群聊隐私门（文档 2.5.9）：课表/成绩/健康/位置/私聊 类请求群聊默认不返回
         if _is_group_sensitive_ask(combined):
             return SocialAction.IGNORE, DecisionReason.SENSITIVE_GROUP_REQUEST.value
+        ambient_reason = ""
+        try:
+            ambient_reason = str(
+                event.get_extra("dududa_ambient_reason_code") or "")
+        except Exception:
+            ambient_reason = str(getattr(
+                event, "_dududa_ambient_reason_code", "") or "")
+        if ambient_reason:
+            return SocialAction.DIRECT_REPLY, ambient_reason
         mentioned = bool(getattr(event, "is_at_or_wake_command", True))
         if not mentioned:
-            # 被动参与：normal 模式按 reply_rate 概率；silent/未配置不主动插话
-            if (policy is not None and policy.mode == "normal"
-                    and policy.reply_rate > 0.0
-                    and random.random() < policy.reply_rate
-                    * (1.0 - min(1.0, max(0.0,
-                                          policy.interruption_cost)))):
-                return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
+            # 未点名群消息只能由 handlers 的 ambient 链提升；这里不再
+            # 维护另一套均匀随机入口。
             return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()
         # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）

@@ -1,7 +1,7 @@
-﻿# -*- coding: utf-8 -*-
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
+# -*- coding: utf-8 -*-
 """Trace 贯穿度扩展测试（文档 2.5.10）：Model / Tool / Memory / Delivery 事件。"""
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 
@@ -273,9 +273,9 @@ def _load_plugin(tmp_path, monkeypatch):
     import importlib.util
     import types as _types
     from unittest import mock as _mock
-    sys.path.insert(0, "/root/data/plugins/dududa20")
+    sys.path.insert(0, str(PLUGIN_DIR))
     spec = importlib.util.spec_from_file_location(
-        "dududa_main_rid", "/root/data/plugins/dududa20/main.py")
+        "dududa_main_rid", str(PLUGIN_MAIN))
     main = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(main)
     try:

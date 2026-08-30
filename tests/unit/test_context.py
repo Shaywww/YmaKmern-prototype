@@ -1,5 +1,5 @@
-﻿"""测试 Context Builder。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 Context Builder。"""
+import sys
 import pytest
 from dududa.core.context import (
     ContextBuilder, ContextSnapshot, ContextMemoryScope, PolicyView,

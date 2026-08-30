@@ -10,7 +10,6 @@
 - 无可视输出（IGNORE/降级无回复）不伪造回执，只评估不依赖投递的候选。
 """
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 import time
 
 import pytest

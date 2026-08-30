@@ -7,7 +7,6 @@
 - run_message_flow 全分支 Flow start / Flow end 同 id 落日志
 """
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import logging
 import re

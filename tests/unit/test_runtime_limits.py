@@ -1,8 +1,9 @@
-﻿# -*- coding: utf-8 -*-
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
+# -*- coding: utf-8 -*-
 """2.5.9 Runtime 限流与预算：RateLimiter / TokenBudget / RuntimeLimits / 生产接线。"""
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import pytest
 

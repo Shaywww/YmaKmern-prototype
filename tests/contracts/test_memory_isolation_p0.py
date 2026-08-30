@@ -4,7 +4,6 @@
 缺 metadata fail-closed、过期记录、语义相似不越权、具名 Selector 跨类型。
 """
 import sys, os, json, tempfile
-sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
 import pytest
 
 from dududa.core.memory import (

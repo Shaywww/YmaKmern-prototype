@@ -1,5 +1,5 @@
-﻿"""测试 Memory System。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 Memory System。"""
+import sys
 import pytest
 from dududa.core.memory import (
     MemoryType, SensitivityLevel, MemoryScope, MemoryRecord,

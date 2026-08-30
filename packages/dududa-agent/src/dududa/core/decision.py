@@ -12,17 +12,6 @@ from typing import Optional
 from .state import SocialAction
 
 
-def _policy_rate(policy: Any, field_name: str, default: float) -> float:
-    """安全读取策略数值（兼容无 policy 的旧 context 桩）。"""
-    try:
-        value = getattr(policy, field_name, None)
-        if value is None:
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 class DocumentAction(str, Enum):
     """文档 2.5.4 六动作（对齐契约命名，增量兼容 SocialAction）。"""
     IGNORE = "ignore"
@@ -54,6 +43,9 @@ class DecisionReason(str, Enum):
     SENSITIVE_GROUP_REQUEST = "sensitive_group_request"  # 群聊隐私门：Sensitive 数据群聊默认不返回
     SAFETY_BLOCK = "safety_block"             # 安全阻止
     NO_TOOL_RESULT = "no_tool_result"         # 工具无结果
+    AMBIENT_WAKE = "ambient_wake"             # 自然参与链放行
+    SEMANTIC_RECHECK = "semantic_recheck"     # 候选进入模型语义复核
+    DAILY_LIMIT = "daily_limit"               # 主动参与当日额度用尽
 
     # 暂缓
     NEEDS_CLARIFICATION = "needs_clarification"  # 需要澄清
@@ -228,20 +220,9 @@ class SocialDecisionEngine:
                     reason_codes=(DecisionReason.COOLDOWN_ACTIVE,),
                 )
 
-        # 9. 概率参与（群策略 reply_rate / meme_rate 生效，文档 2.5.2/2.5.4）
-        import random
-        reply_rate = _policy_rate(policy, "reply_rate", 1.0)
-        meme_rate = _policy_rate(policy, "meme_rate", 1.0)
-        interrupt_cost = min(1.0, max(0.0,
-                                      _policy_rate(policy, "interruption_cost", 0.0)))
-        rate = (self._reply_probability * max(0.0, reply_rate)
-                * (1.0 - interrupt_cost))
-        if rate <= 0.0:
-            return SocialDecision(
-                action=SocialAction.IGNORE,
-                reason_codes=(DecisionReason.LOW_RELEVANCE,),
-            )
-        # 9.0 模型决策（Structured Output，文档 2.5.4）：规则静默时优先于随机；
+        # 9. 模型决策（Structured Output，文档 2.5.4）：规则静默时
+        # 只接受已经校验的结构化结论。自然参与统一由 handlers 的
+        # ambient 链负责，基类不再用均匀随机制造被动插话。
         # 安全动作（BLOCK）不接受，必须由规则安全检查产生
         if model_decision is not None:
             md_action = getattr(model_decision, "action", None)
@@ -251,29 +232,6 @@ class SocialDecisionEngine:
                 SocialAction.ASK_CLARIFICATION, SocialAction.DEFER,
             ):
                 return model_decision
-        if random.random() >= rate:
-            return SocialDecision(
-                action=SocialAction.IGNORE,
-                reason_codes=(DecisionReason.LOW_RELEVANCE,),
-            )
-        if perception and perception.is_question():
-            return SocialDecision(
-                action=SocialAction.DIRECT_REPLY,
-                reason_codes=(DecisionReason.HIGH_RELEVANCE,),
-                confidence=0.5,
-            )
-        if meme_rate <= 0.0 or random.random() >= meme_rate:
-            return SocialDecision(
-                action=SocialAction.IGNORE,
-                reason_codes=(DecisionReason.LOW_RELEVANCE,),
-            )
-        return SocialDecision(
-            action=SocialAction.REACT,
-            reason_codes=(DecisionReason.HIGH_RELEVANCE,),
-            confidence=0.5,
-        )
-
-        # 10. 默认不参与
         return SocialDecision(
             action=SocialAction.IGNORE,
             reason_codes=(DecisionReason.LOW_RELEVANCE,),

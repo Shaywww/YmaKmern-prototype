@@ -4,8 +4,10 @@
 # 用法: bash ops/exit_gate_check.sh [--fast]
 set -euo pipefail
 
-PROTO="/opt/dududa20-prototype"
-PLUGIN="/root/data/plugins/dududa20"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROTO="${DUDUDA_PROTO_DIR:-$(dirname "$SCRIPT_DIR")}"
+PLUGIN="${DUDUDA_PLUGIN_DIR:-${HOME}/data/plugins/dududa20}"
+AGENT_SRC="${DUDUDA_AGENT_SRC:-$PROTO/packages/dududa-agent/src}"
 FAST="${1:-}"
 
 pass=0
@@ -44,7 +46,10 @@ else
     run_tests "P0 Memory 隔离" tests/contracts/test_memory_isolation_p0.py
     run_tests "P0 数据迁移回滚" tests/contracts/test_migration_p0.py
 fi
-static "P0 插件真实加载（import + 实例化）" python3.12 -c "import sys; sys.path.insert(0, '$PROTO'); sys.path.insert(0, '$PLUGIN'); import main; from unittest import mock; p = main.Main(mock.Mock()); assert p.oc_renderer is not None and p.limits is not None"
+static "P0 插件真实加载（import + 实例化）" env \
+    DUDUDA_AGENT_SRC="$AGENT_SRC" \
+    PYTHONPATH="$PLUGIN${PYTHONPATH:+:$PYTHONPATH}" \
+    python3.12 -c "import main; from unittest import mock; p = main.Main(mock.Mock()); assert p.oc_renderer is not None and p.limits is not None"
 
 echo "== P1 gate（feature flag 选择性切换 + 行为/降级证据）=="
 static "P1 DUDUDA_ROUTER 开关" grep -q 'DUDUDA_ROUTER' "$PLUGIN/main.py"
@@ -68,7 +73,9 @@ static "P2 Phase8 import 无 packages. 残留" bash -c "! grep -rn 'from package
 static "P2 Phase8 tests 分层" bash -c "for d in unit contracts integration evals fixtures smoke; do [ -d "$PROTO/tests/\$d" ] || exit 1; done"
 static "P2 Phase8 ops/ 目录" test -d "$PROTO/ops"
 static "P2 manage.sh bootstrap/upgrade/rollback" bash -c "grep -q bootstrap /root/manage.sh && grep -q upgrade /root/manage.sh && grep -q rollback /root/manage.sh"
-static "P2 Phase8 根入口兼容（dududa import）" python3.12 -c "import sys; sys.path.insert(0, '$PROTO/packages/dududa-agent/src'); import dududa.core, dududa.router, dududa.control_plane"
+static "P2 Phase8 根入口兼容（dududa import）" env \
+    PYTHONPATH="$AGENT_SRC${PYTHONPATH:+:$PYTHONPATH}" \
+    python3.12 -c "import dududa.core, dududa.router, dududa.control_plane"
 
 static "P2 ops.sh health/manifest/smoke" test -x "$PROTO/ops/ops.sh"
 static "P2 插件薄壳 main.py 行数" bash -c "[ \$(wc -l < '$PLUGIN/main.py') -lt 560 ]"

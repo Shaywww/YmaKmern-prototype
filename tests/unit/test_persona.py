@@ -1,5 +1,5 @@
 """Test OC Persona System."""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import pytest
 from dududa.core.persona.templates import (
     FormalityLevel, PlayfulnessLevel, EmojiStyle,
@@ -218,9 +218,8 @@ class TestExpressionLibrary:
 
     def test_wrap_response_with_catchphrase(self):
         lib = ExpressionLibrary(PRESETS["dududa_tsundere"])
-        # Run multiple times since it is random
         results = [lib.wrap_response("test message", "neutral") for _ in range(20)]
-        assert all(isinstance(r, str) for r in results)
+        assert set(results) == {"test message"}
 
 
 class TestPersonaRenderer:
@@ -252,7 +251,7 @@ class TestPersonaRenderer:
         emoji_count = sum(1 for c in result if ord(c) > 0x1F000)
         assert emoji_count == 0
 
-    def test_formality_transformation(self):
+    def test_fallback_does_not_rewrite_wording(self):
         from dududa.core.persona.templates import PersonaTemplate, ToneConfig
         p = PersonaTemplate(
             persona_id="test", name="test",
@@ -260,8 +259,11 @@ class TestPersonaRenderer:
         )
         renderer = PersonaRenderer(p)
         result = renderer.render("I am gonna check that")
-        # Formal replacement
-        assert "going to" in result.lower() or "gonna" not in result.lower()
+        assert result == "I am gonna check that"
+
+    def test_fallback_is_deterministic(self):
+        renderer = PersonaRenderer(PRESETS["dududa_tsundere"])
+        assert {renderer.render("原始草稿") for _ in range(30)} == {"原始草稿"}
 
     def test_persona_switch(self):
         renderer = PersonaRenderer(PRESETS["dududa_default"])

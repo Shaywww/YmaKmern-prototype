@@ -1,5 +1,5 @@
-﻿"""测试 Observability (Trace + Event Bus)。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 Observability (Trace + Event Bus)。"""
+import sys
 import pytest
 from dududa.observability.observability import (
     Tracer, TraceLevel, TraceEvent, InMemoryTraceSink,

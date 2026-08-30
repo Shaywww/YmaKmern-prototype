@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P4: 生产 Orchestrator 接入 —— 工具链 + 投递回执 + 多 bot 记忆隔离。
 
@@ -9,11 +10,11 @@
 """
 import pathlib, sys, types
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_p4", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_p4", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

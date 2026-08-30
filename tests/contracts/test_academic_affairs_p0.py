@@ -11,9 +11,10 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from tests.path_config import AGENT_SRC, PLUGIN_DIR
 
-PROTO = Path("/opt/dududa20-prototype/packages/dududa-agent/src")
-PLUGIN = Path("/root/data/plugins/dududa20")
+PROTO = AGENT_SRC
+PLUGIN = PLUGIN_DIR
 
 
 def _load_plugin():

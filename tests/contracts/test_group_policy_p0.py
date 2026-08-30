@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P0 群策略（文档 2.5.2 / 2.5.4）：mode / reply_rate / meme_rate 落地到回复策略。
 
@@ -7,12 +8,11 @@
 3) 生产插件 _social_decision_impl 应用群策略 + 管理命令接线。
 """
 import sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_gp", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_gp", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 
@@ -193,14 +193,14 @@ class TestEnginePolicy:
         assert d.action == SocialAction.IGNORE
         assert DecisionReason.LOW_RELEVANCE in d.reason_codes
 
-    def test_reply_rate_one_question_direct_reply(self):
+    def test_reply_rate_one_does_not_bypass_ambient_chain(self):
         engine = SocialDecisionEngine(reply_probability=1.0)
         pr = PerceptionResult(
             speech_acts=(SpeechAct(act_type="question", confidence=0.9),))
         d = engine.decide(perception=pr,
                           context=_PolicyContext(PolicyView(reply_rate=1.0)))
-        assert d.action == SocialAction.DIRECT_REPLY
-        assert DecisionReason.HIGH_RELEVANCE in d.reason_codes
+        assert d.action == SocialAction.IGNORE
+        assert DecisionReason.LOW_RELEVANCE in d.reason_codes
 
     def test_meme_rate_zero_blocks_react(self):
         engine = SocialDecisionEngine(reply_probability=1.0)
@@ -208,12 +208,12 @@ class TestEnginePolicy:
                           context=_PolicyContext(PolicyView(meme_rate=0.0)))
         assert d.action == SocialAction.IGNORE
 
-    def test_meme_rate_one_reacts(self):
+    def test_meme_rate_one_does_not_create_passive_reaction(self):
         engine = SocialDecisionEngine(reply_probability=1.0)
         d = engine.decide(perception=PerceptionResult(),
                           context=_PolicyContext(PolicyView(meme_rate=1.0)))
-        assert d.action == SocialAction.REACT
-        assert DecisionReason.HIGH_RELEVANCE in d.reason_codes
+        assert d.action == SocialAction.IGNORE
+        assert DecisionReason.LOW_RELEVANCE in d.reason_codes
 
     def test_mode_off_silences_even_mention(self):
         engine = SocialDecisionEngine()
@@ -242,12 +242,12 @@ class TestEnginePolicy:
         engine = SocialDecisionEngine(reply_probability=1.0)
         d = engine.decide(perception=PerceptionResult(),
                           context=_LegacyContext())
-        assert d.action == SocialAction.REACT
+        assert d.action == SocialAction.IGNORE
 
     def test_no_policy_no_context_unchanged(self):
         engine = SocialDecisionEngine(reply_probability=1.0)
         d = engine.decide(perception=PerceptionResult())
-        assert d.action == SocialAction.REACT
+        assert d.action == SocialAction.IGNORE
 
 
 # ---- 3. 生产插件 _social_decision_impl 应用群策略 ----
@@ -277,12 +277,19 @@ class TestProdGroupPolicy:
         assert action == SocialAction.IGNORE
         assert reason == DecisionReason.LOW_RELEVANCE.value
 
-    def test_normal_reply_rate_one_participates(self, plugin):
+    def test_normal_reply_rate_one_still_requires_ambient_gate(self, plugin):
         plugin.group_policy.set("g1", mode="normal", reply_rate=1.0)
         action, reason = plugin._social_decision(
             _FakeEvent("大家好", group="g1", at=False))
+        assert action == SocialAction.IGNORE
+        assert reason == DecisionReason.LOW_RELEVANCE.value
+
+    def test_ambient_marker_preserves_decision_provenance(self, plugin):
+        event = _FakeEvent("有人知道吗？", group="g1", at=True)
+        event._dududa_ambient_reason_code = DecisionReason.AMBIENT_WAKE.value
+        action, reason = plugin._social_decision(event)
         assert action == SocialAction.DIRECT_REPLY
-        assert reason == DecisionReason.HIGH_RELEVANCE.value
+        assert reason == DecisionReason.AMBIENT_WAKE.value
 
     def test_normal_reply_rate_zero_ignores(self, plugin):
         plugin.group_policy.set("g1", mode="normal", reply_rate=0.0)

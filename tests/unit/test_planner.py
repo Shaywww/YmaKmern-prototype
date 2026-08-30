@@ -1,5 +1,5 @@
 """Test Planner/Executor system."""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import pytest
 from dududa.planner.planner import ToolPlanner, PlanningContext
 from dududa.planner.dependency import DependencyResolver, CircularDependencyError

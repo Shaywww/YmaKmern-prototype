@@ -1,5 +1,5 @@
 """Test MCP services."""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import pytest
 from dududa.mcp.course_schedule import CourseScheduleService
 from dududa.mcp.exam_schedule import ExamScheduleService

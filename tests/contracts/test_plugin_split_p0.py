@@ -4,7 +4,7 @@
 Core 领域包。此处验证 DududaPlugin 组装与命令处理可脱离真实
 AstrBot 环境运行（types.py 为本地桩）。
 """
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import asyncio
 import pytest
 

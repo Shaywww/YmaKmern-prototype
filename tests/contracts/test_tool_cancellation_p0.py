@@ -12,7 +12,6 @@ import time
 from dataclasses import replace
 from types import SimpleNamespace
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 

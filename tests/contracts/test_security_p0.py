@@ -3,7 +3,7 @@
 覆盖文档 2.4.23 / 2.4.24：default deny、muted overlay、角色等级、
 确认绑定（单次使用/过期/digest/换人/换会话）、Redaction 幂等与嵌套。
 """
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import pytest
 
 from dududa.core.envelope import Actor, Platform

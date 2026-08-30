@@ -1,4 +1,5 @@
-﻿# -*- coding: utf-8 -*-
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
+# -*- coding: utf-8 -*-
 """P0 Memory v2 收尾：生产写入路径全部经 WriteGate（文档 2.5.3）。
 
 - WriteGate：TTL<=0 REJECT；缺来源/证据 REQUIRE_CONFIRMATION；
@@ -6,12 +7,11 @@
 - _store_memory 集成：冲突/重复/受限内容不落盘，正常内容落盘
 """
 import os, sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_wg", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_wg", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

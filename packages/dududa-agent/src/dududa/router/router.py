@@ -357,13 +357,12 @@ class ModelRouter:
         role: ModelRole, messages: list[dict[str, str]]
     ) -> str:
         """桩响应 —— 当模型不可用时的确定性降级。"""
-        last_msg = messages[-1]["content"] if messages else ""
         stub_map = {
             ModelRole.PERCEPTION: '{"topics":[],"needs_tools":false}',
             ModelRole.SOCIAL_DECISION: '{"action":"ignore","confidence":0.0}',
             ModelRole.TOOL_PLANNING: '{"goal":"","steps":[]}',
-            ModelRole.DIRECT_CHAT: last_msg,
-            ModelRole.RESPONSE_COMPOSITION: "嗯嗯。",
+            ModelRole.DIRECT_CHAT: "我这会儿有点卡，等我缓一下再聊。",
+            ModelRole.RESPONSE_COMPOSITION: "我这会儿有点卡，等我缓一下再聊。",
             ModelRole.MEMORY_SUMMARY: "",
             ModelRole.IMAGE_UNDERSTANDING: '{"description":""}',
             ModelRole.IMAGE_GENERATION: "",

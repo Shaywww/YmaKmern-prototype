@@ -7,9 +7,10 @@
 from pathlib import Path
 
 import pytest
+from tests.path_config import AGENT_SRC, REPO_ROOT
 
-PROTO = Path("/opt/dududa20-prototype/packages/dududa-agent/src")
-ADR = Path("/opt/dududa20-prototype") / "docs" / "adr" / "0001_control_plane.md"
+PROTO = AGENT_SRC
+ADR = REPO_ROOT / "docs" / "adr" / "0001_control_plane.md"
 
 REQUIRED_COMMITMENTS = (
     "DUDUDA_CP_TOKEN",        # 鉴权

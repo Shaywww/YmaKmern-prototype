@@ -18,6 +18,7 @@ from dududa.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutco
 from dududa.core.delivery import DeliveryReceipt, DeliveryStatus
 from dududa.core.structured_output import merge_perception_with_model
 from dududa.core.trace_recorder import trace_recorder
+from dududa.core.decision import DecisionReason
 
 from dududa.application.dududa_utils import (
     _detect_media, _detect_media_kind, _raw_message_segments, _segment_data,
@@ -1385,11 +1386,14 @@ def _group_policy_for_event(plugin, event, group_id: str):
     return None
 
 
-def _mark_ambient_wake(event) -> None:
+def _mark_ambient_wake(
+        event, reason_code: str = DecisionReason.AMBIENT_WAKE.value) -> None:
     try:
         event.set_extra("dududa_ambient_wake", True)
+        event.set_extra("dududa_ambient_reason_code", reason_code)
     except Exception:
         setattr(event, "_dududa_ambient_wake", True)
+        setattr(event, "_dududa_ambient_reason_code", reason_code)
 
 
 def _is_ambient_wake(event) -> bool:
@@ -1399,6 +1403,17 @@ def _is_ambient_wake(event) -> bool:
     except Exception:
         pass
     return bool(getattr(event, "_dududa_ambient_wake", False))
+
+
+def _ambient_reason_code(event) -> str:
+    try:
+        value = event.get_extra("dududa_ambient_reason_code")
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return str(getattr(
+        event, "_dududa_ambient_reason_code", "") or "")
 
 
 _GROUP_SCENE_REPLIES = {
@@ -2512,7 +2527,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                                                   else "small_chat_video")))))
                     event.is_at_or_wake_command = True
                     _mark_semantic_media_candidate(event, reason)
-                    _mark_ambient_wake(event)
+                    _mark_ambient_wake(
+                        event, DecisionReason.SEMANTIC_RECHECK.value)
                     logger.info(
                         "Group semantic media candidate | group=%s reason=%s",
                         group_id, reason)
@@ -2563,7 +2579,10 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                     if reason in _GROUP_SCENE_REPLIES:
                         _mark_group_scene_reply(event, reason)
                     else:
-                        _mark_ambient_wake(event)
+                        _mark_ambient_wake(
+                            event, str(getattr(
+                                decision, "reason_code",
+                                DecisionReason.AMBIENT_WAKE.value)))
                     logger.info(
                         "Group ambient wake | group=%s reason=%s messages=%s senders=%s",
                         group_id, reason,
@@ -2589,7 +2608,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                         and stats.get("unique_senders", 0) >= 2):
                     event.is_at_or_wake_command = True
                     _mark_semantic_candidate(event, candidate)
-                    _mark_ambient_wake(event)
+                    _mark_ambient_wake(
+                        event, DecisionReason.SEMANTIC_RECHECK.value)
                     logger.info(
                         "Group semantic candidate | group=%s tier=%s key=%s",
                         group_id, candidate.tier, candidate.key)
@@ -2603,7 +2623,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
         if _small_chat_text_candidate(plugin, group_id, text):
             event.is_at_or_wake_command = True
             _mark_semantic_chat_candidate(event, "small_group_context_thread")
-            _mark_ambient_wake(event)
+            _mark_ambient_wake(
+                event, DecisionReason.SEMANTIC_RECHECK.value)
             logger.info(
                 "Group small-chat candidate | group=%s messages=%s senders=%s",
                 group_id,
@@ -2613,17 +2634,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                     "unique_senders", 0))
             return True
 
-    # Passive participation is an explicit per-group opt-in.  The actual
-    # probability remains owned by the social decision engine.
-    passive = bool(
-        policy is not None
-        and str(getattr(policy, "mode", "normal")) == "normal"
-        and float(getattr(policy, "reply_rate", 0.0) or 0.0) > 0.0
-        and float(getattr(policy, "interruption_cost", 0.0) or 0.0) < 1.0
-    )
-    if not passive:
-        _mark_recent_group_text(event)
-    return passive
+    _mark_recent_group_text(event)
+    return False
 
 
 async def run_message_flow(plugin, event) -> str | None:
@@ -2643,8 +2655,14 @@ async def run_message_flow(plugin, event) -> str | None:
     if _dedupe_message(plugin, event, msg_id): return None
     if _cross_session_reply_dropped(plugin, event): return None
     if not _preflight_group_message(plugin, event, msgs): return None
+    run_id, trace_id = uuid4().hex, uuid4().hex
     scene_reply = _group_scene_reply(event)
     if scene_reply:
+        trace_recorder.record(
+            event="social_decision", run_id=run_id, trace_id=trace_id,
+            action=SocialAction.DIRECT_REPLY.value,
+            reason_code=DecisionReason.AMBIENT_WAKE.value,
+            decision_chain="native_scene")
         return _normalize_reply_style(scene_reply)
     photo_batch = await _collect_group_photo_batch(plugin, event)
     if photo_batch == ():
@@ -2677,7 +2695,6 @@ async def run_message_flow(plugin, event) -> str | None:
         await _prune_stale_deliveries(plugin)
     except Exception as _e:
         logger.warning("Prune stale deliveries failed: %s", _e)
-    run_id, trace_id = uuid4().hex, uuid4().hex
     _msg_snip = str(getattr(event, "message_str", "") or "")[:80]
     logger.info("Flow start | run_id=%s trace_id=%s msg=%r",
                 run_id, trace_id, _msg_snip)
@@ -2847,6 +2864,11 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
             or media_source or chat_source or candidate):
         await _prepare_topic_continuity(plugin, event)
     if media_source:
+        trace_recorder.record(
+            event="social_decision", run_id=run_id, trace_id=trace_id,
+            action=SocialAction.DEFER.value,
+            reason_code=DecisionReason.SEMANTIC_RECHECK.value,
+            decision_chain="ambient_semantic_media")
         if not photo_batch and media_source in (
                 "reply_chain_media", "small_chat_video", "small_chat_gif"):
             # QQ often splits a reply, visual item and caption into adjacent
@@ -2874,14 +2896,28 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
     if candidate:
         # The local library only opened this review path. DeepSeek can still
         # reject it; malformed or uncertain output becomes silence.
+        trace_recorder.record(
+            event="social_decision", run_id=run_id, trace_id=trace_id,
+            action=SocialAction.DEFER.value,
+            reason_code=DecisionReason.SEMANTIC_RECHECK.value,
+            decision_chain="ambient_semantic_meme")
         return (await _semantic_meme_reply(plugin, event, candidate)) or None
     if chat_source:
+        trace_recorder.record(
+            event="social_decision", run_id=run_id, trace_id=trace_id,
+            action=SocialAction.DEFER.value,
+            reason_code=DecisionReason.SEMANTIC_RECHECK.value,
+            decision_chain="ambient_semantic_chat")
         return (await _semantic_chat_reply(plugin, event, chat_source)) or None
     if (not getattr(event, "is_at_or_wake_command", False)
             and _stash_group_media(plugin, event, msgs)):
         return None
     state = RuntimeState(run_id=run_id, trace_id=trace_id)
     action, reason = plugin._social_decision(event)
+    trace_recorder.record(
+        event="social_decision", run_id=run_id, trace_id=trace_id,
+        action=getattr(action, "value", str(action)), reason_code=reason,
+        decision_chain=("ambient" if _is_ambient_wake(event) else "direct"))
     logger.info("Flow decision | run_id=%s trace_id=%s: %s (%s)",
                 run_id, trace_id, action, reason)
     if action == SocialAction.IGNORE:

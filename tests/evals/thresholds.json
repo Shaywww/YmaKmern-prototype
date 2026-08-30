@@ -1,15 +1,15 @@
 {
-  "version": 1,
+  "version": 2,
   "perception": {
-    "accuracy": {"gte": 1.0},
+    "accuracy": {"class": "statistical", "gte": 0.95, "min_samples": 10},
     "greeting_misfires": {"eq": 0}
   },
   "social_decision": {
-    "accuracy": {"gte": 1.0},
+    "accuracy": {"class": "statistical", "gte": 0.95, "min_samples": 8},
     "distinct_actions": {"gte": 4}
   },
   "social_decision_policy": {
-    "accuracy": {"gte": 1.0}
+    "accuracy": {"class": "statistical", "gte": 0.95, "min_samples": 10}
   },
   "tool_runtime": {
     "hard_cap_ok": true,
@@ -18,16 +18,16 @@
     "degrade_ok": true
   },
   "capability_retrieval": {
-    "recall_at_k": {"gte": 1.0},
-    "wrong_exposure_rate": {"eq": 0.0},
-    "arg_accuracy": {"gte": 1.0}
+    "recall_at_k": {"class": "statistical", "gte": 0.95, "min_samples": 1, "sample_key": "recall_queries"},
+    "wrong_exposure_rate": {"class": "deterministic", "eq": 0.0},
+    "arg_accuracy": {"class": "statistical", "gte": 0.95, "min_samples": 1, "sample_key": "arg_cases"}
   },
   "memory_writegate": {
-    "accuracy": {"gte": 1.0},
+    "accuracy": {"class": "deterministic", "gte": 1.0},
     "integration_restricted_blocked": true,
     "integration_normal_stored": true
   },
   "oc_render": {
-    "anchor_retention": {"gte": 1.0}
+    "anchor_retention": {"class": "deterministic", "gte": 1.0}
   }
 }

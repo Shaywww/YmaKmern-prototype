@@ -8,7 +8,6 @@ import asyncio
 import sys
 import time
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 

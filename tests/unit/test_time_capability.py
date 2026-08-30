@@ -5,7 +5,6 @@
 """
 import os
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 # 测试与生产运行时数据隔离：access 策略指向不存在的路径 = legacy allow，
 # 不受 data/mcp_access.json（生产 default deny）影响（文档 2.5.6）。
 os.environ.setdefault(

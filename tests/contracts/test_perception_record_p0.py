@@ -7,7 +7,6 @@ Orchestrator 每次感知自动入库（含 run/trace 与会话绑定）。
 import asyncio
 import sys
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 

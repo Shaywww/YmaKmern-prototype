@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from dududa.core.group_ambient import GroupAmbientTracker
+from dududa.core.decision import DecisionReason
 from datetime import datetime
 
 
@@ -19,6 +20,7 @@ def test_default_threshold_requires_busy_group_and_current_question():
     assert decision.should_reply is True
     assert decision.message_count == 15
     assert decision.unique_senders == 4
+    assert decision.reason_code == DecisionReason.AMBIENT_WAKE.value
 
 
 def test_statement_does_not_trigger_after_threshold():
@@ -45,8 +47,10 @@ def test_cooldown_and_daily_limit_are_per_group():
         group_id="g1", sender_id="u4", text="还有什么办法？", now=1123)
     assert first.should_reply is True
     assert blocked.reason == "cooldown"
+    assert blocked.reason_code == DecisionReason.COOLDOWN_ACTIVE.value
     assert second.should_reply is True
     assert limited.reason == "daily_limit"
+    assert limited.reason_code == DecisionReason.DAILY_LIMIT.value
 
 
 def test_commands_recalls_and_ambiguous_short_text_are_ignored():

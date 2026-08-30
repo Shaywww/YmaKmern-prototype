@@ -3,7 +3,6 @@ engine, router eight-role contract, capability Top-K retrieval, executor
 re-authorization. These tests encode the document contracts (2.4.8/2.4.10/
 2.4.11/2.4.12/2.5.7)."""
 import sys
-sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
 
 import pytest
 

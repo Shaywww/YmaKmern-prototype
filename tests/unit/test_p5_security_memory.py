@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P5: 安全（Policy / 持久确认 / Redaction / Restricted 过滤）+ Memory v2。
 
@@ -12,8 +13,7 @@
 - 生产接线：角色解析（含群级管理员边界）、管理命令授权、记忆脱敏与可见性
 """
 import os, sys, types, glob, json
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 # 角色配置必须在加载 main.py 之前注入（模块常量在 import 时读取）
 os.environ.setdefault("DUDUDA_OWNER_IDS", "u_owner")
@@ -23,7 +23,7 @@ os.environ.setdefault("DUDUDA_MUTED_IDS", "u_muted")
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_p5", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_p5", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

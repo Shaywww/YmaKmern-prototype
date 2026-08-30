@@ -4,7 +4,9 @@
 # 默认 pytest 通过 -m "not net" 排除 tests/smoke。
 set -uo pipefail
 SERVICE="astrbot"
-PROTO="/opt/dududa20-prototype"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROTO="${DUDUDA_PROTO_DIR:-$(dirname "$SCRIPT_DIR")}"
+export DUDUDA_AGENT_SRC="${DUDUDA_AGENT_SRC:-$PROTO/packages/dududa-agent/src}"
 
 ENV_LINE=$(systemctl show "$SERVICE" -p Environment | sed 's/^Environment=//')
 if [ -z "$ENV_LINE" ]; then

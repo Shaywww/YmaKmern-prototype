@@ -1,6 +1,5 @@
 ﻿"""测试 MessageEnvelope 与 Actor。"""
 import sys
-sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
 
 import pytest
 from dududa.core.envelope import (

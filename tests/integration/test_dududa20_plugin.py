@@ -1,12 +1,12 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 """Tests for dududa20 plugin core functions (unit-testable without AstrBot runtime)."""
 import sys, os, pytest, base64
 from io import BytesIO
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 # Import module-level functions directly
 import importlib.util
-spec = importlib.util.spec_from_file_location("dududa_main", "/root/data/plugins/dududa20/main.py")
+spec = importlib.util.spec_from_file_location("dududa_main", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

@@ -307,7 +307,9 @@ def _install_side_effect_spies(monkeypatch):
     return trace, created_tasks, prune_calls
 
 
-def _assert_zero_flow_side_effects(plugin, trace, created_tasks, prune_calls):
+def _assert_zero_flow_side_effects(
+        plugin, trace, created_tasks, prune_calls,
+        *, allow_decision_trace=False):
     assert plugin.ux_store.session_key_calls == 0
     assert plugin.ux_store.memory_mode_calls == 0
     assert plugin.ux_tasks.register_calls == []
@@ -315,7 +317,12 @@ def _assert_zero_flow_side_effects(plugin, trace, created_tasks, prune_calls):
     assert plugin.progress_messages == []
     assert created_tasks == []
     assert prune_calls == []
-    assert trace.events == []
+    if allow_decision_trace:
+        assert len(trace.events) == 1
+        assert trace.events[0]["event"] == "social_decision"
+        assert trace.events[0]["reason_code"] == "ambient_wake"
+    else:
+        assert trace.events == []
 
 
 @pytest.mark.asyncio
@@ -586,10 +593,10 @@ def test_nickname_wakes_only_in_ambient_enabled_group(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reply_rate_one_keeps_unmentioned_group_participation_reachable(
+async def test_reply_rate_one_does_not_bypass_ambient_gate(
     tmp_path, monkeypatch
 ):
-    """Moving recipient filtering earlier must not make reply_rate unreachable."""
+    """Natural participation has one entry point: the ambient gate."""
     plugin = FlowPlugin(tmp_path)
     plugin.group_policy.set(GROUP_ID, mode="normal", reply_rate=1.0)
     event = GroupEvent("这个方案大家怎么看？", message_id="passive-1", at=False)
@@ -605,7 +612,7 @@ async def test_reply_rate_one_keeps_unmentioned_group_participation_reachable(
     monkeypatch.setattr(h, "_take_paired_media", lambda plugin_, event_: ())
     monkeypatch.setattr(h, "_prune_stale_deliveries", lambda plugin_: asyncio.sleep(0))
 
-    assert await h.run_message_flow(plugin, event) == "我也来补充一点～"
+    assert await h.run_message_flow(plugin, event) is None
 
 
 def test_ambient_opt_in_promotes_only_busy_group_question(tmp_path):
@@ -1291,7 +1298,8 @@ async def test_new_member_notice_gets_opt_in_welcome_without_llm_work(
 
     assert reply in h._GROUP_SCENE_REPLIES["new_member"]
     _assert_zero_flow_side_effects(
-        plugin, trace, created_tasks, prune_calls)
+        plugin, trace, created_tasks, prune_calls,
+        allow_decision_trace=True)
 
 
 @pytest.mark.asyncio
@@ -1344,7 +1352,8 @@ async def test_native_card_scenes_reply_without_starting_llm_work(
 
     assert reply in h._GROUP_SCENE_REPLIES[reason]
     _assert_zero_flow_side_effects(
-        plugin, trace, created_tasks, prune_calls)
+        plugin, trace, created_tasks, prune_calls,
+        allow_decision_trace=True)
 
 
 def test_ordinary_json_card_is_not_misclassified_as_poll():
@@ -1383,7 +1392,8 @@ async def test_topic_keyword_can_make_a_low_cost_fixed_reply(
 
     assert reply in h._GROUP_SCENE_REPLIES["topic_milk_tea"]
     _assert_zero_flow_side_effects(
-        plugin, trace, created_tasks, prune_calls)
+        plugin, trace, created_tasks, prune_calls,
+        allow_decision_trace=True)
 
 
 def test_split_at_window_matches_same_sender():

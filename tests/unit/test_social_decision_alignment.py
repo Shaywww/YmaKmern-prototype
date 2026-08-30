@@ -1,12 +1,12 @@
-﻿# -*- coding: utf-8 -*-
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
+# -*- coding: utf-8 -*-
 """P0 第 3 项：Social Decision 六动作对齐 + 稳定 reason code + 冷却（文档 2.5.4）。"""
 import os, sys, types, time
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_soc", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_soc", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

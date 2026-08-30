@@ -33,7 +33,7 @@
 - 8 角色 LLM 路由（主模型 + 降级）、记忆/画像、安全校验、Trace 与评估
 - Web 控制台（Control Plane）与运维工具链（门禁/健康检查/备份）
 
-**它不是插件本体。** 配套仓库 [YmaKmern-plugin](https://github.com/Shaywww/YmaKmern-plugin) 是 AstrBot 插件薄壳（生产部署入口），通过固定路径加载本仓库代码运行；两个仓库配合部署，改动核心逻辑提交本仓库，改动插件装配/命令提交插件仓库。
+**它不是插件本体。** 配套仓库 [YmaKmern-plugin](https://github.com/Shaywww/YmaKmern-plugin) 是 AstrBot 插件薄壳（生产部署入口），通过 `DUDUDA_AGENT_SRC` 指向本仓库的 `packages/dududa-agent/src`；两个仓库配合部署，改动核心逻辑提交本仓库，改动插件装配/命令提交插件仓库。
 
 ## 视觉数据与隐私
 

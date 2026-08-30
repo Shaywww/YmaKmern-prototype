@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """自述/未接科大/风格红线：compose 系统提示知识块（QQ 实测反馈收尾）。
 
@@ -5,12 +6,11 @@
 以及只回「好的」时出现客服腔 —— 这些都要由 system prompt 约束。
 """
 import sys, types
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
 spec = importlib.util.spec_from_file_location(
-    "dududa_main_self", "/root/data/plugins/dududa20/main.py")
+    "dududa_main_self", str(PLUGIN_MAIN))
 main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main)
 

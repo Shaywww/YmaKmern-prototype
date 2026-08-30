@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """版本化 Eval：五组件 fixture + 阈值（文档 2.5.10 / Phase 9 前半）。"""
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
 
 import pytest
 
@@ -12,8 +10,27 @@ _THRESHOLDS = evals.load_thresholds()
 
 
 def _assert_ok(component, metric):
-    ok, failures = evals.check(component, metric, _THRESHOLDS)
-    assert ok, f"{component} eval failed: {failures}"
+    result = evals.check(component, metric, _THRESHOLDS)
+    if result.status == "skip":
+        pytest.skip("; ".join(result.skipped))
+    assert result.ok, f"{component} eval failed: {result.failures}"
+
+
+def test_statistical_threshold_skips_insufficient_samples():
+    result = evals.check("demo", {"cases": 2, "accuracy": 0.0}, {
+        "demo": {"accuracy": {
+            "class": "statistical", "gte": 0.95, "min_samples": 8,
+        }},
+    })
+    assert result.status == "skip"
+    assert result.failures == ()
+
+
+def test_deterministic_threshold_never_relaxes():
+    result = evals.check("demo", {"safety": 0.99}, {
+        "demo": {"safety": {"class": "deterministic", "gte": 1.0}},
+    })
+    assert result.status == "fail"
 
 
 @pytest.mark.asyncio

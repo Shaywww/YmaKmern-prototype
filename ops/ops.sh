@@ -9,8 +9,10 @@
 # 所有命令只读（backup 除外），输出目录用 OPS_OUT 覆盖（默认 /root/data/ops）。
 set -euo pipefail
 
-PROTO="/opt/dududa20-prototype"
-PLUGIN="/root/data/plugins/dududa20"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROTO="${DUDUDA_PROTO_DIR:-$(dirname "$SCRIPT_DIR")}"
+PLUGIN="${DUDUDA_PLUGIN_DIR:-${HOME}/data/plugins/dududa20}"
+AGENT_SRC="${DUDUDA_AGENT_SRC:-$PROTO/packages/dududa-agent/src}"
 SERVICE="astrbot"
 OUT="${OPS_OUT:-/root/data/ops}"
 
@@ -115,7 +117,9 @@ cmd_smoke() {
         "$PROTO/packages/dududa-agent/src/dududa/application/dududa_prod.py" \
         "$PROTO/packages/dududa-agent/src/dududa/application/dududa_core.py" \
         "$PROTO/packages/dududa-agent/src/dududa/core/renderer.py"
-    check python3.12 -c "import sys; sys.path.insert(0, '$PROTO'); sys.path.insert(0, '$PLUGIN'); import main"
+    check env DUDUDA_AGENT_SRC="$AGENT_SRC" \
+        PYTHONPATH="$PLUGIN${PYTHONPATH:+:$PYTHONPATH}" \
+        python3.12 -c "import main"
     if [ "$fast" != "--fast" ]; then
         check python3.12 -m pytest "$PROTO/tests/unit/test_p6_mcp_client.py" -q --tb=line
         check python3.12 -m pytest \

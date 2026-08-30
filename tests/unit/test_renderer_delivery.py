@@ -1,5 +1,5 @@
-﻿"""测试 OC Renderer 与 Delivery。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 OC Renderer 与 Delivery。"""
+import sys
 import pytest
 from dududa.core.renderer import (
     DraftResponse, FactAnchor, Persona, OCRenderer, RenderValidator, FinalResponse,

@@ -1,5 +1,5 @@
-﻿"""测试 Runtime Orchestrator 完整流程。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+"""测试 Runtime Orchestrator 完整流程。"""
+import sys
 import pytest
 from dududa.core.envelope import (
     MessageEnvelope, Actor, Platform, MessageKind, ConversationRef,

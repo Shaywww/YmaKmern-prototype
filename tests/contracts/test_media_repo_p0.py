@@ -1,3 +1,4 @@
+from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """P0: 受信 Attachment Repository（文档 2.4.2 Multimodal Preprocessor）。
 
@@ -13,7 +14,6 @@
 import sys
 import time
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 from types import SimpleNamespace
@@ -252,10 +252,10 @@ class TestProdWiring:
 
     @staticmethod
     def _make_main():
-        sys.path.insert(0, "/root/data/plugins/dududa20")
+        sys.path.insert(0, str(PLUGIN_DIR))
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "dududa_main_mr", "/root/data/plugins/dududa20/main.py")
+            "dududa_main_mr", str(PLUGIN_MAIN))
         main = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(main)
         try:

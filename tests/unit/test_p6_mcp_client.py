@@ -12,7 +12,6 @@
 - 真实 stdio 子进程握手（仅服务器/Linux 上执行）
 """
 import os, sys, json, asyncio, time
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 
 import pytest
 

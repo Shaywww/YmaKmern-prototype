@@ -8,10 +8,12 @@ import json
 import sys
 import tempfile
 import types
+from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
-sys.path.insert(0, "/root/data/plugins/dududa20")
+from tests.path_config import PLUGIN_MAIN, configure_import_paths
+
+configure_import_paths()
 
 _EVAL_DIR = Path(__file__).resolve().parent
 _FIXTURES = _EVAL_DIR / "fixtures"
@@ -27,25 +29,58 @@ def load_thresholds() -> dict:
         return json.load(f)
 
 
-def check(component: str, metric: dict, thresholds: dict):
-    """按 thresholds.json 比对 metric，返回 (ok, failures)。"""
+@dataclass(frozen=True)
+class EvalCheckResult:
+    status: str  # pass | fail | skip
+    failures: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return self.status != "fail"
+
+
+def check(component: str, metric: dict, thresholds: dict) -> EvalCheckResult:
+    """Compare metrics with typed thresholds and explicit sample-size skips."""
     t = thresholds.get(component, {})
     failures = []
+    skipped = []
+    evaluated = 0
     for key, bound in t.items():
         value = metric.get(key)
         if isinstance(bound, bool):
+            evaluated += 1
             if value is not bound:
                 failures.append(f"{component}.{key}: 期望 {bound}，实际 {value}")
         elif isinstance(bound, dict):
+            threshold_class = bound.get("class", "deterministic")
+            if threshold_class == "statistical":
+                sample_key = bound.get("sample_key", "cases")
+                minimum = int(bound.get("min_samples", 1))
+                samples = metric.get(sample_key)
+                if not isinstance(samples, int) or samples < minimum:
+                    skipped.append(
+                        f"{component}.{key}: {sample_key}={samples} < {minimum}")
+                    continue
+            evaluated += 1
             for op, target in bound.items():
+                if op in {"class", "min_samples", "sample_key"}:
+                    continue
                 if op == "gte" and not (isinstance(value, (int, float)) and value >= target):
                     failures.append(f"{component}.{key}: {value} < {target}")
                 elif op == "eq" and value != target:
                     failures.append(f"{component}.{key}: 期望 {target}，实际 {value}")
         elif isinstance(bound, (int, float)):
+            evaluated += 1
             if not (isinstance(value, (int, float)) and value >= bound):
                 failures.append(f"{component}.{key}: {value} < {bound}")
-    return (not failures), failures
+    if failures:
+        status = "fail"
+    elif skipped and not evaluated:
+        status = "skip"
+    else:
+        status = "pass"
+    return EvalCheckResult(status, tuple(failures), tuple(skipped))
 
 
 # ---- 插件构造（与 tests/test_social_decision_alignment.py 同模式） ----
@@ -53,7 +88,7 @@ def check(component: str, metric: dict, thresholds: dict):
 def _load_plugin():
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "dududa_main_eval", "/root/data/plugins/dududa20/main.py")
+        "dududa_main_eval", str(PLUGIN_MAIN))
     main = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(main)
     _tmp = tempfile.mkdtemp(prefix="dududa_eval_")
@@ -393,6 +428,7 @@ def run_capability_retrieval() -> dict:
         "arg_accuracy": arg_accuracy,
         "recall_queries": len(recall_scores),
         "exposure_checks": total_checks,
+        "arg_cases": total,
     }
 
 

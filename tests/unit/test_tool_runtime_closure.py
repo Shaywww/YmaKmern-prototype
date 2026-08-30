@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """P1 第 1 项：Tool Runtime 闭环测试（文档 2.5.5）。
 
 覆盖：Top-K 权限/风险预过滤与排序、重复调用检测、
@@ -6,7 +6,6 @@
 步数硬上限（默认 4 / 全局 8）、无候选降级。
 """
 import sys
-sys.path.insert(0, "/opt/dududa20-prototype/packages/dududa-agent/src")
 import pytest
 
 from dududa.core.capability import (

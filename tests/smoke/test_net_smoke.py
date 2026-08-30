@@ -4,7 +4,7 @@
 
 默认 pytest 收集时会被排除（pyproject addopts 含 -m "not net"）；
 仅显式 -m net 时运行：
-    cd /opt/dududa20-prototype
+    cd <repository-root>
     bash ops/smoke_net.sh    # 推荐：自动从 systemd 注入生产密钥
     python3.12 -m pytest tests/smoke -m net -q --tb=short
 """
@@ -18,11 +18,12 @@ from unittest import mock
 
 import httpx
 import pytest
+from tests.path_config import AGENT_SRC, PLUGIN_DIR
 
 pytestmark = pytest.mark.net
 
-PROTO = Path("/opt/dududa20-prototype/packages/dududa-agent/src")
-PLUGIN = Path("/root/data/plugins/dududa20")
+PROTO = AGENT_SRC
+PLUGIN = PLUGIN_DIR
 
 
 def _load_plugin():

@@ -12,6 +12,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 
+from .decision import DecisionReason
+
 
 _QUESTION_RE = re.compile(
     r"(?:[?？]\s*$|"
@@ -44,6 +46,7 @@ class AmbientDecision:
     reason: str
     message_count: int = 0
     unique_senders: int = 0
+    reason_code: str = DecisionReason.LOW_RELEVANCE.value
 
 
 class GroupAmbientTracker:
@@ -255,7 +258,8 @@ class GroupAmbientTracker:
         if (last_reply is not None
                 and ts - last_reply < self.cooldown_seconds):
             return AmbientDecision(
-                False, "cooldown", message_count, unique_senders)
+                False, "cooldown", message_count, unique_senders,
+                DecisionReason.COOLDOWN_ACTIVE.value)
 
         day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
         saved_day, used = self._daily.get(gid, (day, 0))
@@ -264,14 +268,16 @@ class GroupAmbientTracker:
         if used >= self.daily_limit:
             self._daily[gid] = (day, used)
             return AmbientDecision(
-                False, "daily_limit", message_count, unique_senders)
+                False, "daily_limit", message_count, unique_senders,
+                DecisionReason.DAILY_LIMIT.value)
 
         # Reserve atomically so simultaneous messages cannot create a burst.
         self._last_reply[gid] = ts
         self._daily[gid] = (day, used + 1)
         self._save_state_locked()
         return AmbientDecision(
-            True, reason, message_count, unique_senders)
+            True, reason, message_count, unique_senders,
+            DecisionReason.AMBIENT_WAKE.value)
 
     def status(self, group_id: str, *, now: float | None = None) -> dict:
         ts = time.time() if now is None else float(now)

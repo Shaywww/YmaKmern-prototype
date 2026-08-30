@@ -1,5 +1,5 @@
 """测试 Perception 与 Decision。"""
-import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
+import sys
 import pytest
 from dududa.core.perception import PerceptionResult, SpeechAct, EntityRef
 from dududa.core.decision import (
