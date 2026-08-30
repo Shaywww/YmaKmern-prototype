@@ -16,7 +16,7 @@ import os
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -51,6 +51,7 @@ class MemoryType(str, Enum):
     """记忆类型。"""
     SESSION_STATE = "session_state"    # 本次会话内状态
     SHORT_TERM = "short_term"          # 近期对话
+    BOT_UTTERANCE = "bot_utterance"    # 机器人已发送的话（用于自洽性）
     USER_PROFILE = "user_profile"      # 用户画像（跨会话）
     GROUP_MEMORY = "group_memory"      # 群级记忆
     EPISODIC = "episodic"              # 事件记忆
@@ -206,6 +207,22 @@ class MemoryCandidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class DeferredMemoryConflict:
+    """等待巩固任务裁决的记忆冲突。
+
+    ``proposed_record`` 保留新证据，``existing_record_id`` 指向被挑战的
+    旧记录；队列只保存已经脱敏并经过基本门禁的候选。
+    """
+
+    conflict_id: str = field(default_factory=lambda: uuid4().hex)
+    proposed_record: MemoryRecord = field(default_factory=MemoryRecord)
+    existing_record_id: str = ""
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+
 class WriteGate:
     """记忆写入门禁。
 
@@ -247,14 +264,18 @@ class WriteGate:
         if existing is not None:
             if existing.content.strip() == record.content.strip():
                 return WriteGateDecision.REJECT  # 完全重复
-            return WriteGateDecision.DEFER_FOR_CONFLICT  # 同 Scope 内容冲突
+            if record.scope.memory_type != MemoryType.BOT_UTTERANCE:
+                self._repo.defer_conflict(candidate, existing.record_id)
+                return WriteGateDecision.DEFER_FOR_CONFLICT  # 同 Scope 内容冲突
         # 同 Scope 长内容包含短内容视为冲突（新信息覆盖旧信息，保留双方证据）
-        for r in self._repo.query(record.scope, limit=20):
+        for r in (() if record.scope.memory_type == MemoryType.BOT_UTTERANCE
+                  else self._repo.query(record.scope, limit=20)):
             a = r.content.strip()
             b = record.content.strip()
             if not a or not b or len(a) < 8 or len(b) < 8:
                 continue
             if a in b or b in a:
+                self._repo.defer_conflict(candidate, r.record_id)
                 return WriteGateDecision.DEFER_FOR_CONFLICT
 
         # 5. 来源与证据检查
@@ -336,12 +357,33 @@ class MemoryRepository(ABC):
         """清理过期记录，返回清理数量。"""
         ...
 
+    def defer_conflict(
+        self, candidate: MemoryCandidate, existing_record_id: str
+    ) -> str:
+        """把语义冲突送入待裁决队列；不支持的仓库可返回空串。"""
+        return ""
+
+    def list_deferred(
+        self, scope: Optional[MemoryScope] = None, limit: int = 50
+    ) -> tuple[DeferredMemoryConflict, ...]:
+        """读取待裁决冲突。"""
+        return ()
+
+    def resolve_deferred(self, conflict_id: str, prefer_new: bool = True) -> str:
+        """裁决一条冲突；返回最终保留的 record_id。"""
+        return ""
+
+    def get_record(self, record_id: str) -> Optional[MemoryRecord]:
+        """按 ID 精确读取；用于冲突裁决，不提供跨 Scope 回退。"""
+        return None
+
 
 class InMemoryRepository(MemoryRepository):
     """内存实现 —— 用于测试和原型。"""
 
     def __init__(self):
         self._records: dict[str, MemoryRecord] = {}
+        self._deferred_conflicts: dict[str, DeferredMemoryConflict] = {}
 
     def write(self, record: MemoryRecord) -> str:
         if current_memory_access_mode() in ("paused", "temporary"):
@@ -443,6 +485,61 @@ class InMemoryRepository(MemoryRepository):
             del self._records[rid]
         return len(expired)
 
+    def defer_conflict(
+        self, candidate: MemoryCandidate, existing_record_id: str
+    ) -> str:
+        proposed = candidate.proposed_record
+        for conflict in self._deferred_conflicts.values():
+            if (conflict.existing_record_id == existing_record_id
+                    and conflict.proposed_record.scope == proposed.scope
+                    and conflict.proposed_record.content == proposed.content):
+                return conflict.conflict_id
+        conflict = DeferredMemoryConflict(
+            proposed_record=proposed,
+            existing_record_id=existing_record_id,
+        )
+        self._deferred_conflicts[conflict.conflict_id] = conflict
+        return conflict.conflict_id
+
+    def list_deferred(
+        self, scope: Optional[MemoryScope] = None, limit: int = 50
+    ) -> tuple[DeferredMemoryConflict, ...]:
+        values = [
+            item for item in self._deferred_conflicts.values()
+            if scope is None or item.proposed_record.scope.is_subset_of(scope)
+        ]
+        values.sort(key=lambda item: item.created_at)
+        return tuple(values[:max(0, limit)])
+
+    def resolve_deferred(self, conflict_id: str, prefer_new: bool = True) -> str:
+        conflict = self._deferred_conflicts.get(conflict_id)
+        if conflict is None:
+            return ""
+        existing = self._records.get(conflict.existing_record_id)
+        if not prefer_new:
+            self._deferred_conflicts.pop(conflict_id, None)
+            return existing.record_id if existing else ""
+
+        proposed = conflict.proposed_record
+        evidence = list(existing.evidence if existing else ())
+        evidence.extend(proposed.evidence)
+        if existing is not None:
+            evidence.append(f"supersedes:{existing.record_id}")
+            self._records.pop(existing.record_id, None)
+        merged = replace(
+            proposed,
+            evidence=tuple(dict.fromkeys(str(x) for x in evidence if x)),
+        )
+        self._records[merged.record_id] = merged
+        self._deferred_conflicts.pop(conflict_id, None)
+        return merged.record_id
+
+    def get_record(self, record_id: str) -> Optional[MemoryRecord]:
+        record = self._records.get(record_id)
+        if record is None or record.is_expired:
+            return None
+        return record
+
 
     @staticmethod
     def _text_similarity(a: str, b: str) -> float:
@@ -502,7 +599,9 @@ class JSONMemoryRepository(InMemoryRepository):
         self._path = path or os.path.join(
             tempfile.gettempdir(), "dududa_memory.json"
         )
+        self._conflict_path = self._path + ".conflicts.json"
         self._load()
+        self._load_conflicts()
 
     # -- fail-closed 校验 --
 
@@ -538,6 +637,25 @@ class JSONMemoryRepository(InMemoryRepository):
             self._save()
         return deleted
 
+    def defer_conflict(
+        self, candidate: MemoryCandidate, existing_record_id: str
+    ) -> str:
+        conflict_id = super().defer_conflict(candidate, existing_record_id)
+        self._save_conflicts()
+        return conflict_id
+
+    def resolve_deferred(self, conflict_id: str, prefer_new: bool = True) -> str:
+        record_id = super().resolve_deferred(conflict_id, prefer_new=prefer_new)
+        self._save()
+        self._save_conflicts()
+        return record_id
+
+    def purge_expired(self) -> int:
+        purged = super().purge_expired()
+        if purged:
+            self._save()
+        return purged
+
     # -- 持久化 --
 
     def _save(self) -> None:
@@ -546,6 +664,21 @@ class JSONMemoryRepository(InMemoryRepository):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, default=str)
         os.replace(tmp, self._path)
+
+    def _save_conflicts(self) -> None:
+        data = [
+            {
+                "conflict_id": item.conflict_id,
+                "proposed_record": self._to_dict(item.proposed_record),
+                "existing_record_id": item.existing_record_id,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in self._deferred_conflicts.values()
+        ]
+        tmp = self._conflict_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, default=str)
+        os.replace(tmp, self._conflict_path)
 
     def _load(self) -> None:
         # fail-closed：先清空内存，绝不与陈旧/损坏数据混合
@@ -571,6 +704,37 @@ class JSONMemoryRepository(InMemoryRepository):
                 continue  # fail-closed：缺字段记录不参与召回
             self._records[record.record_id] = record
 
+    def _load_conflicts(self) -> None:
+        self._deferred_conflicts = {}
+        if not os.path.exists(self._conflict_path):
+            return
+        try:
+            with open(self._conflict_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            quarantine = f"{self._conflict_path}.corrupt-{int(time.time())}"
+            try:
+                os.replace(self._conflict_path, quarantine)
+            except OSError:
+                quarantine = self._conflict_path
+            _logger.warning(
+                "Memory conflict file corrupted, quarantined to: %s",
+                quarantine)
+            return
+        for item in data if isinstance(data, list) else ():
+            try:
+                proposed = self._from_dict(item["proposed_record"])
+                created_at = self._parse_datetime(item.get("created_at"))
+                conflict = DeferredMemoryConflict(
+                    conflict_id=str(item["conflict_id"]),
+                    proposed_record=proposed,
+                    existing_record_id=str(item["existing_record_id"]),
+                    created_at=created_at or datetime.now(timezone.utc),
+                )
+            except (ValueError, KeyError, TypeError):
+                continue
+            self._deferred_conflicts[conflict.conflict_id] = conflict
+
     @staticmethod
     def _to_dict(record: MemoryRecord) -> dict:
         s = record.scope
@@ -589,8 +753,23 @@ class JSONMemoryRepository(InMemoryRepository):
             "sensitivity": record.sensitivity.value,
             "visibility": record.visibility.value,
             "evidence": list(record.evidence),
+            "created_at": record.created_at.isoformat(),
             "ttl_seconds": record.ttl_seconds,
+            "access_count": record.access_count,
+            "last_accessed": (
+                record.last_accessed.isoformat()
+                if record.last_accessed is not None else None
+            ),
         }
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
 
     @classmethod
     def _from_dict(cls, item: dict) -> MemoryRecord:
@@ -616,5 +795,9 @@ class JSONMemoryRepository(InMemoryRepository):
             sensitivity=SensitivityLevel(item.get("sensitivity", "internal")),
             visibility=SensitivityLevel(item.get("visibility", "internal")),
             evidence=tuple(item.get("evidence") or ()),
+            created_at=(cls._parse_datetime(item.get("created_at"))
+                        or datetime.now(timezone.utc)),
             ttl_seconds=item.get("ttl_seconds"),
+            access_count=int(item.get("access_count", 0)),
+            last_accessed=cls._parse_datetime(item.get("last_accessed")),
         )

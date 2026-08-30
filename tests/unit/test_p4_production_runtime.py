@@ -96,8 +96,9 @@ class _FakePlugin:
         return ""
 
     def _make_scope(self, event, msg_type="text"):
-        mem_type = (MemoryType.EPISODIC if msg_type == "file"
-                    else MemoryType.GROUP_MEMORY if event.message_obj.group
+        mem_type = (MemoryType.BOT_UTTERANCE if msg_type == "bot"
+                    else MemoryType.EPISODIC if msg_type == "file"
+                    else MemoryType.GROUP_MEMORY if msg_type == "group"
                     else MemoryType.SHORT_TERM)
         return MemoryScope(
             memory_type=mem_type, platform="qq",
@@ -328,9 +329,10 @@ class TestProdOrchestrator:
                                   status=DeliveryStatus.SUCCEEDED)
         comp = await orch.acknowledge_delivery(receipt)
         assert comp.memory_write_receipts, "投递成功后应写入 bot 记忆"
-        scope = plugin._make_scope(event)
+        scope = plugin._make_scope(event, msg_type="bot")
         records = memory.query(scope, limit=10)
-        assert any("[YmaKmern]" in r.content for r in records)
+        assert any(r.source == "bot" for r in records)
+        assert all("[YmaKmern]" not in r.content for r in records)
         assert all(r.scope.bot_id == "bot1" for r in records)
 
     @pytest.mark.asyncio

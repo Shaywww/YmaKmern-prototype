@@ -85,8 +85,9 @@ class _FakePlugin:
 
     def _make_scope(self, event, msg_type="text"):
         from dududa.core.memory import MemoryType, MemoryScope
-        mem_type = (MemoryType.EPISODIC if msg_type == "file"
-                    else MemoryType.GROUP_MEMORY if event.message_obj.group
+        mem_type = (MemoryType.BOT_UTTERANCE if msg_type == "bot"
+                    else MemoryType.EPISODIC if msg_type == "file"
+                    else MemoryType.GROUP_MEMORY if msg_type == "group"
                     else MemoryType.SHORT_TERM)
         return MemoryScope(
             memory_type=mem_type, platform="qq",

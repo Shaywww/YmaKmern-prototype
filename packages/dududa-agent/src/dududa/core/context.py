@@ -126,6 +126,26 @@ class ContextBuilder:
                 actor_id=envelope.sender.actor_id,
             )
             results = self._memory_repo.query(scope)
+            bot_scope = MemScope(
+                memory_type=MemoryType.BOT_UTTERANCE,
+                platform=envelope.platform.value,
+                bot_id="dududa",
+                conversation_id=envelope.conversation.conversation_id,
+                actor_id=envelope.sender.actor_id,
+            )
+            profile_scope = MemScope(
+                memory_type=MemoryType.USER_PROFILE,
+                platform=envelope.platform.value,
+                bot_id="dududa",
+                conversation_id=envelope.conversation.conversation_id,
+                actor_id=envelope.sender.actor_id,
+            )
+            results = tuple(sorted(
+                (*results, *self._memory_repo.query(bot_scope),
+                 *self._memory_repo.query(profile_scope)),
+                key=lambda item: item.created_at,
+                reverse=True,
+            ))
             max_items = (budget.max_context_tokens // 200) if budget else 20
             authorized_memories = list(results[:max_items])
 

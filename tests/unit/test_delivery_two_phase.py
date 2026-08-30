@@ -51,7 +51,7 @@ def _orch(memory=None):
 
 def _bot_scope():
     return MemoryScope(
-        memory_type=MemoryType.SHORT_TERM, platform="qq", bot_id="dududa",
+        memory_type=MemoryType.BOT_UTTERANCE, platform="qq", bot_id="dududa",
         conversation_id="group_123", actor_id="user_1")
 
 
@@ -111,7 +111,8 @@ class TestTwoPhaseProtocol:
         assert "memory_evaluated" in phases
         assert "completed" in phases
         records = memory.query(_bot_scope(), limit=20)
-        assert any("[YmaKmern]" in r.content for r in records)
+        assert any(r.source == "bot" for r in records)
+        assert all("[YmaKmern]" not in r.content for r in records)
 
     @pytest.mark.asyncio
     async def test_failed_receipt_advances_but_skips_bot_memory(self):
@@ -126,7 +127,7 @@ class TestTwoPhaseProtocol:
         assert comp.delivery_status == DeliveryStatus.FAILED
         assert comp.final_phase == RuntimePhase.COMPLETED.value
         records = memory.query(_bot_scope(), limit=20)
-        assert not any("[YmaKmern]" in r.content for r in records)
+        assert not records
 
     @pytest.mark.asyncio
     async def test_unknown_receipt_skips_bot_memory(self):
@@ -139,7 +140,7 @@ class TestTwoPhaseProtocol:
         comp = await orch.acknowledge_delivery(receipt)
         assert comp.delivery_status == DeliveryStatus.UNKNOWN
         records = memory.query(_bot_scope(), limit=20)
-        assert not any("[YmaKmern]" in r.content for r in records)
+        assert not records
 
     @pytest.mark.asyncio
     async def test_duplicate_receipt_idempotent(self):
@@ -153,7 +154,7 @@ class TestTwoPhaseProtocol:
         comp2 = await orch.acknowledge_delivery(receipt)
         assert comp2 is comp1
         records = memory.query(_bot_scope(), limit=20)
-        bot = [r for r in records if "[YmaKmern]" in r.content]
+        bot = [r for r in records if r.source == "bot"]
         assert len(bot) == 1
 
     @pytest.mark.asyncio
@@ -180,7 +181,7 @@ class TestTwoPhaseProtocol:
         comp = await orch.acknowledge_delivery(receipt)
         assert comp.memory_write_receipts == ()
         records = memory.query(_bot_scope(), limit=20)
-        assert not any("[YmaKmern]" in r.content for r in records)
+        assert not records
 
     @pytest.mark.asyncio
     async def test_complete_without_delivery_ignored_run(self):
@@ -206,7 +207,7 @@ class TestTwoPhaseProtocol:
         assert comp.delivery_status is None
         # 依赖投递的 bot 候选不写
         records = memory.query(_bot_scope(), limit=20)
-        assert not any("[YmaKmern]" in r.content for r in records)
+        assert not records
 
 
 class TestProductionTwoPhase:
@@ -260,7 +261,7 @@ class TestProductionTwoPhase:
         comp = orch._completions[result.run_id]
         assert comp.delivery_status == DeliveryStatus.UNKNOWN
         records = memory.query(_bot_scope(), limit=20)
-        assert not any("[YmaKmern]" in r.content for r in records)
+        assert not records
 
     @pytest.mark.asyncio
     async def test_prune_keeps_fresh(self):

@@ -85,6 +85,7 @@ class DududaCore:
 
     _MEMORY_STRATEGIES = {
         "text":   MemoryType.SHORT_TERM,
+        "bot":    MemoryType.BOT_UTTERANCE,
         "file":   MemoryType.EPISODIC,
         "image":  MemoryType.EPISODIC,
         "group":  MemoryType.GROUP_MEMORY,
@@ -484,9 +485,6 @@ class DududaCore:
 
     def _make_scope(self, event, msg_type="text") -> MemoryScope:
         mem_type = self._MEMORY_STRATEGIES.get(msg_type, MemoryType.SHORT_TERM)
-        is_group = bool(getattr(event.message_obj, "group", None))
-        if is_group and msg_type == "text":
-            mem_type = MemoryType.GROUP_MEMORY
         return MemoryScope(
             memory_type=mem_type, platform="qq",
             bot_id=self._get_bot_id(event),
@@ -519,7 +517,9 @@ class DududaCore:
                 if c in recent_texts: continue
                 recent_texts.add(c)
                 record = MemoryRecord(
-                    scope=scope, source="message", content=c,
+                    scope=scope,
+                    source=("bot" if msg_type == "bot" else "message"),
+                    content=c,
                     sensitivity=sensitivity, visibility=sensitivity,
                     evidence=(f"src:{msg_type}",))
                 decision = WriteGate(self._memory).evaluate(
@@ -539,24 +539,53 @@ class DududaCore:
             viewer = str(event.get_sender_id())
             recent = list(self._memory.query_visible(
                 scope, viewer_actor_id=viewer, limit=limit))
+            bot_scope = self._make_scope(event, msg_type="bot")
+            recent += list(self._memory.query_visible(
+                bot_scope, viewer_actor_id=viewer, limit=max(2, limit // 2)))
+            profile_scope = MemoryScope(
+                memory_type=MemoryType.USER_PROFILE,
+                platform=scope.platform,
+                bot_id=scope.bot_id,
+                conversation_id=scope.conversation_id,
+                actor_id=scope.actor_id,
+                persona_id=scope.persona_id,
+            )
+            recent += list(self._memory.query_visible(
+                profile_scope, viewer_actor_id=viewer, limit=2))
+            if bool(getattr(event.message_obj, "group", None)):
+                group_scope = MemoryScope(
+                    memory_type=MemoryType.GROUP_MEMORY,
+                    platform=scope.platform,
+                    bot_id=scope.bot_id,
+                    conversation_id=scope.conversation_id,
+                    actor_id="group",
+                    persona_id=scope.persona_id,
+                )
+                recent += list(self._memory.query_visible(
+                    group_scope, viewer_actor_id=viewer, limit=2))
             if include_episodic:
                 epi_scope = self._make_scope(event, msg_type="file")
                 recent += list(self._memory.query_visible(
                     epi_scope, viewer_actor_id=viewer, limit=4))
-                seen = set()
-                deduped = []
-                for m in recent:
-                    if m.content not in seen:
-                        seen.add(m.content)
-                        deduped.append(m)
-                recent = deduped[-limit:]
+            seen = set()
+            deduped = []
+            for m in sorted(recent, key=lambda item: item.created_at):
+                if m.content not in seen:
+                    seen.add(m.content)
+                    deduped.append(m)
+            recent = deduped[-limit:]
             if not recent: return ""
             files = [m for m in recent if "[文件" in m.content[:20] or "[图片" in m.content[:20]]
             chats = [m for m in recent if m not in files]
             ordered = files + chats
             lines, used = [], 0
             for m in ordered:
-                snippet = _redact_text(m.content[:600]); lines.append(snippet)
+                snippet = _redact_text(m.content[:600])
+                if m.scope.memory_type == MemoryType.BOT_UTTERANCE:
+                    snippet = f"YmaKmern: {snippet}"
+                elif m.scope.memory_type == MemoryType.GROUP_MEMORY and m.scope.actor_id == "group":
+                    snippet = f"群聊话题摘要: {snippet}"
+                lines.append(snippet)
                 used += len(snippet)
                 if used >= budget: break
             return "【近期对话】\n" + "\n---\n".join(lines) + "\n======\n"

@@ -245,14 +245,15 @@ class TestDeliveryAckAndMemory:
 
         first = await orch.acknowledge_delivery(receipt)
         assert first.memory_write_receipts, "投递成功后应写入 bot 记忆"
-        bots = repo.query_selector(ScopeSelector(memory_type=MemoryType.SHORT_TERM))
-        assert any("[YmaKmern]" in r.content for r in bots)
+        bots = repo.query_selector(ScopeSelector(memory_type=MemoryType.BOT_UTTERANCE))
+        assert any(r.source == "bot" for r in bots)
+        assert all("[YmaKmern]" not in r.content for r in bots)
 
         second = await orch.acknowledge_delivery(receipt)
         # 幂等：重复回执返回同一完成回执，不重复写记忆（文档 2.3.15）
         assert second is first
-        bots2 = repo.query_selector(ScopeSelector(memory_type=MemoryType.SHORT_TERM))
-        assert sum(1 for r in bots2 if "[YmaKmern]" in r.content) == 1
+        bots2 = repo.query_selector(ScopeSelector(memory_type=MemoryType.BOT_UTTERANCE))
+        assert sum(1 for r in bots2 if r.source == "bot") == 1
 
     @pytest.mark.asyncio
     async def test_failed_receipt_skips_bot_memory(self):
@@ -275,9 +276,9 @@ class TestDeliveryAckAndMemory:
         completion = await orch.acknowledge_delivery(receipt)
         assert completion.memory_write_receipts, "工具记忆不依赖投递"
         epis = repo.query_selector(ScopeSelector(memory_type=MemoryType.EPISODIC))
-        bots = repo.query_selector(ScopeSelector(memory_type=MemoryType.SHORT_TERM))
+        bots = repo.query_selector(ScopeSelector(memory_type=MemoryType.BOT_UTTERANCE))
         assert epis
-        assert not any("[YmaKmern]" in r.content for r in bots)
+        assert not bots
 
     @pytest.mark.asyncio
     async def test_mismatched_receipt_rejected(self):

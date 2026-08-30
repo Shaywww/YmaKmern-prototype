@@ -639,7 +639,7 @@ class RuntimeOrchestrator:
                 ))
         if state.final_response and state.final_response.text:
             scope_bot = MemScope(
-                memory_type=MemoryType.SHORT_TERM,
+                memory_type=MemoryType.BOT_UTTERANCE,
                 platform=self._platform(state),
                 bot_id="dududa",
                 conversation_id=self._conversation_id(state),
@@ -648,7 +648,7 @@ class RuntimeOrchestrator:
             candidates.append(MemoryCandidate(
                 proposed_record=MemoryRecord(
                     scope=scope_bot,
-                    content=f"[YmaKmern]: {state.final_response.text[:500]}",
+                    content=state.final_response.text[:500],
                     source="bot",
                     sensitivity=SensitivityLevel.INTERNAL,
                     evidence=(f"run:{state.run_id}",),

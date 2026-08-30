@@ -355,10 +355,13 @@ async def handle_media(plugin, event, url, name, is_image,
         reply = await plugin._call_llm(system, user_msg, max_tokens=2048,
                                        temperature=0.3,
                                        run_id=run_id, trace_id=trace_id)
-        plugin._store_memory(event,
-            f"[文件《{name}》]:\n{text[:3000]}",
-            f"[YmaKmern]: {reply[:500]}" if reply else "",
+        plugin._store_memory(
+            event, f"[文件《{name}》]:\n{text[:3000]}",
             msg_type="file", run_id=run_id, trace_id=trace_id)
+        if reply:
+            plugin._store_memory(
+                event, reply[:500], msg_type="bot",
+                run_id=run_id, trace_id=trace_id)
         plugin._last_file_ts = time.time()
         return reply or "生成失败..."
     except Exception as e:
@@ -462,10 +465,14 @@ async def handle_image(plugin, event, data, name, ext,
     reply = await plugin._call_vision(system, user_text, b64, mime,
                                        run_id=run_id, trace_id=trace_id,
                                        **_vision_privacy_kwargs(plugin, event))
-    plugin._store_memory(event,
+    plugin._store_memory(
+        event,
         f"[{'表情包' if kind == 'sticker' else '图片'}《{name}》]:\n{reply[:3000]}",
-        f"[YmaKmern]: {reply[:500]}" if reply else "",
         msg_type="image", run_id=run_id, trace_id=trace_id)
+    if reply:
+        plugin._store_memory(
+            event, reply[:500], msg_type="bot",
+            run_id=run_id, trace_id=trace_id)
     plugin._last_file_ts = time.time()
     return reply or "(｡•́︿•̀｡) 图片读不出来..."
 
@@ -702,6 +709,14 @@ async def complete_delivery_after_send(plugin, event) -> None:
         "memory=%d latency=%dms",
         run_id, result.trace_id, receipt.status.value, comp.final_phase,
         len(comp.memory_write_receipts), latency_ms)
+    maybe_consolidate = getattr(plugin, "_maybe_consolidate_memory", None)
+    if maybe_consolidate is not None:
+        try:
+            await maybe_consolidate(
+                event, run_id=run_id, trace_id=result.trace_id)
+        except Exception as exc:
+            logger.warning(
+                "Memory consolidation failed | run_id=%s: %s", run_id, exc)
 
 
 async def _prune_stale_deliveries(plugin, max_age: float = 120.0) -> None:
@@ -784,7 +799,7 @@ async def handle_text(plugin, event, run_id="", trace_id="", perception=None) ->
                 user_input, max_tokens=1024, temperature=0.5,
                 run_id=run_id, trace_id=trace_id)
         user_snippet = f"[用户]: {preprocessed.combined_text[:300]}"
-        bot_snippet = f"[YmaKmern]: {reply[:300]}" if reply else ""
+        bot_snippet = reply[:300] if reply else ""
         if result is not None:
             if result.has_visible_output:
                 # 两段式 Phase A：交给框架发送，回执由 after_message_sent 钩子确认
@@ -803,8 +818,15 @@ async def handle_text(plugin, event, run_id="", trace_id="", perception=None) ->
             plugin._store_memory(event, user_snippet,
                                    run_id=run_id, trace_id=trace_id)
             return reply or ""
-        plugin._store_memory(event, user_snippet, bot_snippet,
+        plugin._store_memory(event, user_snippet,
                                run_id=run_id, trace_id=trace_id)
+        if bot_snippet:
+            plugin._store_memory(
+                event, bot_snippet, msg_type="bot",
+                run_id=run_id, trace_id=trace_id)
+        maybe_consolidate = getattr(plugin, "_maybe_consolidate_memory", None)
+        if maybe_consolidate is not None:
+            await maybe_consolidate(event, run_id=run_id, trace_id=trace_id)
         return reply or ""
     except Exception as e:
         logger.exception("Text error: %s", e)

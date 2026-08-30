@@ -141,8 +141,9 @@ class _Plugin:
         self.system, self.user = system, user
         return "接住这个表情啦～(≧▽≦)"
 
-    def _store_memory(self, event, incoming, outgoing, **kwargs):
-        self.memory = incoming
+    def _store_memory(self, event, *contents, **kwargs):
+        if kwargs.get("msg_type") != "bot" and contents:
+            self.memory = contents[0]
 
 
 @pytest.mark.asyncio

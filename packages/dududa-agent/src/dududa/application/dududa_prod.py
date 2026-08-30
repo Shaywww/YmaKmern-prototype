@@ -1120,8 +1120,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if bot_text and not _contains_restricted(bot_text):
                 candidates.append(MemoryCandidate(
                     proposed_record=MemoryRecord(
-                        scope=self._plugin._make_scope(event),
-                        content=f"[YmaKmern]: {bot_text}",
+                        scope=self._plugin._make_scope(event, msg_type="bot"),
+                        content=bot_text,
                         source="bot",
                         sensitivity=SensitivityLevel.INTERNAL,
                         evidence=(f"run:{state.run_id}",),
