@@ -8,7 +8,10 @@ import re
 from typing import Any
 
 from dududa.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
-from dududa.core.renderer import FactAnchor, DraftResponse, FinalResponse
+from dududa.core.renderer import (
+    FactAnchor, DraftResponse, FinalResponse, ResponseKind,
+    extract_atomic_facts, referenced_facts, unsupported_numeric_claims,
+)
 from dududa.core.capability import CapProvider, ToolObservation
 from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from dududa.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
@@ -202,6 +205,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                             draft_response=DraftResponse(
                                 text=getattr(limits, "BUDGET_HINT",
                                              "今天的对话额度用完啦～"),
+                                kind=ResponseKind.CHAT,
                                 fact_anchors=draft.fact_anchors,
                                 target_users=draft.target_users))
             state = await self._phase_render(state)
@@ -861,13 +865,64 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     async def _phase_compose_prod(self, state):
         draft_text = await self._compose_prod_text(state)
+        kind = self._response_kind(state)
+        atomic_facts = self._prod_atomic_facts(state)
+        grounding_errors = (
+            unsupported_numeric_claims(
+                draft_text, atomic_facts,
+                allowed_text=getattr(state.envelope, "text", "") or "")
+            if kind == ResponseKind.TOOL_ANSWER else ()
+        )
+        if grounding_errors:
+            trace_recorder.record(
+                event="fact_grounding", run_id=state.run_id,
+                trace_id=state.trace_id, passed=False,
+                unsupported=list(grounding_errors)[:8])
+            draft_text = self._grounding_fallback(state)
+        elif kind == ResponseKind.TOOL_ANSWER:
+            trace_recorder.record(
+                event="fact_grounding", run_id=state.run_id,
+                trace_id=state.trace_id, passed=True, unsupported=[])
         draft = DraftResponse(
             text=draft_text,
-            fact_anchors=self._prod_anchors(state),
+            kind=kind,
+            fact_anchors=referenced_facts(draft_text, atomic_facts),
             target_users=((state.envelope.sender.actor_id,)
                           if state.envelope and state.envelope.sender else ()),
         )
         return state.transition(RuntimePhase.COMPOSED, draft_response=draft)
+
+    @staticmethod
+    def _response_kind(state) -> ResponseKind:
+        has_grounded_tool_data = any(
+            getattr(obs, "success", False)
+            and getattr(obs, "data", None) is not None
+            and str(getattr(obs, "data", "")).strip() not in ("", "[]", "{}")
+            for obs in (state.tool_observations or ()))
+        return (ResponseKind.TOOL_ANSWER if has_grounded_tool_data
+                else ResponseKind.CHAT)
+
+    @staticmethod
+    def _prod_atomic_facts(state) -> tuple[FactAnchor, ...]:
+        facts: list[FactAnchor] = []
+        for obs in state.tool_observations:
+            if not getattr(obs, "success", False) or getattr(obs, "data", None) is None:
+                continue
+            facts.extend(extract_atomic_facts(
+                obs.data, source=obs.source, field=obs.capability_id))
+        return tuple(facts)
+
+    def _grounding_fallback(self, state) -> str:
+        weather = next((
+            obs for obs in state.tool_observations
+            if getattr(obs, "success", False)
+            and obs.capability_id == "mcp.weather"
+            and getattr(obs, "data", None) is not None), None)
+        if weather is not None:
+            return self._weather_fallback_reply(weather.data)
+        return (
+            "查询结果已经拿到了，但回答里的数值没通过一致性校验。"
+            "我先不把可能有误的数据发出来，你可以再问我一次。")
 
     async def _compose_prod_text(self, state) -> str:
         if state.social_decision == SocialAction.ASK:
@@ -1033,27 +1088,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return str(data)
 
     @staticmethod
-    def _prod_anchors(state):
-        """工具结果 -> 不可变事实锚点。
-
-        仅对短标量/短字符串建锚（渲染阶段要求逐字保留）；
-        结构化结果（dict/list 的 repr，如 mcp.weather={...}）跳过——
-        否则 hybrid 渲染会强制把原始 JSON 逐字塞进回复。事实由
-        compose 系统提示要求模型转述，渲染不再背负原始数据。
-        """
-        anchors = []
-        for obs in state.tool_observations:
-            if obs.success and obs.data is None:
-                continue
-            value = str(obs.data)
-            if len(value) > 80 or value.lstrip().startswith(("{", "[")):
-                continue
-            anchors.append(FactAnchor(
-                field=obs.capability_id,
-                value=value,
-                source=obs.source,
-            ))
-        return tuple(anchors)
+    def _prod_anchors(state, text=""):
+        """Compatibility wrapper for tests and control-plane callers."""
+        facts = _ProdOrchestrator._prod_atomic_facts(state)
+        return referenced_facts(text, facts) if text else facts
 
     def _build_memory_candidates(self, state):
         """生产作用域：per-event bot_id（多 bot 隔离），工具结果进 EPISODIC。"""

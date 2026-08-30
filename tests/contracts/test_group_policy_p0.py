@@ -123,17 +123,26 @@ class TestGroupPolicyStore:
     def test_set_get_roundtrip(self, tmp_path):
         store = GroupPolicyStore(str(tmp_path / "gp.json"))
         p = store.set("g1", mode="silent", reply_rate=0.3, meme_rate=0.8,
-                      ambient_enabled=True)
+                      ambient_enabled=True, vision_external_enabled=True)
         assert isinstance(p, GroupPolicy)
         assert p.mode == "silent"
         assert p.reply_rate == 0.3
         assert p.meme_rate == 0.8
         assert p.ambient_enabled is True
+        assert p.vision_external_enabled is True
         got = store.get("g1")
         assert got.mode == "silent"
         assert got.reply_rate == 0.3
         assert got.meme_rate == 0.8
         assert got.ambient_enabled is True
+        assert got.vision_external_enabled is True
+
+    def test_external_vision_is_opt_in(self, tmp_path):
+        store = GroupPolicyStore(str(tmp_path / "gp.json"))
+        policy = store.set("g1", ambient_enabled=True)
+        assert policy.vision_external_enabled is False
+        policy = store.set("g1", vision_external_enabled=True)
+        assert policy.vision_external_enabled is True
 
     def test_persist_across_reload(self, tmp_path):
         path = str(tmp_path / "gp.json")

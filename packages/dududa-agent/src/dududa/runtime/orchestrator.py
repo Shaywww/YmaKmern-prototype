@@ -27,7 +27,8 @@ from ..core.memory import (
 from ..core.memory import MemoryScope as MemScope
 from ..core.memory import WriteGateDecision
 from ..core.renderer import (
-    OCRenderer, DraftResponse, FactAnchor, FinalResponse, Persona,
+    OCRenderer, DraftResponse, FactAnchor, FinalResponse, Persona, ResponseKind,
+    extract_atomic_facts, referenced_facts,
 )
 from ..core.delivery import (
     RuntimeResult, DeliveryReceipt, CompletionReceipt,
@@ -540,9 +541,22 @@ class RuntimeOrchestrator:
 
     def _phase_compose(self, state: RuntimeState) -> RuntimeState:
         draft_text = self._build_draft_text(state)
+        has_tool_data = any(
+            obs.success and obs.data is not None
+            for obs in state.tool_observations)
+        atomic_facts: list[FactAnchor] = []
+        if has_tool_data:
+            for obs in state.tool_observations:
+                if obs.success and obs.data is not None:
+                    atomic_facts.extend(extract_atomic_facts(
+                        _REDACTOR.redact(obs.data)[0], source=obs.source,
+                        field=obs.capability_id))
         draft = DraftResponse(
             text=draft_text,
-            fact_anchors=self._extract_fact_anchors(state),
+            kind=(ResponseKind.TOOL_ANSWER if has_tool_data
+                  else ResponseKind.CHAT),
+            fact_anchors=(referenced_facts(draft_text, tuple(atomic_facts))
+                          if has_tool_data else ()),
             target_users=((state.envelope.sender.actor_id,)
                           if state.envelope and state.envelope.sender else ()),
         )
@@ -552,7 +566,15 @@ class RuntimeOrchestrator:
         if state.draft_response is None:
             return state.transition(RuntimePhase.RENDERED, final_response=FinalResponse(text=""))
         renderer = self._renderer
-        if hasattr(renderer, "render_hybrid"):
+        if state.draft_response.kind == ResponseKind.CHAT:
+            # CHAT compose is already persona-aware.  Keep deterministic
+            # validators, but never pay for a second LLM style conversion.
+            final = renderer.render(state.draft_response)
+            trace_recorder.record(
+                event="render_result", run_id=state.run_id,
+                trace_id=state.trace_id, passed=final.fact_check_passed,
+                fallback=False, attempts=0, skipped="chat_single_pass")
+        elif hasattr(renderer, "render_hybrid"):
             # 2.5.8 hybrid：LLM 风格转换 + 事实校验，失败回退确定性渲染
             final = await renderer.render_hybrid(
                 state.draft_response, run_id=state.run_id,
@@ -583,17 +605,11 @@ class RuntimeOrchestrator:
     def _extract_fact_anchors(state: RuntimeState) -> tuple[FactAnchor, ...]:
         anchors: list[FactAnchor] = []
         for obs in state.tool_observations:
-            if obs.success and obs.data is None:
+            if not obs.success or obs.data is None:
                 continue
-            value = str(_REDACTOR.redact(obs.data)[0])
-            # 结构化工具结果（dict/list repr）不做不可变锚点：
-            # hybrid 渲染会强制逐字保留原始 JSON，污染回复。
-            if len(value) > 80 or value.lstrip().startswith(("{", "[")):
-                continue
-            anchors.append(FactAnchor(
-                field=obs.capability_id,
-                value=value,
-                source=obs.source))
+            anchors.extend(extract_atomic_facts(
+                _REDACTOR.redact(obs.data)[0], source=obs.source,
+                field=obs.capability_id))
         return tuple(anchors)
 
     # ---- 记忆候选（文档 2.3.16：只产生候选，投递确认后过 Write Gate） ----

@@ -360,14 +360,38 @@ async def test_call_vision_threads_run_id(monkeypatch, tmp_path):
     monkeypatch.setattr(core_mod, "httpx",
                         types.SimpleNamespace(AsyncClient=_FakeClient))
     plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    monkeypatch.setenv("DUDUDA_VISION_ALLOW_THIRD_PARTY", "1")
     reply = await plugin._call_vision("描述图片", "这是什么", "b64", "image/png",
-                                      run_id="r10", trace_id="t10")
+                                      run_id="r10", trace_id="t10",
+                                      private_request=True)
     assert reply
     lines = rec.lines_for()
     kinds = [l["event"] for l in lines]
     assert "model_request" in kinds and "model_response" in kinds
     assert lines[0]["run_id"] == "r10"
     assert lines[1]["run_id"] == "r10"
+    assert lines[0]["data_class"] == "sensitive"
+
+
+@pytest.mark.asyncio
+async def test_third_party_vision_fails_closed_without_two_key_opt_in(
+        monkeypatch, tmp_path):
+    from dududa.application import dududa_core as core_mod
+    rec = TraceRecorder(tmp_path / "traces")
+    monkeypatch.setattr(core_mod, "trace_recorder", rec)
+    plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    monkeypatch.setenv("DUDUDA_VISION_ALLOW_THIRD_PARTY", "1")
+
+    reply = await plugin._call_vision(
+        "描述图片", "这是什么", "b64", "image/png",
+        run_id="r10-deny", trace_id="t10-deny",
+        group_id="481757927", external_opt_in=False)
+
+    assert "未授权" in reply
+    lines = rec.lines_for()
+    assert lines[-1]["event"] == "model_rejected"
+    assert lines[-1]["data_class"] == "sensitive"
+    assert lines[-1]["error_kind"] == "vision_not_authorized"
 
 
 def test_orchestrator_memory_candidates_carry_run_id():

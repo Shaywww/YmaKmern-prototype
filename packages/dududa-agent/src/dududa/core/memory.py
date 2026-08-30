@@ -446,16 +446,42 @@ class InMemoryRepository(MemoryRepository):
 
     @staticmethod
     def _text_similarity(a: str, b: str) -> float:
-        """简单的文本相似度（Jaccard）。"""
+        """Unicode-aware lexical similarity for Chinese and spaced text.
+
+        ``str.split`` turns an unspaced Chinese sentence into one token, which
+        made the old score effectively binary.  Character bigrams preserve
+        local word order without requiring a tokenizer.  We use Dice for the
+        bigrams (stable on short sentences) and retain token Jaccard for Latin
+        or already-tokenized input.
+        """
         if not a or not b:
             return 0.0
-        set_a = set(a.lower().split())
-        set_b = set(b.lower().split())
-        if not set_a or not set_b:
-            return 0.0
-        intersection = set_a & set_b
-        union = set_a | set_b
-        return len(intersection) / len(union)
+        import re
+
+        def normalized(value: str) -> str:
+            return "".join(re.findall(
+                r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaffA-Za-z0-9]",
+                value.lower()))
+
+        def bigrams(value: str) -> set[str]:
+            if len(value) < 2:
+                return {value} if value else set()
+            return {value[i:i + 2] for i in range(len(value) - 1)}
+
+        norm_a, norm_b = normalized(a), normalized(b)
+        grams_a, grams_b = bigrams(norm_a), bigrams(norm_b)
+        gram_score = 0.0
+        if grams_a and grams_b:
+            gram_score = (
+                2.0 * len(grams_a & grams_b) / (len(grams_a) + len(grams_b))
+            )
+
+        tokens_a = set(re.findall(r"[A-Za-z0-9]+", a.lower()))
+        tokens_b = set(re.findall(r"[A-Za-z0-9]+", b.lower()))
+        token_score = 0.0
+        if tokens_a and tokens_b:
+            token_score = len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+        return max(gram_score, token_score)
 
 
 

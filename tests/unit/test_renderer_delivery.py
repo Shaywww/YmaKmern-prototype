@@ -3,6 +3,8 @@ import sys; sys.path.insert(0, r"C:\Users\王\dududa20-prototype")
 import pytest
 from dududa.core.renderer import (
     DraftResponse, FactAnchor, Persona, OCRenderer, RenderValidator, FinalResponse,
+    ResponseKind, extract_atomic_facts, referenced_facts,
+    unsupported_numeric_claims,
 )
 from dududa.core.delivery import (
     RuntimeResult, DeliveryReceipt, DeliveryStatus, RunOutcome,
@@ -45,6 +47,32 @@ class TestRenderValidator:
         assert not passed
         assert any("4.5" in e for e in errors)
 
+    def test_number_and_date_format_variants_are_preserved(self):
+        validator = RenderValidator()
+        draft = DraftResponse(
+            text="温度 35.2℃，日期 2026-08-10",
+            fact_anchors=(
+                FactAnchor("temp", "35.2", kind="number", canonical="35.2"),
+                FactAnchor("date", "2026-08-10", kind="date",
+                           canonical="2026-08-10"),
+            ),
+        )
+        final = FinalResponse(text="温度是 35.2 度，日期是 2026年8月10日")
+        passed, errors = validator.validate(
+            draft, final, Persona(persona_id="test", version="1.0"))
+        assert passed, errors
+
+    def test_text_anchor_rejects_negated_contradiction(self):
+        validator = RenderValidator()
+        draft = DraftResponse(
+            text="今天有雨",
+            fact_anchors=(FactAnchor("weather", "有雨"),),
+        )
+        final = FinalResponse(text="今天没有雨")
+        passed, _ = validator.validate(
+            draft, final, Persona(persona_id="test", version="1.0"))
+        assert not passed
+
     def test_emoji_limit(self):
         v = RenderValidator()
         draft = DraftResponse(text="hello")
@@ -75,6 +103,39 @@ class TestOCRenderer:
         result = renderer.render(draft)
         assert "4.5" in result.text
         assert result.fact_check_passed
+
+
+class TestStructuredFactGrounding:
+    def test_structured_tool_data_becomes_typed_atomic_facts(self):
+        facts = extract_atomic_facts({
+            "query_city": "兰州",
+            "temp_c": 35.2,
+            "updated": "2026-08-30",
+            "forecast": [{"desc": "小雨", "humidity": 72}],
+        }, source="weather", field="mcp.weather")
+        assert any(f.field.endswith("temp_c") and f.kind == "number"
+                   and f.canonical == "35.2" for f in facts)
+        assert any(f.kind == "date" and f.canonical == "2026-08-30"
+                   for f in facts)
+        selected = referenced_facts(
+            "兰州 35.2 度，2026年8月30日更新，有小雨。", facts)
+        assert {f.canonical for f in selected} >= {
+            "兰州", "35.2", "2026-08-30", "小雨"}
+
+    def test_unsupported_quantified_claim_is_rejected(self):
+        facts = extract_atomic_facts({"score": 8.6, "reviews": 40})
+        errors = unsupported_numeric_claims(
+            "这门课评分 9.9 分，有40人评价。", facts)
+        assert any("9.9" in item for item in errors)
+        assert not any("40" in item for item in errors)
+
+    def test_numeric_claims_cannot_cross_match_other_fields(self):
+        facts = extract_atomic_facts({"score": 8.6, "review_count": 40})
+        assert unsupported_numeric_claims(
+            "这门课评分 8.6 分，有 40 人评价。", facts) == ()
+
+        errors = unsupported_numeric_claims("这门课评分 40 分。", facts)
+        assert any("评分 40" in item for item in errors)
 
     def test_fallback_on_validation_failure(self):
         renderer = OCRenderer()

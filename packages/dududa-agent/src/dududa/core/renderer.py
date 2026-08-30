@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
+from decimal import Decimal, InvalidOperation
+import re
 from typing import Awaitable, Callable, Optional
 
 from .trace_recorder import trace_recorder
@@ -16,12 +19,22 @@ from .trace_recorder import trace_recorder
 RenderLLM = Callable[..., Awaitable[str]]
 
 
+class ResponseKind(str, Enum):
+    """Response contract selected by the orchestrator, never by the model."""
+
+    CHAT = "chat"
+    TOOL_ANSWER = "tool_answer"
+
+
 @dataclass(frozen=True)
 class FactAnchor:
     """事实锚点 —— 不可被 Renderer 修改的约束。"""
     field: str
     value: str
     source: str = ""
+    kind: str = "text"       # text | number | date | bool
+    canonical: str = ""      # normalized value used by deterministic checks
+    semantic: str = ""       # score | count | temperature | ...
 
 
 @dataclass(frozen=True)
@@ -40,6 +53,232 @@ class DraftResponse:
     target_users: tuple[str, ...] = ()  # 空 = 全员
     attachments: tuple[str, ...] = ()
     immutable_constraints: tuple[str, ...] = ()  # 不可修改的硬约束
+    # Keep this last so existing positional constructors stay compatible.
+    kind: ResponseKind = ResponseKind.CHAT
+
+
+_DATE_RE = re.compile(
+    r"(?<!\d)(\d{4})\s*(?:[-/.\u5e74])\s*(\d{1,2})\s*"
+    r"(?:[-/.\u6708])\s*(\d{1,2})\s*(?:\u65e5)?(?!\d)"
+)
+_NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
+_NUMBER_WITH_UNIT_RE = re.compile(
+    r"(?<![\w.])-?\d+(?:\.\d+)?\s*"
+    r"(?:%|\u2103|\u5ea6|\u5206|\u4eba|\u540d|\u4e2a|\u95e8|\u6b21|\u5929|\u5c0f\u65f6|\u5206\u949f|\u5143|"
+    r"\u516c\u91cc|km/h|km|kph|\u5b66\u5206|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
+    re.IGNORECASE,
+)
+_LABELED_NUMBER_RE = re.compile(
+    r"(?:\u8bc4\u5206|\u5f97\u5206|\u6e29\u5ea6|\u6c14\u6e29|\u4f53\u611f|\u6e7f\u5ea6|\u98ce\u901f|\u4ef7\u683c|\u5bb9\u91cf|"
+    r"\u9009\u8bfe\u4eba\u6570|\u8bc4\u4ef7\u6570|\u5b66\u5206)\s*(?:\u4e3a|\u662f|\u7ea6|[:\uff1a])?\s*"
+    r"-?\d+(?:\.\d+)?",
+    re.IGNORECASE,
+)
+_NEGATION_PREFIXES = ("没有", "并非", "不是", "无", "没", "不")
+
+
+def _canonical_number(value: str) -> str:
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+    if not match:
+        return ""
+    try:
+        number = Decimal(match.group(0))
+    except InvalidOperation:
+        return ""
+    rendered = format(number.normalize(), "f")
+    return "0" if rendered in ("-0", "") else rendered
+
+
+def _canonical_date(value: str) -> str:
+    match = _DATE_RE.search(str(value))
+    if not match:
+        return ""
+    year, month, day = (int(part) for part in match.groups())
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return ""
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"[\s\u3000,\uff0c.\u3002:：;；()\uff08\uff09]+", "", str(value)).lower()
+
+
+def _semantic_from_field(field: str) -> str:
+    value = str(field or "").lower()
+    if any(key in value for key in ("score", "rating", "grade")):
+        return "score"
+    if any(key in value for key in ("temp", "temperature", "feels_like")):
+        return "temperature"
+    if "humidity" in value:
+        return "percentage"
+    if any(key in value for key in ("wind", "kph", "speed")):
+        return "speed"
+    if any(key in value for key in ("credit", "\u5b66\u5206")):
+        return "credits"
+    if any(key in value for key in (
+            "count", "reviews", "review_count", "capacity", "enrolled",
+            "total", "items")):
+        return "count"
+    if any(key in value for key in ("price", "cost", "amount")):
+        return "price"
+    return ""
+
+
+def _semantic_from_claim(value: str) -> str:
+    normalized = str(value or "").lower().replace(" ", "")
+    if any(key in normalized for key in ("评分", "得分")):
+        return "score"
+    if any(key in normalized for key in ("温度", "气温", "体感", "℃", "摄氏度")):
+        return "temperature"
+    if "湿度" in normalized or "%" in normalized:
+        return "percentage"
+    if any(key in normalized for key in ("风速", "km/h", "kph")):
+        return "speed"
+    if "学分" in normalized:
+        return "credits"
+    if any(key in normalized for key in (
+            "人", "名", "个", "门", "次", "条", "晚", "容量", "选课人数", "评价数")):
+        return "count"
+    if "元" in normalized or "价格" in normalized:
+        return "price"
+    if any(key in normalized for key in ("公里", "km")):
+        return "distance"
+    if any(key in normalized for key in ("天", "小时", "分钟")):
+        return "duration"
+    return ""
+
+
+def fact_anchor_present(anchor: FactAnchor, text: str) -> bool:
+    """Check a fact with format-tolerant number/date normalization."""
+    if not text:
+        return False
+    canonical = anchor.canonical or (
+        _canonical_date(anchor.value) if anchor.kind == "date"
+        else _canonical_number(anchor.value) if anchor.kind == "number"
+        else _normalize_text(anchor.value)
+    )
+    if anchor.kind == "date":
+        return canonical in {_canonical_date(m.group(0)) for m in _DATE_RE.finditer(text)}
+    if anchor.kind == "number":
+        return canonical in {_canonical_number(m.group(0)) for m in _NUMBER_RE.finditer(text)}
+    needle = _normalize_text(anchor.value)
+    haystack = _normalize_text(text)
+    if not needle or needle not in haystack:
+        return False
+    if not needle.startswith(_NEGATION_PREFIXES):
+        start = haystack.find(needle)
+        prefix = haystack[max(0, start - 3):start]
+        if any(prefix.endswith(item) for item in _NEGATION_PREFIXES):
+            return False
+    return True
+
+
+def extract_atomic_facts(data, *, source: str = "", field: str = "",
+                         limit: int = 96) -> tuple[FactAnchor, ...]:
+    """Flatten structured tool output into bounded, typed atomic facts."""
+    facts: list[FactAnchor] = []
+
+    def visit(value, path: str) -> None:
+        if len(facts) >= limit or value is None:
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                visit(item, f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, (list, tuple)):
+            for index, item in enumerate(value[:20]):
+                visit(item, f"{path}[{index}]" if path else f"[{index}]")
+            return
+        if isinstance(value, bool):
+            facts.append(FactAnchor(path or field or "value", str(value), source,
+                                    kind="bool", canonical=str(value).lower()))
+            return
+        rendered = str(value).strip()
+        if not rendered or len(rendered) > 160:
+            return
+        date = _canonical_date(rendered)
+        if date:
+            kind, canonical = "date", date
+        elif isinstance(value, (int, float, Decimal)) or re.fullmatch(
+                r"-?\d+(?:\.\d+)?", rendered) or _NUMBER_WITH_UNIT_RE.fullmatch(rendered):
+            kind, canonical = "number", _canonical_number(rendered)
+        else:
+            kind, canonical = "text", _normalize_text(rendered)
+        facts.append(FactAnchor(path or field or "value", rendered, source,
+                                kind=kind, canonical=canonical,
+                                semantic=_semantic_from_field(path or field)))
+
+    visit(data, field)
+    return tuple(facts)
+
+
+def referenced_facts(text: str, facts: tuple[FactAnchor, ...]) -> tuple[FactAnchor, ...]:
+    """Keep only tool facts actually used by the composed answer."""
+    selected: list[FactAnchor] = []
+    seen: set[tuple[str, str]] = set()
+    for fact in facts:
+        if fact.kind == "text" and len(_normalize_text(fact.value)) < 2:
+            continue
+        if fact_anchor_present(fact, text):
+            key = (fact.kind, fact.canonical or fact.value)
+            if key not in seen:
+                seen.add(key)
+                selected.append(fact)
+    return tuple(selected)
+
+
+def unsupported_numeric_claims(text: str, facts: tuple[FactAnchor, ...],
+                               *, allowed_text: str = "") -> tuple[str, ...]:
+    """Return quantified claims that are absent from tool data and user input."""
+    supported_numbers: dict[str, set[str]] = {}
+    for fact in facts:
+        if fact.kind != "number":
+            continue
+        semantic = fact.semantic or _semantic_from_field(fact.field)
+        supported_numbers.setdefault(semantic, set()).add(
+            fact.canonical or _canonical_number(fact.value))
+    supported_dates = {
+        fact.canonical or _canonical_date(fact.value)
+        for fact in facts if fact.kind == "date"
+    }
+    for match in _NUMBER_RE.finditer(allowed_text or ""):
+        supported_numbers.setdefault("", set()).add(
+            _canonical_number(match.group(0)))
+    for match in _DATE_RE.finditer(allowed_text or ""):
+        supported_dates.add(_canonical_date(match.group(0)))
+
+    errors: list[str] = []
+    date_spans: list[tuple[int, int]] = []
+    for match in _DATE_RE.finditer(text or ""):
+        date_spans.append(match.span())
+        canonical = _canonical_date(match.group(0))
+        if canonical and canonical not in supported_dates:
+            errors.append(match.group(0))
+    labeled_matches = list(_LABELED_NUMBER_RE.finditer(text or ""))
+    labeled_spans = [match.span() for match in labeled_matches]
+    claim_matches: list[tuple[re.Match[str], bool]] = [
+        (match, True) for match in labeled_matches
+    ]
+    claim_matches.extend(
+        (match, False) for match in _NUMBER_WITH_UNIT_RE.finditer(text or "")
+    )
+    seen_spans: set[tuple[int, int]] = set()
+    for match, is_labeled in sorted(claim_matches, key=lambda item: item[0].start()):
+        if any(start <= match.start() < end for start, end in date_spans):
+            continue
+        if not is_labeled and any(
+                max(match.start(), start) < min(match.end(), end)
+                for start, end in labeled_spans):
+            continue
+        if match.span() in seen_spans:
+            continue
+        seen_spans.add(match.span())
+        canonical = _canonical_number(match.group(0))
+        semantic = _semantic_from_claim(match.group(0))
+        supported = supported_numbers.get(semantic, set())
+        if canonical and canonical not in supported:
+            errors.append(match.group(0).strip())
+    return tuple(dict.fromkeys(errors))
 
 
 @dataclass(frozen=True)
@@ -101,7 +340,7 @@ class RenderValidator:
 
         # 1. 事实锚点检查
         for anchor in draft.fact_anchors:
-            if anchor.value not in final.text:
+            if not fact_anchor_present(anchor, final.text):
                 errors.append(
                     f"Fact anchor '{anchor.field}={anchor.value}' "
                     f"not preserved in rendered text"

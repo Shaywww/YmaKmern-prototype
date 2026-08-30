@@ -288,6 +288,7 @@ async def cmd_help_impl(plugin) -> str:
         "/ymakmern_memory — 查看和控制记忆",
         "/ymakmern_subscribe — 自主管理订阅",
         "/ymakmern_ambient — 群管理员控制自然参与和场景回应",
+        "/ymakmern_vision — 群管理员授权/关闭第三方图片识别",
         "/ymakmern_meme — 群管理员维护本群自定义梗库",
         "/ymakmern_cancel — 取消正在处理的任务",
         "/ymakmern_feedback — 提交脱敏改进反馈（不会自动修改机器人）",
@@ -405,10 +406,43 @@ async def cmd_group_impl(plugin, event, target=None) -> str:
         return "用法: ymakmern_group [群号]"
     policy = _group_store(plugin).get(gid)
     if policy is None:
-        return f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1 / ambient=off）"
+        return (f"群 {gid}: 未设置（normal / reply_rate=0 / meme_rate=1 / "
+                "ambient=off / external_vision=off）")
     return (f"群 {gid}: mode={policy.mode} reply_rate={policy.reply_rate} "
             f"meme_rate={policy.meme_rate} interrupt_cost={policy.interruption_cost} "
-            f"ambient={'on' if policy.ambient_enabled else 'off'}")
+            f"ambient={'on' if policy.ambient_enabled else 'off'} "
+            f"external_vision={'on' if policy.vision_external_enabled else 'off'}")
+
+
+async def cmd_group_vision_impl(plugin, event, action="status") -> str:
+    """Manage explicit per-group opt-in for an administrator-approved endpoint."""
+    try:
+        gid = str(getattr(event.message_obj, "group", None) or "")
+    except Exception:
+        gid = ""
+    if not gid:
+        return "这个命令只能在群聊中使用。"
+    action = (action or "status").strip().lower()
+    action = {"开启": "on", "关闭": "off", "状态": "status"}.get(action, action)
+    if action not in ("on", "off", "status"):
+        return "用法: /ymakmern_vision on|off|status"
+    policy = _group_store(plugin).get(gid)
+    enabled = bool(getattr(policy, "vision_external_enabled", False))
+    if action in ("on", "off"):
+        res, conf = plugin._authorize_manage(
+            event, resource="group_policy",
+            payload={"vision_external_enabled": action == "on", "group": gid})
+        if not res.allowed:
+            return _deny_hint(res, conf)
+        policy = _group_store(plugin).set(
+            gid, vision_external_enabled=(action == "on"))
+        enabled = policy.vision_external_enabled
+    state = "已授权" if enabled else "未授权"
+    return (
+        f"本群第三方图片识别：{state}。\n"
+        "开启后，群内视觉内容可能会以 Base64 发往管理员配置的"
+        "外部视觉服务；全局安全开关仍必须同时开启。"
+        "不需要时请用 /ymakmern_vision off 关闭。")
 
 
 async def cmd_group_ambient_impl(plugin, event, action="status") -> str:

@@ -102,6 +102,24 @@ class TestInMemoryRepository:
         found = repo.find_similar(similar, threshold=0.1)
         assert found is not None
 
+    def test_find_similar_chinese_near_duplicate_at_writegate_threshold(self):
+        repo = InMemoryRepository()
+        scope = MemoryScope(
+            memory_type=MemoryType.SHORT_TERM,
+            platform="qq", bot_id="dududa",
+            conversation_id="g1", actor_id="u1",
+        )
+        repo.write(MemoryRecord(
+            scope=scope, content="用户喜欢喝三分糖奶茶"))
+        candidate = MemoryRecord(
+            scope=scope, content="用户喜欢喝三分糖的奶茶")
+        assert repo.find_similar(candidate, threshold=0.8) is not None
+
+    def test_chinese_unrelated_sentences_do_not_collide(self):
+        score = InMemoryRepository._text_similarity(
+            "用户喜欢喝三分糖奶茶", "明天兰州天气有雨")
+        assert score < 0.3
+
     def test_count(self):
         repo = InMemoryRepository()
         scope = MemoryScope(
@@ -186,3 +204,20 @@ class TestWriteGate:
             )
         )
         assert gate.evaluate(candidate) == WriteGateDecision.REJECT
+
+    def test_chinese_near_duplicate_reaches_conflict_gate(self):
+        repo = InMemoryRepository()
+        scope = MemoryScope(
+            memory_type=MemoryType.SHORT_TERM,
+            platform="qq", bot_id="dududa",
+            conversation_id="g1", actor_id="u1",
+        )
+        repo.write(MemoryRecord(
+            scope=scope, content="用户喜欢喝三分糖奶茶"))
+        gate = WriteGate(repo)
+        candidate = MemoryCandidate(proposed_record=MemoryRecord(
+            scope=scope,
+            content="用户喜欢喝三分糖的奶茶",
+            source="message", evidence=("ev",),
+        ))
+        assert gate.evaluate(candidate) == WriteGateDecision.DEFER_FOR_CONFLICT

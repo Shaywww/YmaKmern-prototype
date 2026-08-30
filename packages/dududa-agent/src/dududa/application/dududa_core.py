@@ -13,6 +13,7 @@ import logging
 import random
 import time
 import httpx
+from urllib.parse import urlparse
 
 from dududa.core.trace_recorder import trace_recorder
 
@@ -652,13 +653,47 @@ class DududaCore:
                     "你可以稍后重试，或让我换一种更简单的方式回答。"
                     f"\n错误编号：{support_id}")
 
+    def _vision_provider_policy(self) -> tuple[bool, str]:
+        """Return whether the configured endpoint is third-party and its host."""
+        try:
+            base = str(self._cfg["VISION_BASE"] or "")
+        except (KeyError, TypeError, AttributeError):
+            base = ""
+        host = (urlparse(base).hostname or "").lower()
+        raw = os.environ.get(
+            "DUDUDA_VISION_TRUSTED_HOSTS", "api.openai.com")
+        if isinstance(raw, str):
+            trusted = {item.strip().lower() for item in raw.split(",")
+                       if item.strip()}
+        else:
+            trusted = {str(item).strip().lower() for item in (raw or ())
+                       if str(item).strip()}
+        return host not in trusted, host
+
     async def _call_vision(self, system, user_text, image_b64, mime,
-                           run_id="", trace_id="", skip_render=False):
+                           run_id="", trace_id="", skip_render=False,
+                           group_id="", external_opt_in=False,
+                           private_request=False):
         system = _redact_text(system or "")
         user_text = _redact_text(user_text or "")
         if _contains_restricted(user_text):
             logger.warning("Restricted content blocked from vision")
             return "这类敏感信息我不能处理哦，请不要发送密码、Token 或登录凭证。"
+        third_party, provider_host = self._vision_provider_policy()
+        globally_allowed = (
+            os.environ.get("DUDUDA_VISION_ALLOW_THIRD_PARTY", "0") == "1")
+        if third_party and not (
+                globally_allowed and (external_opt_in or private_request)):
+            logger.warning(
+                "Third-party vision blocked | host=%s group=%s global=%s opt_in=%s",
+                provider_host or "unknown", group_id or "private",
+                globally_allowed, external_opt_in)
+            trace_recorder.record(
+                event="model_rejected", run_id=run_id, trace_id=trace_id,
+                role=ModelRole.IMAGE_UNDERSTANDING.value,
+                model_id=self._cfg["VISION_MODEL"], data_class="sensitive",
+                provider_host=provider_host, error_kind="vision_not_authorized")
+            return "图片功能当前未授权向这个视觉服务发送数据。"
         try:
             body = {
                 "model": self._cfg["VISION_MODEL"],
@@ -676,7 +711,8 @@ class DududaCore:
             trace_recorder.record(
                 event="model_request", run_id=run_id, trace_id=trace_id,
                 role=ModelRole.IMAGE_UNDERSTANDING.value,
-                model_id=self._cfg["VISION_MODEL"], data_class="public")
+                model_id=self._cfg["VISION_MODEL"], data_class="sensitive",
+                provider_host=provider_host, third_party=third_party)
             async with httpx.AsyncClient(timeout=90) as c:
                 r = await c.post(
                     f"{self._cfg['VISION_BASE'].rstrip('/')}/chat/completions",

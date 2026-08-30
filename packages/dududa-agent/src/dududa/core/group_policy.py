@@ -10,6 +10,8 @@
 - meme_rate:  0..1，问候/单表情等轻松消息走 REACT 表情回复的比例；
     未命中回退 DIRECT_REPLY 文本回复（保证 @ 消息必回）；默认 1.0（保持现状）。
 - ambient_enabled: 自然参与与场景回应；默认 False，必须由群管理员主动开启。
+- vision_external_enabled: 允许本群图片发往管理员允许的第三方视觉端点；
+  默认 False，与全局第三方开关组成双重授权。
 """
 from __future__ import annotations
 
@@ -41,6 +43,7 @@ class GroupPolicy:
     meme_rate: float = 1.0
     interruption_cost: float = 0.0
     ambient_enabled: bool = False
+    vision_external_enabled: bool = False
     updated_at: float = 0.0
 
     @classmethod
@@ -54,6 +57,8 @@ class GroupPolicy:
             meme_rate=_clamp01(raw.get("meme_rate", 1.0)),
             interruption_cost=_clamp01(raw.get("interruption_cost", 0.0)),
             ambient_enabled=bool(raw.get("ambient_enabled", False)),
+            vision_external_enabled=bool(
+                raw.get("vision_external_enabled", False)),
             updated_at=float(raw.get("updated_at", 0.0) or 0.0),
         )
 
@@ -115,7 +120,8 @@ class GroupPolicyStore:
             reply_rate: Optional[float] = None,
             meme_rate: Optional[float] = None,
             interruption_cost: Optional[float] = None,
-            ambient_enabled: Optional[bool] = None) -> GroupPolicy:
+            ambient_enabled: Optional[bool] = None,
+            vision_external_enabled: Optional[bool] = None) -> GroupPolicy:
         gid = str(group_id)
         if mode is not None and mode not in GROUP_MODES:
             raise ValueError("mode 必须是 normal/silent/off 之一")
@@ -131,6 +137,9 @@ class GroupPolicyStore:
                 raw["interruption_cost"] = _clamp01(interruption_cost)
             if ambient_enabled is not None:
                 raw["ambient_enabled"] = bool(ambient_enabled)
+            if vision_external_enabled is not None:
+                raw["vision_external_enabled"] = bool(
+                    vision_external_enabled)
             raw["updated_at"] = time.time()
             self._groups[gid] = raw
             self._save()
