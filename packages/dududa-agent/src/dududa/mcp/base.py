@@ -39,11 +39,12 @@ class ServiceResult:
     @staticmethod
     def ok(data: Any, source: str = "mock", latency_ms: float = 0,
            *, cached: bool = False, data_timestamp: Optional[float] = None,
-           confidence: Optional[float] = None) -> "ServiceResult":
+           confidence: Optional[float] = None,
+           truncated: bool = False) -> "ServiceResult":
         return ServiceResult(
             success=True, data=data, source=source, latency_ms=latency_ms,
             cached=cached, data_timestamp=data_timestamp,
-            confidence=confidence)
+            confidence=confidence, truncated=truncated)
 
     @staticmethod
     def fail(error: str) -> "ServiceResult":

@@ -64,6 +64,24 @@ def _department_matches(requested: str, actual: str) -> bool:
     return bool(wanted) and (wanted in candidate or candidate in wanted)
 
 
+def _canonical_grading(value: Any) -> str:
+    """Normalize common names for USTC's grading-system field."""
+    raw = str(value or "").strip()
+    normalized = _normalise(raw)
+    if any(alias in normalized for alias in (
+            "二分制", "二等级制", "二级制", "两级制", "合格不合格")):
+        return "二分制"
+    if "五分制" in normalized or "五等级制" in normalized:
+        return "五分制"
+    if "百分制" in normalized:
+        return "百分制"
+    return raw
+
+
+def _base_course_id(value: Any) -> str:
+    return re.sub(r"\.[A-Za-z0-9]+$", "", str(value or "").strip())
+
+
 def _default_cache_dir() -> Path:
     override = os.environ.get("DUDUDA_CATALOG_CACHE_DIR", "").strip()
     if override:
@@ -92,7 +110,8 @@ class CourseScheduleService(BaseMCPService):
             service_name="course_schedule",
             description=(
                 "Search the public USTC course-offering snapshot by course, "
-                "teacher, department or semester (not personal registrar data)"
+                "teacher, department, semester or grading system such as "
+                "binary/pass-fail (not personal registrar data)"
             ),
             cache_policy=CachePolicy.LONG,
             timeout_seconds=90.0,
@@ -507,6 +526,77 @@ class CourseScheduleService(BaseMCPService):
         return await self.search(
             department=department, semester=semester, limit=limit,
         )
+
+    async def list_by_grading(
+        self, grading: str, semester: str = "", limit: int = 20,
+    ) -> ServiceResult:
+        """List unique courses by grading system, not review keywords.
+
+        The snapshot contains one row per teaching section, so results are
+        deduplicated by base course id before the requested limit is applied.
+        """
+        start = time.time()
+        target = _canonical_grading(grading)
+        if not target:
+            return ServiceResult.fail("grading is required")
+        try:
+            dataset, entry, stale = await self._load_dataset(semester)
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for course in dataset.get("courses", []):
+                if not isinstance(course, dict):
+                    continue
+                if _canonical_grading(course.get("grading")) != target:
+                    continue
+                identity = _base_course_id(course.get("id"))
+                if not identity:
+                    identity = _normalise(course.get("courseName"))
+                grouped.setdefault(identity, []).append(course)
+
+            ordered = sorted(
+                grouped.items(),
+                key=lambda item: (
+                    str(item[1][0].get("courseName", "")), item[0]),
+            )
+            bounded = max(1, min(_safe_int(limit) or 20, 100))
+            rendered = []
+            for base_id, sections in ordered[:bounded]:
+                item = self._render_course(sections[0], dataset, entry, stale)
+                teachers = sorted({
+                    teacher.strip()
+                    for section in sections
+                    for teacher in str(section.get("teacher", "")).split(",")
+                    if teacher.strip()
+                })
+                item.update({
+                    "base_course_id": base_id,
+                    "section_count": len(sections),
+                    "teachers": teachers,
+                })
+                rendered.append(item)
+            payload = {
+                "grading": target,
+                "semester": str((dataset.get("semester") or {}).get("key", "")),
+                "semester_name": str(
+                    (dataset.get("semester") or {}).get("name", "")),
+                "total_courses": len(ordered),
+                "returned_courses": len(rendered),
+                "courses": rendered,
+                "source_note": (
+                    "成绩等级制来自 USTC 公开开课缓存；评课社区不提供该筛选字段"
+                ),
+            }
+            is_truncated = len(rendered) < len(ordered)
+            return ServiceResult.ok(
+                payload,
+                source=(
+                    "ustc_catalog_snapshot_stale"
+                    if stale else "ustc_catalog_snapshot"
+                ),
+                latency_ms=(time.time() - start) * 1000,
+                truncated=is_truncated,
+            )
+        except (RuntimeError, LookupError) as exc:
+            return ServiceResult.fail(str(exc))
 
     async def list_semesters(self) -> ServiceResult:
         start = time.time()

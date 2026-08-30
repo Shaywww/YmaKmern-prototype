@@ -382,6 +382,20 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return None
         allowed = {c.capability.capability_id for c in candidates}
         cap_id, args = None, {}
+        grading_intent = any(k in text for k in (
+            "二分制", "二等级制", "二级制", "两级制",
+            "合格/不合格", "合格不合格"))
+        if grading_intent and "mcp.course_schedule" in allowed:
+            requested = re.search(r"(?:列举|找出|给我|返回)?\s*(\d+)\s*门", text)
+            limit = min(100, max(1, int(requested.group(1)))) if requested else 20
+            return GeneratedPlan(
+                goal=text,
+                steps=(PlannedStep(
+                    step_id="fb1", capability_id="mcp.course_schedule",
+                    arguments={"action": "list_by_grading",
+                               "grading": "二分制", "limit": limit},
+                    purpose="Rule fallback: filter official grading field"),),
+                rationale="RuleFallback: official grading-system lookup")
         review_intent = (
             "评课" in text
             or (("老师" in text or "课程" in text or "课" in text)
@@ -588,6 +602,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if cap_id == "mcp.weather" and args.get("action") == "search":
                 city = _ProdOrchestrator._explicit_weather_city(raw)
                 args["q"] = city or default_city
+            elif (cap_id == "mcp.course_schedule"
+                  and args.get("action") == "list_by_grading"):
+                if any(token in raw for token in (
+                        "二分制", "二等级制", "二级制", "两级制",
+                        "合格/不合格", "合格不合格")):
+                    args["grading"] = "二分制"
+                requested = re.search(
+                    r"(?:列举|找出|给我|返回)?\s*(\d+)\s*门", raw)
+                if requested:
+                    args["limit"] = min(100, max(1, int(requested.group(1))))
             elif cap_id == "mcp.news" and args.get("action") == "search":
                 # 新闻关键词：去掉新闻类填充词，保留「科技/体育/国际」等话题词
                 kw = re.sub(

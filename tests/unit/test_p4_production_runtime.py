@@ -247,6 +247,18 @@ class TestEnrichPlanArgs:
         out = main._ProdOrchestrator._enrich_plan_args(plan, "帮我查一下课程")
         assert out.steps[0].arguments["keyword"] == "操作系统"
 
+    def test_binary_grading_alias_and_requested_limit(self):
+        from dududa.planner.planner import GeneratedPlan, PlannedStep
+        plan = GeneratedPlan(goal="g", steps=(PlannedStep(
+            step_id="s1", capability_id="mcp.course_schedule",
+            arguments={"action": "list_by_grading", "limit": 20},
+            purpose="p"),))
+        out = main._ProdOrchestrator._enrich_plan_args(
+            plan, "在评课社区里列举10门二等级制课程")
+        args = out.steps[0].arguments
+        assert args["grading"] == "二分制"
+        assert args["limit"] == 10
+
 
 class TestProdOrchestrator:
     @pytest.mark.asyncio

@@ -176,7 +176,7 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
 
     services = create_all_services()
     schemas = {
-        "course_schedule": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_course","list_by_department","list_semesters"]},"keyword":{"type":"string"},"course_id":{"type":"string"},"teacher":{"type":"string"},"department":{"type":"string"},"semester":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20}}},
+        "course_schedule": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_course","list_by_department","list_by_grading","list_semesters"]},"keyword":{"type":"string"},"course_id":{"type":"string"},"teacher":{"type":"string"},"department":{"type":"string"},"grading":{"type":"string"},"semester":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}}},
         "exam_schedule": {"type":"object","properties":{"action":{"type":"string","enum":["get_exams_by_course","get_personal_exams","get_all_exams"]},"course_id":{"type":"string"},"student_id":{"type":"string"},"semester":{"type":"string"}}},
         "academic_calendar": {"type":"object","properties":{"action":{"type":"string","enum":["get_semester","get_holidays","get_events"]}}},
         "training_program": {"type":"object","properties":{"action":{"type":"string","enum":["get_program","list_majors"]},"major_id":{"type":"string"}}},

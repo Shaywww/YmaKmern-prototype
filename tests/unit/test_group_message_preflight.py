@@ -1303,6 +1303,28 @@ async def test_new_member_notice_gets_opt_in_welcome_without_llm_work(
 
 
 @pytest.mark.asyncio
+async def test_private_input_status_notice_is_silent_without_busy_or_llm_work(
+    tmp_path, monkeypatch
+):
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent(
+        "", message_id="typing-1", sender_id="3903767730", group_id="",
+        components=[],
+        raw_message={
+            "post_type": "notice", "notice_type": "notify",
+            "sub_type": "input_status", "user_id": 3903767730,
+            "self_id": int(BOT_ID),
+        },
+    )
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
+
+    assert h._is_transient_input_status_event(event)
+    assert await h.run_message_flow(plugin, event) is None
+    _assert_zero_flow_side_effects(plugin, trace, created_tasks, prune_calls)
+    assert event.call_llm_markers == [True]
+
+
+@pytest.mark.asyncio
 async def test_new_member_notice_stays_silent_when_ambient_is_off(
     tmp_path, monkeypatch
 ):
@@ -1377,7 +1399,7 @@ async def test_topic_keyword_can_make_a_low_cost_fixed_reply(
     plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
     plugin.group_ambient = GroupAmbientTracker(
         topic_reply_rate=1.0, topic_min_messages=2,
-        topic_min_unique_senders=2)
+        topic_min_unique_senders=2, random_source=lambda: 0.0)
     opening = GroupEvent(
         "刚回宿舍", message_id="topic-opening", sender_id="10040")
     assert h._preflight_group_message(

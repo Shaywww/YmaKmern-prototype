@@ -43,19 +43,22 @@ def _catalog_service(tmp_path, revision="rev-1"):
              "department": {"code": "011", "name": "计算机科学与技术学院"},
              "teacher": "王老师", "credits": 4, "hours": 80,
              "rawSchedule": "3A101: 1(1,2)", "capacity": 120, "enrolled": 118,
-             "examType": "笔试（闭卷）"},
+             "examType": "笔试（闭卷）", "grading": "二分制"},
             {"id": "011127.02", "courseName": "数据结构",
              "department": {"code": "011", "name": "计算机科学与技术学院"},
              "teacher": "李老师", "credits": 4, "hours": 80,
-             "rawSchedule": "3A102: 2(3,4)", "capacity": 100, "enrolled": 96},
+             "rawSchedule": "3A102: 2(3,4)", "capacity": 100, "enrolled": 96,
+             "grading": "二分制"},
             {"id": "011146.01", "courseName": "机器学习",
              "department": {"code": "011", "name": "计算机科学与技术学院"},
              "teacher": "陈老师", "credits": 3, "hours": 60,
-             "rawSchedule": "3A201: 3(5,6)", "capacity": 90, "enrolled": 88},
+             "rawSchedule": "3A201: 3(5,6)", "capacity": 90, "enrolled": 88,
+             "grading": "五分制"},
             {"id": "001101.01", "courseName": "常微分方程",
              "department": {"code": "001", "name": "数学科学学院"},
              "teacher": "章俊彦", "credits": 3, "hours": 60,
-             "rawSchedule": "5401: 1(8,9)", "capacity": 120, "enrolled": 113},
+             "rawSchedule": "5401: 1(8,9)", "capacity": 120, "enrolled": 113,
+             "grading": "二分制"},
         ],
     }
     svc._write_json(svc._manifest_cache_path, manifest)
@@ -88,6 +91,25 @@ class TestCourseSchedule:
         r = await svc.list_by_department("计算机学院")
         assert r.success
         assert len(r.data) >= 3
+
+    @pytest.mark.asyncio
+    async def test_list_by_grading_normalizes_alias_and_deduplicates_sections(
+        self, tmp_path
+    ):
+        svc = _catalog_service(tmp_path)
+        r = await svc.list_by_grading("二等级制", limit=10)
+        assert r.success
+        assert r.data["grading"] == "二分制"
+        assert r.data["total_courses"] == 2
+        assert r.data["returned_courses"] == 2
+        assert {item["base_course_id"] for item in r.data["courses"]} == {
+            "011127", "001101"}
+        data_structure = next(
+            item for item in r.data["courses"]
+            if item["base_course_id"] == "011127")
+        assert data_structure["section_count"] == 2
+        assert data_structure["teachers"] == ["李老师", "王老师"]
+        assert not r.truncated
 
     @pytest.mark.asyncio
     async def test_filter_teacher_and_semesters(self, tmp_path):

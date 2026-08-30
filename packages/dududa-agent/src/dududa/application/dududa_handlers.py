@@ -1498,6 +1498,27 @@ def _raw_event_mapping(event) -> Mapping:
     return {}
 
 
+def _is_transient_input_status_event(event) -> bool:
+    """Ignore OneBot typing notifications before they enter the chat flow.
+
+    NapCat emits one or more ``notice/notify/input_status`` events while a
+    person is typing.  AstrBot exposes them through ``EventMessageType.ALL``
+    with an empty message.  Treating those events as chat caused unsolicited
+    greetings while idle and leaked the active-task busy message while a real
+    reply was being composed.  Keep this deliberately narrow so native group
+    scenes such as member joins, red packets and polls are unaffected.
+    """
+    raw = _raw_event_mapping(event)
+    post_type = str(raw.get("post_type", "") or "").lower()
+    notice_type = str(raw.get("notice_type", "") or "").lower()
+    sub_type = str(raw.get("sub_type", "") or "").lower()
+    typing_kinds = {"input_status", "typing_status", "typing"}
+    return bool(
+        post_type == "notice"
+        and (notice_type in typing_kinds or sub_type in typing_kinds)
+    )
+
+
 def _jsonish_text(value) -> str:
     """Bounded card serialization used only for strong scene signatures."""
     try:
@@ -2666,6 +2687,8 @@ async def run_message_flow(plugin, event) -> str | None:
     返回要发送的文本；None 表示不回复。
     """
     _claim_astrbot_reply_route(event)
+    if _is_transient_input_status_event(event):
+        return None
     if not plugin.enabled: return None
     if plugin._is_self_message(event): return None
     if _is_framework_command(event): return None

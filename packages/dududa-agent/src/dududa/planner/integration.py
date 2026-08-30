@@ -15,6 +15,18 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
 
     # Register common intent patterns
     planner.register_pattern(
+        ("二分制", "二等级制", "二级制", "两级制", "合格/不合格", "合格不合格"),
+        {"name": "course_grading_lookup",
+         "goal": "List public USTC offerings by grading system",
+         "steps": [
+             {"step_id": "s1", "capability_id": "mcp.course_schedule",
+              "arguments": {"action": "list_by_grading",
+                            "grading": "二分制", "limit": 20},
+              "purpose": "Filter official public offerings by grading field",
+              "expected_output": "Unique pass/fail courses and total count"},
+         ]},
+    )
+    planner.register_pattern(
         ("开课情况和评价", "课程信息和评价", "开课老师评价", "开课和评课"),
         {"name": "course_catalog_with_reviews",
          "goal": "Find current public offerings and community reviews",

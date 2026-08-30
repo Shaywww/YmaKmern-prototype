@@ -289,3 +289,14 @@ class TestNewSkillPatterns:
     def test_time_pattern_still_priority_over_definition(self):
         plan = self._plan("现在是什么时间", ("mcp.clock",))
         assert plan.steps[0].capability_id == "mcp.clock"
+
+    def test_binary_grading_uses_official_catalog_not_review_search(self):
+        plan = self._plan(
+            "在评课社区里找出所有的二等级制课程",
+            ("mcp.course_schedule", "mcp.icourse_reviews"),
+        )
+        assert plan is not None and plan.steps
+        step = plan.steps[0]
+        assert step.capability_id == "mcp.course_schedule"
+        assert step.arguments.get("action") == "list_by_grading"
+        assert step.arguments.get("grading") == "二分制"
