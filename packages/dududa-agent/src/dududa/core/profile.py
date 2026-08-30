@@ -51,6 +51,12 @@ _FACT_RE = re.compile(
     r"(?:我是|我在|我来自|我读|我在读|我住在|我学)\s*"
     r"([^，。！？,.!?\n]{1,24})"
 )
+_NEGATIVE_EMOTION_RE = re.compile(
+    r"(?:好烦|烦死|累死|好累|崩溃|绷不住|难受|委屈|焦虑|压力大|"
+    r"想哭|受不了|撑不住|心态炸|emo|生气|糟心|郁闷)", re.I)
+_POSITIVE_EMOTION_RE = re.compile(
+    r"(?:好开心|开心死|太好了|成功了|赢了|爽|哈哈哈|笑死|太棒|"
+    r"牛啊|绝了|起飞|好耶)", re.I)
 
 
 def _strip_tail_particles(text: str) -> str:
@@ -111,6 +117,16 @@ def extract_profile_signals(text: str) -> tuple[str, tuple[str, ...], tuple[str,
     return name, tuple(prefs), tuple(facts)
 
 
+def detect_emotional_tone(text: str) -> str:
+    """Conservative explicit emotion signal used for short continuity only."""
+    value = str(text or "")
+    if _NEGATIVE_EMOTION_RE.search(value):
+        return "negative"
+    if _POSITIVE_EMOTION_RE.search(value):
+        return "positive"
+    return ""
+
+
 # ---- 数据模型 ----
 
 @dataclass
@@ -124,6 +140,7 @@ class UserProfile:
     preferences: tuple[str, ...] = ()
     facts: tuple[str, ...] = ()
     topic_counts: dict[str, int] = field(default_factory=dict)
+    interaction_count: int = 0
     first_seen_ts: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -144,6 +161,7 @@ class UserProfile:
             "preferences": list(self.preferences),
             "facts": list(self.facts),
             "topic_counts": dict(self.topic_counts),
+            "interaction_count": self.interaction_count,
             "first_seen_ts": self.first_seen_ts,
             "updated_at": self.updated_at,
         }
@@ -161,6 +179,7 @@ class UserProfile:
             topic_counts={
                 str(k): int(v) for k, v in (data.get("topic_counts") or {}).items()
             },
+            interaction_count=max(0, int(data.get("interaction_count", 0))),
             first_seen_ts=float(data.get("first_seen_ts", time.time())),
             updated_at=float(data.get("updated_at", time.time())),
         )
@@ -189,6 +208,8 @@ class SessionState:
     message_count: int = 0
     last_intent: str = ""
     active_topics: tuple[str, ...] = ()
+    emotional_tone: str = ""
+    emotion_turns_remaining: int = 0
     last_ts: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -201,6 +222,8 @@ class SessionState:
             "message_count": self.message_count,
             "last_intent": self.last_intent,
             "active_topics": list(self.active_topics),
+            "emotional_tone": self.emotional_tone,
+            "emotion_turns_remaining": self.emotion_turns_remaining,
             "last_ts": self.last_ts,
             "updated_at": self.updated_at,
         }
@@ -215,6 +238,9 @@ class SessionState:
             message_count=int(data.get("message_count", 0)),
             last_intent=str(data.get("last_intent", "")),
             active_topics=tuple(str(x) for x in data.get("active_topics", ())),
+            emotional_tone=str(data.get("emotional_tone", "")),
+            emotion_turns_remaining=max(
+                0, int(data.get("emotion_turns_remaining", 0))),
             last_ts=float(data.get("last_ts", time.time())),
             updated_at=float(data.get("updated_at", time.time())),
         )
@@ -309,6 +335,14 @@ class ProfileStore:
             if intents:
                 sess.last_intent = intents[0]
             sess.active_topics = _merge_topics(sess.active_topics, tuple(topics) + tuple(intents))
+            emotion = detect_emotional_tone(text)
+            if emotion:
+                sess.emotional_tone = emotion
+                sess.emotion_turns_remaining = 3
+            elif sess.emotion_turns_remaining > 0:
+                sess.emotion_turns_remaining -= 1
+                if sess.emotion_turns_remaining == 0:
+                    sess.emotional_tone = ""
             sess.last_ts = now
             sess.updated_at = now
             self._sessions[s_key] = sess
@@ -322,6 +356,7 @@ class ProfileStore:
                     user = UserProfile(
                         actor_id=actor_id, platform=platform, bot_id=bot_id,
                         first_seen_ts=now)
+                user.interaction_count += 1
                 if name:
                     user.preferred_name = name
                 if loc:

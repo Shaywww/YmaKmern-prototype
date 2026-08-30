@@ -19,7 +19,7 @@ import time
 import os
 from typing import Any, Optional
 
-from ..core.capability import ToolObservation
+from ..core.capability import ToolObservation, infer_data_timestamp
 
 _SERVICES = {}
 
@@ -154,7 +154,12 @@ class MCPProvider:
                 data=result.data if result.success else None,
                 error=result.error, source=result.source,
                 latency_ms=(time.time() - start) * 1000,
-                cached=result.cached)
+                cached=result.cached,
+                truncated=result.truncated,
+                observed_at=result.observed_at,
+                data_timestamp=(result.data_timestamp
+                                or infer_data_timestamp(result.data)),
+                confidence=result.confidence)
         except Exception as e:
             breaker.record_failure(self._server_id)
             return ToolObservation(

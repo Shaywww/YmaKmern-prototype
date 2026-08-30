@@ -456,9 +456,19 @@ class TestLLMPlanning:
     @pytest.mark.asyncio
     async def test_rule_miss_then_llm_plan_runs_tool(self):
         orch, plugin, memory, reg = _make_orchestrator()
-        plugin.llm_reply = (
+        plan_reply = (
             '{"steps":[{"capability_id":"mcp.weather",'
             '"arguments":{"q":"合肥"}}]}')
+        answer_reply = "查到了，合肥明天的天气信息已经返回。"
+        call_count = 0
+
+        async def scripted_llm(system, user_msg, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            plugin.last_user_msg = user_msg
+            return plan_reply if call_count == 1 else answer_reply
+
+        plugin._call_llm = scripted_llm
         event = _FakeEvent("合肥明天适合出门吗")
         result = await orch.run(
             _make_envelope("合肥明天适合出门吗"),
@@ -466,7 +476,8 @@ class TestLLMPlanning:
             perception=PerceptionResult(needs_tools=True, topics=("weather",)),
             event=event,
         )
-        assert result.final_response and result.final_response.text == plugin.llm_reply
+        assert result.final_response and result.final_response.text == answer_reply
+        assert "mcp.weather" not in result.final_response.text
         assert "[工具 mcp.weather]" in plugin.last_user_msg
         obs = orch._last_state.tool_observations
         assert obs and obs[0].success

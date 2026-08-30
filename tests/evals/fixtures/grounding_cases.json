@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "cases": [
+    {"tool_data": {"temp_c": 24, "humidity": 60}, "response": "现在24℃，湿度60%。", "expect_consistent": true},
+    {"tool_data": {"score": 4.7}, "response": "评分是4.7。", "expect_consistent": true},
+    {"tool_data": {"credits": 4, "hours": 64}, "response": "这门课4学分，共64学时。", "expect_consistent": true},
+    {"tool_data": {"capacity": 120, "enrolled": 98}, "response": "容量120人，目前已选98人。", "expect_consistent": true},
+    {"tool_data": {"low_temp_c": 18, "high_temp_c": 27}, "response": "气温18到27℃。", "expect_consistent": true},
+    {"tool_data": {"temp_c": 24}, "response": "现在31℃。", "expect_consistent": false},
+    {"tool_data": {"score": 4.7}, "response": "评分是4.9。", "expect_consistent": false},
+    {"tool_data": {"credits": 4}, "response": "这门课是3学分。", "expect_consistent": false},
+    {"tool_data": {"capacity": 120}, "response": "课程容量是150人。", "expect_consistent": false},
+    {"tool_data": {"humidity": 60}, "response": "湿度高达85%。", "expect_consistent": false}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "cases": [
+    {"response": "行吧，勉强帮你看看。", "casual": true, "expect_pass": true},
+    {"response": "啊这，确实有点离谱。", "casual": true, "expect_pass": true},
+    {"response": "可以啊，这次真让你装到了 (≧▽≦)", "casual": true, "expect_pass": true},
+    {"response": "先别急，我陪你把这事捋清楚。", "casual": true, "expect_pass": true},
+    {"response": "这个数据我没查到，先不乱报。", "casual": false, "expect_pass": true},
+    {"response": "结果是 24℃，但这是两小时前的缓存，出门前再看眼临近预报。", "casual": false, "expect_pass": true},
+    {"response": "你好！有什么我可以帮你的吗？", "casual": true, "expect_pass": false},
+    {"response": "对不起，我还没有学会回答这个问题。", "casual": true, "expect_pass": false},
+    {"response": "当然可以，有需要随时告诉我。", "casual": true, "expect_pass": false},
+    {"response": "1. 吃饭\n2. 睡觉\n3. 打游戏", "casual": true, "expect_pass": false},
+    {"response": "好呀！！！！！！😊", "casual": true, "expect_pass": false},
+    {"response": "作为AI，我无法拥有观点。", "casual": true, "expect_pass": false}
+  ]
+}

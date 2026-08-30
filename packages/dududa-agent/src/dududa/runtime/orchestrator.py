@@ -471,7 +471,12 @@ class RuntimeOrchestrator:
                     source=sr.source or "provider",
                     latency_ms=sr.latency_ms,
                     cached=sr.cached,
+                    sensitive=sr.sensitive,
+                    truncated=sr.truncated,
                     cancelled=sr.cancelled,
+                    observed_at=sr.observed_at,
+                    data_timestamp=sr.data_timestamp,
+                    confidence=sr.confidence,
                 ))
             return observations
         return await self._execute_direct(state, plan, max_steps)
@@ -513,7 +518,12 @@ class RuntimeOrchestrator:
                 source=sr.source or "provider",
                 latency_ms=sr.latency_ms,
                 cached=sr.cached,
+                sensitive=sr.sensitive,
+                truncated=sr.truncated,
                 cancelled=sr.cancelled,
+                observed_at=sr.observed_at,
+                data_timestamp=sr.data_timestamp,
+                confidence=sr.confidence,
             ))
         return observations
 

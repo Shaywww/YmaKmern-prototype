@@ -61,17 +61,25 @@ _DATE_RE = re.compile(
     r"(?<!\d)(\d{4})\s*(?:[-/.\u5e74])\s*(\d{1,2})\s*"
     r"(?:[-/.\u6708])\s*(\d{1,2})\s*(?:\u65e5)?(?!\d)"
 )
-_NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
+_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+)?(?![A-Za-z0-9_.])")
 _NUMBER_WITH_UNIT_RE = re.compile(
-    r"(?<![\w.])-?\d+(?:\.\d+)?\s*"
+    r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+)?\s*"
     r"(?:%|\u2103|\u5ea6|\u5206|\u4eba|\u540d|\u4e2a|\u95e8|\u6b21|\u5929|\u5c0f\u65f6|\u5206\u949f|\u5143|"
+    r"\u516c\u91cc|km/h|km|kph|\u5b66\u5206|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
+    re.IGNORECASE,
+)
+_RANGE_WITH_UNIT_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])(-?\d+(?:\.\d+)?)\s*"
+    r"(?:到|至|[-~～—])\s*(-?\d+(?:\.\d+)?)\s*"
+    r"(%|\u2103|\u5ea6|\u5206|\u4eba|\u540d|\u4e2a|\u95e8|\u6b21|\u5929|\u5c0f\u65f6|\u5206\u949f|\u5143|"
     r"\u516c\u91cc|km/h|km|kph|\u5b66\u5206|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
     re.IGNORECASE,
 )
 _LABELED_NUMBER_RE = re.compile(
     r"(?:\u8bc4\u5206|\u5f97\u5206|\u6e29\u5ea6|\u6c14\u6e29|\u4f53\u611f|\u6e7f\u5ea6|\u98ce\u901f|\u4ef7\u683c|\u5bb9\u91cf|"
     r"\u9009\u8bfe\u4eba\u6570|\u8bc4\u4ef7\u6570|\u5b66\u5206)\s*(?:\u4e3a|\u662f|\u7ea6|[:\uff1a])?\s*"
-    r"-?\d+(?:\.\d+)?",
+    r"-?\d+(?:\.\d+)?\s*(?:%|\u2103|\u5ea6|km/h|km|kph|\u5b66\u5206|\u5143)?",
     re.IGNORECASE,
 )
 _NEGATION_PREFIXES = ("没有", "并非", "不是", "无", "没", "不")
@@ -256,6 +264,17 @@ def unsupported_numeric_claims(text: str, facts: tuple[FactAnchor, ...],
             errors.append(match.group(0))
     labeled_matches = list(_LABELED_NUMBER_RE.finditer(text or ""))
     labeled_spans = [match.span() for match in labeled_matches]
+    range_spans: list[tuple[int, int]] = []
+    for match in _RANGE_WITH_UNIT_RE.finditer(text or ""):
+        if any(start <= match.start() < end for start, end in date_spans):
+            continue
+        range_spans.append(match.span())
+        semantic = _semantic_from_claim(match.group(0))
+        supported = supported_numbers.get(semantic, set())
+        for raw_number in match.groups()[:2]:
+            canonical = _canonical_number(raw_number)
+            if canonical and canonical not in supported:
+                errors.append(raw_number)
     claim_matches: list[tuple[re.Match[str], bool]] = [
         (match, True) for match in labeled_matches
     ]
@@ -270,6 +289,9 @@ def unsupported_numeric_claims(text: str, facts: tuple[FactAnchor, ...],
                 max(match.start(), start) < min(match.end(), end)
                 for start, end in labeled_spans):
             continue
+        if any(max(match.start(), start) < min(match.end(), end)
+               for start, end in range_spans):
+            continue
         if match.span() in seen_spans:
             continue
         seen_spans.add(match.span())
@@ -277,7 +299,9 @@ def unsupported_numeric_claims(text: str, facts: tuple[FactAnchor, ...],
         semantic = _semantic_from_claim(match.group(0))
         supported = supported_numbers.get(semantic, set())
         if canonical and canonical not in supported:
-            errors.append(match.group(0).strip())
+            claim = match.group(0).strip()
+            numeric = _NUMBER_WITH_UNIT_RE.search(claim)
+            errors.append(numeric.group(0).strip() if numeric else claim)
     return tuple(dict.fromkeys(errors))
 
 

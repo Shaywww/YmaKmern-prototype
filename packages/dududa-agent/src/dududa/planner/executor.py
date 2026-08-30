@@ -78,6 +78,11 @@ class StepResult:
     retries_used: int = 0
     completed: bool = False
     cancelled: bool = False
+    sensitive: bool = False
+    truncated: bool = False
+    observed_at: float = field(default_factory=_time.time)
+    data_timestamp: Optional[float] = None
+    confidence: Optional[float] = None
 
 def _error_kind(result) -> str:
     """失败类型归类（可观测性：控制台按类型统计工具失败原因）。"""
@@ -153,6 +158,9 @@ class ToolExecutor:
                 step_id=step.step_id, capability_id=cap_id,
                 success=result.success, latency_ms=round(result.latency_ms, 1),
                 retries_used=result.retries_used,
+                cached=result.cached,
+                data_timestamp=result.data_timestamp,
+                confidence=result.confidence,
                 error_kind=_error_kind(result) if err else "",
                 error=err[:200] if err else "")
             return result
@@ -171,12 +179,23 @@ class ToolExecutor:
             try:
                 # Doc 2.4.12: re-resolve Definition + re-authorize before EVERY execution
                 cap = self._reauthorize(step, ctx)
-                result = await self._call_provider(step, cap)
+                observation = await self._call_provider(step, cap)
                 ctx.retry_count = 0
                 return _done(StepResult(
-                    step_id=step.step_id, success=True, data=result,
-                    source="provider", latency_ms=(_time.time()-start)*1000,
+                    step_id=step.step_id, success=True,
+                    data=observation.data,
+                    source=getattr(observation, "source", "") or "provider",
+                    latency_ms=(getattr(observation, "latency_ms", 0.0)
+                                or (_time.time()-start)*1000),
+                    cached=bool(getattr(observation, "cached", False)),
                     retries_used=retries, completed=True,
+                    sensitive=bool(getattr(observation, "sensitive", False)),
+                    truncated=bool(getattr(observation, "truncated", False)),
+                    observed_at=(getattr(observation, "observed_at", None)
+                                 or _time.time()),
+                    data_timestamp=getattr(
+                        observation, "data_timestamp", None),
+                    confidence=getattr(observation, "confidence", None),
                 ))
             except AuthorizationError as e:
                 # Auth/permission/schema/security rejections are NOT fixed by retry
@@ -330,7 +349,7 @@ class ToolExecutor:
         obs = await provider.execute(cap, args)
         if not obs.success:
             raise RuntimeError(obs.error or "Tool execution failed")
-        return obs.data
+        return obs
 
     def get_step_result(self, step_id: str) -> Optional[StepResult]:
         return self._step_results.get(step_id)

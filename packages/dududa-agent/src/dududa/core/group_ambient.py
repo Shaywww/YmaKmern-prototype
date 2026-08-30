@@ -221,8 +221,10 @@ class GroupAmbientTracker:
                 if unique < self.topic_min_unique_senders:
                     return AmbientDecision(
                         False, "topic_too_few_senders", count, unique)
-                if (self.topic_reply_rate <= 0.0
-                        or self._random() >= self.topic_reply_rate):
+                topic_rate = self.topic_reply_rate
+                if datetime.fromtimestamp(ts).hour in (23, 0, 1, 2, 3, 4, 5):
+                    topic_rate *= 0.35
+                if topic_rate <= 0.0 or self._random() >= topic_rate:
                     return AmbientDecision(
                         False, "topic_sampled_out", count, unique)
                 reason = f"topic_{topic_category}"

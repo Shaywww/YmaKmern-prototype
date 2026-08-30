@@ -584,10 +584,11 @@ class UnifiedMCPProvider:
             if is_error:
                 logger.warning("MCP %s returned error -> mock fallback", tool)
                 return await self._mock.execute(capability, arguments)
-            from ..core.capability import ToolObservation
+            from ..core.capability import ToolObservation, infer_data_timestamp
             return ToolObservation(
                 step_id="", capability_id=self._cap_id,
-                success=True, data=data, source="mcp")
+                success=True, data=data, source="mcp",
+                data_timestamp=infer_data_timestamp(data), confidence=0.85)
         except McpError as e:
             logger.warning("MCP %s unavailable (%s) -> mock fallback",
                            tool, e.kind.value)

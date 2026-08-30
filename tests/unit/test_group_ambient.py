@@ -188,3 +188,15 @@ def test_topic_categories_are_narrow_and_explicit():
     assert GroupAmbientTracker.topic_category("摸会儿鱼") == "slacking"
     assert GroupAmbientTracker.topic_category("周末看电影") == "movie"
     assert GroupAmbientTracker.topic_category("讨论一下作业") == ""
+
+
+def test_late_night_reduces_optional_topic_chatter():
+    late = datetime(2026, 8, 30, 1, 0).timestamp()
+    tracker = GroupAmbientTracker(
+        topic_reply_rate=1.0, topic_min_messages=2,
+        topic_min_unique_senders=2, random_source=lambda: 0.5)
+    tracker.observe(group_id="g", sender_id="u1", text="我刚回来", now=late)
+    decision = tracker.observe(
+        group_id="g", sender_id="u2", text="想喝奶茶", now=late + 1)
+    assert decision.should_reply is False
+    assert decision.reason == "topic_sampled_out"

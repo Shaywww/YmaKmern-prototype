@@ -5,7 +5,8 @@ import time
 import pytest
 
 from dududa.core.profile import (
-    ProfileStore, UserProfile, SessionState, extract_profile_signals,
+    ProfileStore, UserProfile, SessionState, detect_emotional_tone,
+    extract_profile_signals,
 )
 from dududa.core.context import ContextBuilder, ContextSnapshot
 from dududa.core.envelope import (
@@ -77,6 +78,11 @@ class TestExtractSignals:
         assert extract_location("我是甘肃人") == "甘肃"
         assert extract_location("今天天气怎么样") == ""
 
+    def test_emotion_signal_is_conservative(self):
+        assert detect_emotional_tone("今天真的好烦，快崩溃了") == "negative"
+        assert detect_emotional_tone("好耶，终于成功了") == "positive"
+        assert detect_emotional_tone("这个方案不太好") == ""
+
 
 class TestProfileStore:
     def test_roundtrip(self, tmp_path):
@@ -91,6 +97,7 @@ class TestProfileStore:
         assert user.preferred_name == "小明"
         assert "数据结构" in user.preferences
         assert user.topic_counts.get("course_query", 0) >= 1
+        assert user.interaction_count == 1
         sess = store2.get_session("c1", "u1")
         assert sess is not None
         assert sess.message_count == 1
@@ -141,6 +148,21 @@ class TestProfileStore:
                                  f"我喜欢话题{i}", engaged=True)
         user = store.get_user("qq", "dududa", "u1")
         assert len(user.preferences) <= 12
+
+    def test_emotion_continuity_decays_and_persists(self, tmp_path):
+        path = str(tmp_path / "p.json")
+        store = ProfileStore(path=path)
+        store.record_message("qq", "dududa", "c1", "u1",
+                             "今天真的好烦", engaged=True)
+        session = store.get_session("c1", "u1")
+        assert session.emotional_tone == "negative"
+        assert session.emotion_turns_remaining == 3
+        store.record_message("qq", "dududa", "c1", "u1",
+                             "然后呢", engaged=True)
+        assert store.get_session("c1", "u1").emotion_turns_remaining == 2
+        loaded = ProfileStore(path=path)
+        assert loaded.get_session("c1", "u1").emotional_tone == "negative"
+        assert loaded.get_user("qq", "dududa", "u1").interaction_count == 2
 
 
 class TestContextBuilder:
@@ -223,3 +245,23 @@ class TestProdProfileLines:
         orch = object.__new__(_ProdOrchestrator)
         orch._profile_store = ProfileStore(path=str(tmp_path / "none.json"))
         assert orch._profile_lines(_state(conv="c1", actor="u1")) == ()
+
+    def test_dynamic_persona_uses_familiarity_time_and_emotion(self, tmp_path):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        store = ProfileStore(path=str(tmp_path / "p.json"))
+        for text in ("今天真的好烦", "还是有点难受", "然后呢"):
+            store.record_message(
+                "qq", "dududa", "c1", "u1", text, engaged=True)
+        orch = object.__new__(_ProdOrchestrator)
+        orch._profile_store = store
+        orch._plugin = None
+        orch._pending_event = None
+        late = datetime(
+            2026, 8, 30, 1, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        lines = orch._dynamic_persona_lines(
+            _state(conv="c1", actor="u1"), now=late)
+        assert any("聊过几次" in line for line in lines)
+        assert any("深夜低能量" in line for line in lines)
+        assert any("低落或烦躁" in line for line in lines)

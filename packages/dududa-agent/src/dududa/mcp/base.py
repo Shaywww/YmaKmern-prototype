@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+import time
 from typing import Any, Optional
 
 class CachePolicy(str, Enum):
@@ -31,10 +32,18 @@ class ServiceResult:
     latency_ms: float = 0.0
     cached: bool = False
     truncated: bool = False
+    observed_at: float = field(default_factory=time.time)
+    data_timestamp: Optional[float] = None
+    confidence: Optional[float] = None
 
     @staticmethod
-    def ok(data: Any, source: str = "mock", latency_ms: float = 0) -> "ServiceResult":
-        return ServiceResult(success=True, data=data, source=source, latency_ms=latency_ms)
+    def ok(data: Any, source: str = "mock", latency_ms: float = 0,
+           *, cached: bool = False, data_timestamp: Optional[float] = None,
+           confidence: Optional[float] = None) -> "ServiceResult":
+        return ServiceResult(
+            success=True, data=data, source=source, latency_ms=latency_ms,
+            cached=cached, data_timestamp=data_timestamp,
+            confidence=confidence)
 
     @staticmethod
     def fail(error: str) -> "ServiceResult":
@@ -66,18 +75,24 @@ class BaseMCPService(ABC):
                 data, ts = cached
                 ttl = CACHE_TTL.get(self.config.cache_policy, 0)
                 if ttl == float("inf") or (_t.time() - ts) < ttl:
-                    return ServiceResult.ok(data, "cache", (_t.time() - start) * 1000)
+                    return ServiceResult.ok(
+                        data, "cache", (_t.time() - start) * 1000,
+                        cached=True, data_timestamp=ts, confidence=0.75)
         if not self.config.mock_mode:
             try:
                 data = await self._fetch_live(**kwargs)
                 if cache_key: self._cache[cache_key] = (data, _t.time())
-                return ServiceResult.ok(data, "live", (_t.time() - start) * 1000)
+                return ServiceResult.ok(
+                    data, "live", (_t.time() - start) * 1000,
+                    data_timestamp=_t.time(), confidence=0.95)
             except Exception as e:
                 return ServiceResult.fail(str(e))
         try:
             data = self._get_mock(**kwargs)
             if cache_key: self._cache[cache_key] = (data, _t.time())
-            return ServiceResult.ok(data, "mock", (_t.time() - start) * 1000)
+            return ServiceResult.ok(
+                data, "mock", (_t.time() - start) * 1000,
+                data_timestamp=_t.time(), confidence=0.5)
         except Exception as e:
             return ServiceResult.fail(str(e))
 

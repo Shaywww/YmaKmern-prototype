@@ -514,6 +514,66 @@ def run_oc_render() -> dict:
     }
 
 
+def run_persona_quality() -> dict:
+    """Deterministic persona floor; production can add LLMPersonaJudge scores."""
+    from dududa.core.quality_eval import persona_contract_violations
+    fx = load_fixture("persona_quality_cases.json")
+    total = passed = 0
+    details = []
+    for case in fx["cases"]:
+        violations = persona_contract_violations(
+            case["response"], casual_chat=bool(case.get("casual", True)))
+        predicted_pass = not violations
+        ok = predicted_pass == bool(case["expect_pass"])
+        total += 1
+        passed += int(ok)
+        details.append({
+            "response": case["response"], "violations": list(violations),
+            "expected": case["expect_pass"], "passed": ok,
+        })
+    return {
+        "version": fx.get("version"), "cases": total, "passed": passed,
+        "accuracy": round(passed / total, 4) if total else 0.0,
+        "details": details,
+    }
+
+
+def run_grounding_quality() -> dict:
+    """Paired tool-result fixtures measure numeric hallucination escapes."""
+    from dududa.core.renderer import extract_atomic_facts, unsupported_numeric_claims
+    fx = load_fixture("grounding_cases.json")
+    total = passed = inconsistent = escaped = consistent = accepted = 0
+    details = []
+    for case in fx["cases"]:
+        facts = extract_atomic_facts(case["tool_data"], source="fixture")
+        unsupported = unsupported_numeric_claims(case["response"], facts)
+        predicted_consistent = not unsupported
+        expected = bool(case["expect_consistent"])
+        ok = predicted_consistent == expected
+        total += 1
+        passed += int(ok)
+        if expected:
+            consistent += 1
+            accepted += int(predicted_consistent)
+        else:
+            inconsistent += 1
+            escaped += int(predicted_consistent)
+        details.append({
+            "response": case["response"],
+            "unsupported": list(unsupported),
+            "expected_consistent": expected, "passed": ok,
+        })
+    return {
+        "version": fx.get("version"), "cases": total, "passed": passed,
+        "accuracy": round(passed / total, 4) if total else 0.0,
+        "hallucination_escape_rate": round(
+            escaped / inconsistent, 4) if inconsistent else 0.0,
+        "consistent_acceptance": round(
+            accepted / consistent, 4) if consistent else 0.0,
+        "details": details,
+    }
+
+
 async def run_all() -> dict:
     return {
         "perception": run_perception(),
@@ -522,4 +582,6 @@ async def run_all() -> dict:
         "tool_runtime": await run_tool_runtime(),
         "memory_writegate": run_memory_writegate(),
         "oc_render": run_oc_render(),
+        "persona_quality": run_persona_quality(),
+        "grounding_quality": run_grounding_quality(),
     }

@@ -29,5 +29,13 @@
   },
   "oc_render": {
     "anchor_retention": {"class": "deterministic", "gte": 1.0}
+  },
+  "persona_quality": {
+    "accuracy": {"class": "statistical", "gte": 0.95, "min_samples": 10}
+  },
+  "grounding_quality": {
+    "accuracy": {"class": "deterministic", "gte": 1.0},
+    "hallucination_escape_rate": {"class": "deterministic", "eq": 0.0},
+    "consistent_acceptance": {"class": "deterministic", "gte": 1.0}
   }
 }

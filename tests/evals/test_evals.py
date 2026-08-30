@@ -66,3 +66,11 @@ async def test_memory_writegate_eval():
 @pytest.mark.asyncio
 async def test_oc_render_eval():
     _assert_ok("oc_render", evals.run_oc_render())
+
+
+def test_persona_quality_eval():
+    _assert_ok("persona_quality", evals.run_persona_quality())
+
+
+def test_grounding_quality_eval():
+    _assert_ok("grounding_quality", evals.run_grounding_quality())

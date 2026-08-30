@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
+import time
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
@@ -112,10 +114,70 @@ class ToolObservation:
     sensitive: bool = False
     truncated: bool = False
     cancelled: bool = False   # 工具链取消（Doc 2.4.12：迟到结果不推进状态）
+    observed_at: float = field(default_factory=time.time)
+    data_timestamp: Optional[float] = None
+    confidence: Optional[float] = None
 
     @property
     def has_valid_data(self) -> bool:
         return self.success and self.data is not None
+
+    def freshness_seconds(self, now: Optional[float] = None) -> Optional[float]:
+        if self.data_timestamp is None:
+            return None
+        current = float(now if now is not None else time.time())
+        return max(0.0, current - float(self.data_timestamp))
+
+
+def coerce_data_timestamp(value: Any) -> Optional[float]:
+    """Normalize epoch/ISO timestamps supplied by heterogeneous tools."""
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if number > 10_000_000_000:  # milliseconds
+            number /= 1000.0
+        return number if number > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return coerce_data_timestamp(float(text))
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return None
+
+
+def infer_data_timestamp(data: Any, depth: int = 0) -> Optional[float]:
+    """Extract a source timestamp without treating arbitrary numbers as time."""
+    if depth > 3:
+        return None
+    if isinstance(data, dict):
+        for key in (
+            "data_timestamp", "generated_at", "generatedAt", "updated_at",
+            "updatedAt", "fetched_at", "published_at", "observed_at",
+            "timestamp", "time",
+        ):
+            if key in data:
+                parsed = coerce_data_timestamp(data.get(key))
+                if parsed is not None:
+                    return parsed
+        for value in list(data.values())[:12]:
+            parsed = infer_data_timestamp(value, depth + 1)
+            if parsed is not None:
+                return parsed
+    elif isinstance(data, (list, tuple)):
+        for value in data[:8]:
+            parsed = infer_data_timestamp(value, depth + 1)
+            if parsed is not None:
+                return parsed
+    return None
 
 
 class ValidatorAction(str, Enum):

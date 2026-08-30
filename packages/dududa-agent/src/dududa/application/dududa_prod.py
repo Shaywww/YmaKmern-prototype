@@ -5,14 +5,20 @@
 """
 import logging
 import re
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from dududa.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
 from dududa.core.renderer import (
     FactAnchor, DraftResponse, FinalResponse, ResponseKind,
-    extract_atomic_facts, referenced_facts, unsupported_numeric_claims,
+    extract_atomic_facts, referenced_facts,
 )
 from dududa.core.capability import CapProvider, ToolObservation
+from dududa.core.response_contract import (
+    is_progress_placeholder, validate_response_contract,
+)
 from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from dududa.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
 from dududa.runtime.orchestrator import RuntimeOrchestrator
@@ -68,7 +74,8 @@ class _ProdCapProvider(CapProvider):
                     max_tokens=int(arguments.get("max_tokens", 1024)))
             return ToolObservation(
                 step_id="", capability_id=capability.capability_id,
-                success=bool(reply), data=reply or "", source="llm")
+                success=bool(reply), data=reply or "", source="llm",
+                confidence=0.8)
         except Exception as e:
             logger.warning("CapProvider %s error: %s", capability.capability_id, e)
             return ToolObservation(
@@ -701,16 +708,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     @staticmethod
     def _is_progress_placeholder(text: str) -> bool:
-        """Reject a promise to query after the tool phase has already ended."""
-        value = " ".join(str(text or "").split()).strip()
-        if not value or len(value) > 160:
-            return False
-        promise = re.search(
-            r"(?:正在(?:查|搜|看)|这就帮你|马上(?:帮你)?|稍等|等一下|"
-            r"等我(?:一下)?|一小下|待会儿)", value)
-        factual = re.search(r"(?:-?\d+(?:\.\d+)?\s*(?:℃|%|km/h)|"
-                            r"晴|阴|多云|小雨|中雨|大雨|阵雨|下雪)", value)
-        return bool(promise and not factual)
+        """Compatibility wrapper around the unified response contract."""
+        return is_progress_placeholder(text)
 
     @staticmethod
     def _weather_fallback_reply(data: Any) -> str:
@@ -803,6 +802,47 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return ()
         return style.summary_lines() if style else ()
 
+    def _dynamic_persona_lines(self, state, now: float | None = None) -> tuple:
+        """Familiarity, local-time energy and short emotion continuity."""
+        store = getattr(self, "_profile_store", None)
+        user = session = None
+        try:
+            env = state.envelope
+            if store is not None and env is not None and env.sender is not None:
+                user = store.get_user(
+                    self._platform(state), "dududa",
+                    env.sender.actor_id)
+                session = store.get_session(
+                    self._conversation_id(state), env.sender.actor_id)
+        except Exception:
+            pass
+        count = int(getattr(user, "interaction_count", 0) or 0)
+        if count < 3:
+            familiarity = "刚认识：自然友好但别过度亲昵，也别用熟人黑话。"
+        elif count < 20:
+            familiarity = "已经聊过几次：可以更随意，偶尔轻微嘴欠。"
+        else:
+            familiarity = "是熟人：可自然接梗和轻微嘴欠，但别编造线下共同经历。"
+        current = float(now if now is not None else time.time())
+        hour = datetime.fromtimestamp(
+            current, ZoneInfo("Asia/Shanghai")).hour
+        if hour < 6:
+            energy = "深夜低能量：回复更短、更柔和，少用兴奋语气和颜文字。"
+        elif hour < 10:
+            energy = "早间正常能量：简洁自然，不强行元气满满。"
+        elif hour >= 23:
+            energy = "夜间低能量：语气放松，减少主动延伸话题。"
+        else:
+            energy = "日间正常能量：保持自然活泼，不机械亢奋。"
+        emotion = ""
+        turns = int(getattr(session, "emotion_turns_remaining", 0) or 0)
+        tone = str(getattr(session, "emotional_tone", "") or "")
+        if turns and tone == "negative":
+            emotion = "延续对方近几轮的低落或烦躁：先接住情绪，别突然开玩笑或灌鸡汤。"
+        elif turns and tone == "positive":
+            emotion = "延续对方近几轮的开心：自然一起高兴，但别夸张复读。"
+        return tuple(line for line in (familiarity, energy, emotion) if line)
+
     @staticmethod
     def _build_compose_system(p, extra: str) -> str:
         """生产回复系统提示：人设 + 公开自述知识 + 数据安全 + 风格红线。"""
@@ -853,6 +893,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "不要预告拒答话术，不要加免责声明。"
             "★ 如果用户问之前讨论过的文件内容，必须基于对话记录如实回答，不准编造。"
             "★ 工具查到的数据必须用你自己的话转述，回复中严禁出现：工具内部名称（mcp.xxx）、'[工具' 前缀、原始 JSON、Python 字典、网址列表原文。只许输出整理好的自然语言内容。"
+            "工具数据附带的状态说明用于校准措辞：标明『需向用户说明』时，必须自然交代"
+            "缓存、数据时间或可靠性，不要原样输出内部状态标签；新鲜且可靠时无需多余免责声明。"
             "工具结果出现在消息里时代表查询已经完成，必须直接给结论；"
             "严禁再说『正在查』『这就帮你看』『稍等一下』等过程性占位话术。"
             "★ 不得输出任何内部元数据或占位符，例如「工具状态」「None」「null」；"
@@ -867,22 +909,24 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         draft_text = await self._compose_prod_text(state)
         kind = self._response_kind(state)
         atomic_facts = self._prod_atomic_facts(state)
-        grounding_errors = (
-            unsupported_numeric_claims(
-                draft_text, atomic_facts,
-                allowed_text=getattr(state.envelope, "text", "") or "")
-            if kind == ResponseKind.TOOL_ANSWER else ()
+        contract = validate_response_contract(
+            draft_text,
+            kind=kind,
+            facts=atomic_facts,
+            allowed_text=getattr(state.envelope, "text", "") or "",
+            has_tool_data=(kind == ResponseKind.TOOL_ANSWER),
         )
-        if grounding_errors:
+        if not contract.passed:
             trace_recorder.record(
-                event="fact_grounding", run_id=state.run_id,
+                event="response_contract", run_id=state.run_id,
                 trace_id=state.trace_id, passed=False,
-                unsupported=list(grounding_errors)[:8])
-            draft_text = self._grounding_fallback(state)
-        elif kind == ResponseKind.TOOL_ANSWER:
+                violations=list(contract.violations),
+                unsupported=list(contract.unsupported_claims)[:8])
+            draft_text = self._contract_fallback(state, contract)
+        else:
             trace_recorder.record(
-                event="fact_grounding", run_id=state.run_id,
-                trace_id=state.trace_id, passed=True, unsupported=[])
+                event="response_contract", run_id=state.run_id,
+                trace_id=state.trace_id, passed=True, violations=[])
         draft = DraftResponse(
             text=draft_text,
             kind=kind,
@@ -891,6 +935,55 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                           if state.envelope and state.envelope.sender else ()),
         )
         return state.transition(RuntimePhase.COMPOSED, draft_response=draft)
+
+    def _contract_fallback(self, state, contract) -> str:
+        if "unsupported_numeric_claim" in contract.violations:
+            return self._grounding_fallback(state)
+        weather = next((
+            obs for obs in state.tool_observations
+            if getattr(obs, "success", False)
+            and obs.capability_id == "mcp.weather"
+            and getattr(obs, "data", None) is not None), None)
+        if ("progress_placeholder" in contract.violations
+                and weather is not None):
+            return self._weather_fallback_reply(weather.data)
+        if state.tool_observations:
+            return "查询已经结束，但刚才的回复没通过一致性检查。你再问我一次吧。"
+        return "刚才那句说得不对，我收回。你再问我一次吧。"
+
+    @staticmethod
+    def _observation_status(obs, now: float | None = None) -> tuple[str, bool]:
+        """Map actual freshness/confidence metadata to calibrated language."""
+        current = float(now if now is not None else time.time())
+        parts: list[str] = []
+        disclose = False
+        age = None
+        timestamp = getattr(obs, "data_timestamp", None)
+        if timestamp is not None:
+            age = max(0.0, current - float(timestamp))
+            if age < 300:
+                parts.append("数据刚更新")
+            elif age < 3600:
+                parts.append(f"数据约 {max(5, int(age // 300) * 5)} 分钟前更新")
+            elif age < 172800:
+                parts.append(f"数据约 {max(1, round(age / 3600))} 小时前更新")
+            else:
+                parts.append(f"数据约 {max(2, round(age / 86400))} 天前更新")
+        if getattr(obs, "cached", False):
+            parts.insert(0, "来自缓存")
+            disclose = age is None or age >= 1800
+            if age is None:
+                parts.append("缓存时间不明")
+        confidence = getattr(obs, "confidence", None)
+        if confidence is not None:
+            value = min(1.0, max(0.0, float(confidence)))
+            parts.append(f"工具置信度 {value:.2f}")
+            if value < 0.7:
+                parts.append("可靠性偏低")
+                disclose = True
+        if not parts:
+            parts.append("数据时间与置信度未知")
+        return "；".join(parts), disclose
 
     @staticmethod
     def _response_kind(state) -> ResponseKind:
@@ -993,6 +1086,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "不要玩梗或主动打断；闲聊玩梗时用一到两句口语自然接话；"
                 "中性吐槽时先共情，不抬杠、不灌鸡汤。拿不准时按认真场景处理。"
             )
+        dynamic_lines = self._dynamic_persona_lines(state)
+        if dynamic_lines:
+            extra += " 本轮动态语气：" + " ".join(dynamic_lines)
         system = self._build_compose_system(p, extra)
         mem_prefix = plugin._read_memory(event)
         if any(kw in combined for kw in ["文件", "图片", "刚才", "之前", "刚刚", "那个", "这个"]):
@@ -1019,9 +1115,14 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     "\n天气地点规则：city/query_city 是用户查询地点，必须用它称呼地点；"
                     "observation_area 只是最近数据点，绝不能拿它替换用户查询地点。"
                 )
-            tool_block = "\n".join(
-                f"[工具 {o.capability_id}]:\n{_redact_text(self._format_tool_data(o.data)[:1200])}"
-                for o in obs)
+            tool_parts = []
+            for observation in obs:
+                status, disclose = self._observation_status(observation)
+                status += "；需向用户说明" if disclose else "；无需额外说明"
+                tool_parts.append(
+                    f"[工具 {observation.capability_id}]\n[数据状态: {status}]\n"
+                    f"{_redact_text(self._format_tool_data(observation.data)[:1200])}")
+            tool_block = "\n".join(tool_parts)
             user_msg = (
                 f"{mem_prefix}{model_input}\n\n"
                 f"以下是通过工具查到的真实数据（必须基于这些数据如实回答，不准编造）：\n"
@@ -1039,15 +1140,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         reply = await plugin._call_llm(system, user_msg,
                                        max_tokens=1024, temperature=0.5,
                                        **_llm_kwargs)
-        if obs and self._is_progress_placeholder(reply):
-            weather = next(
-                (o for o in obs if o.capability_id == "mcp.weather"), None)
-            if weather is not None:
-                return self._weather_fallback_reply(weather.data)
-            return (
-                "刚才已经查完了，但结果没整理成功。"
-                "我先不拿『稍等』糊弄你，你可以再问我一次。"
-            )
         return reply or ""
 
     @staticmethod
