@@ -149,6 +149,25 @@ class GroupAmbientTracker:
                 return category
         return ""
 
+    def note_activity(self, *, group_id: str,
+                      now: float | None = None) -> float | None:
+        """Record group activity that is handled outside ``observe``.
+
+        Directed conversations, native scenes and media do not pass through
+        the ambient text evaluator. They still make the group active and must
+        therefore reset the silence clock used by the late-night check-in
+        rule. Traffic counters remain unchanged, so an explicit conversation
+        cannot manufacture a busy-group ambient trigger.
+        """
+        gid = str(group_id or "")
+        if not gid:
+            return None
+        ts = time.time() if now is None else float(now)
+        with self._lock:
+            previous = self._last_activity.get(gid)
+            self._last_activity[gid] = ts
+            return float(previous) if previous is not None else None
+
     def observe(self, *, group_id: str, sender_id: str, text: str,
                 now: float | None = None) -> AmbientDecision:
         """Record one eligible human text message and evaluate the current one."""

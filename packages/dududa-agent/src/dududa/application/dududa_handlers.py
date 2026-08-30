@@ -1075,7 +1075,7 @@ def _event_bot_id(plugin, event) -> str:
     if callable(getter):
         try:
             value = getter(event)
-            if value not in (None, ""):
+            if value not in (None, "", "0", 0):
                 return str(value)
         except Exception:
             pass
@@ -1083,10 +1083,14 @@ def _event_bot_id(plugin, event) -> str:
     if callable(getter):
         try:
             value = getter()
-            if value not in (None, ""):
+            if value not in (None, "", "0", 0):
                 return str(value)
         except Exception:
             pass
+    raw = _raw_event_mapping(event)
+    value = raw.get("self_id") if isinstance(raw, Mapping) else None
+    if value not in (None, "", "0", 0):
+        return str(value)
     return str(getattr(getattr(event, "message_obj", None),
                        "self_id", "") or "")
 
@@ -1527,6 +1531,17 @@ def _group_scene_reply(event) -> str:
     return str(getattr(event, "_dududa_group_scene_reply", "") or "")
 
 
+def _note_group_ambient_activity(plugin, group_id: str) -> None:
+    """Reset the late-night silence clock for non-ambient group traffic."""
+    tracker = getattr(plugin, "group_ambient", None)
+    note = getattr(tracker, "note_activity", None)
+    if callable(note):
+        try:
+            note(group_id=group_id)
+        except Exception:
+            logger.debug("Group ambient activity note skipped", exc_info=True)
+
+
 def _group_context_tracker(plugin) -> GroupConversationTracker:
     tracker = getattr(plugin, "group_context", None)
     if tracker is None:
@@ -1882,6 +1897,29 @@ def _semantic_media_candidate(event) -> str:
     except Exception:
         pass
     return str(getattr(event, "_dududa_semantic_media_candidate", "") or "")
+
+
+def _mark_group_multimodal(event) -> None:
+    """Mark a flow as multimodal even when QQ split the At and media events."""
+    try:
+        event.set_extra("dududa_group_multimodal", True)
+    except Exception:
+        setattr(event, "_dududa_group_multimodal", True)
+
+
+def _is_group_multimodal(event) -> bool:
+    try:
+        if event.get_extra("dududa_group_multimodal"):
+            return True
+    except Exception:
+        pass
+    return bool(getattr(event, "_dududa_group_multimodal", False))
+
+
+def _group_has_visual_media(event) -> bool:
+    """Return whether the event carries media that the vision path can read."""
+    file_url, _, is_image = _detect_media(event)
+    return bool(file_url and (is_image or _detect_media_kind(event) == "video"))
 
 
 def _group_photo_batch_limits(plugin) -> tuple[float, int, float]:
@@ -2364,20 +2402,23 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
 
     wake = bool(getattr(event, "is_at_or_wake_command", False))
     if wake:
+        _note_group_ambient_activity(plugin, group_id)
         # A casual image/sticker explicitly addressed to Dududa first becomes
         # a structured vision summary, then DeepSeek sees that summary in the
         # same group queue. Explicit OCR/description requests stay on the full
         # vision-answer path so detail is not lost to a short summary.
-        if (exact_at and has_media
+        if (exact_at and has_media and _group_has_visual_media(event)
                 and policy is not None
                 and bool(getattr(policy, "ambient_enabled", False))
                 and not _explicit_image_request(
                     getattr(event, "message_str", ""))):
             _mark_semantic_media_candidate(event, "directed_media")
+            _mark_group_multimodal(event)
         return True
 
     scene_reason = _detect_group_scene(event, msgs)
     if scene_reason:
+        _note_group_ambient_activity(plugin, group_id)
         # Native scenes are opt-in with ambient participation.  A recognised
         # but disabled/rate-limited card is consumed rather than sent to the
         # LLM as an empty or opaque message.
@@ -2407,6 +2448,7 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
             return False
 
     if has_media:
+        _note_group_ambient_activity(plugin, group_id)
         if (policy is not None
                 and str(getattr(policy, "mode", "normal")) == "normal"
                 and bool(getattr(policy, "ambient_enabled", False))):
@@ -2473,6 +2515,7 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
             and bool(getattr(policy, "ambient_enabled", False))
             and _nickname_wake(
                 str(getattr(event, "message_str", "") or ""))):
+        _note_group_ambient_activity(plugin, group_id)
         try:
             event.is_at_or_wake_command = True
         except Exception:
@@ -2669,16 +2712,28 @@ async def run_message_flow(plugin, event) -> str | None:
 
 async def _send_delayed_progress(plugin, event, task_key: str) -> None:
     try:
-        try:
-            messages = event.get_messages()
-        except Exception:
-            messages = ()
-        group_multimodal = bool(
-            _event_group_id(event) and _group_has_media(event, messages))
-        if (_is_ambient_wake(event) or _semantic_media_candidate(event)
-                or group_multimodal):
+        def suppressed() -> bool:
+            try:
+                messages = event.get_messages()
+            except Exception:
+                messages = ()
+            group_multimodal = bool(
+                _event_group_id(event)
+                and (_group_has_media(event, messages)
+                     or _is_group_multimodal(event)))
+            return bool(
+                _is_ambient_wake(event)
+                or _semantic_media_candidate(event)
+                or group_multimodal)
+
+        if suppressed():
             return
         await asyncio.sleep(float(getattr(plugin, "progress_delay", 3.0)))
+        # QQ may send a bare At first and pair it with an adjacent image only
+        # after this task starts. Re-check after the delay so the paired
+        # multimodal path cannot leak a text-task progress notification.
+        if suppressed():
+            return
         registry = getattr(plugin, "ux_tasks", None)
         active = registry.running(task_key) if registry is not None else None
         phase = active.phase if active is not None else "compose"
@@ -2723,6 +2778,7 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
         # 纯@：优先配对同人 60s 内刚发的图（QQ 拆条），没图才回通用短句
         _at_paired = _take_paired_media(plugin, event)
         if _at_paired:
+            _mark_group_multimodal(event)
             _at_reply = await handle_media(
                 plugin, event, _at_paired[0], _at_paired[1], _at_paired[2],
                 run_id=run_id, trace_id=trace_id)
@@ -2758,7 +2814,11 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
             logger.info("Flow at-pair: text in at-only window -> mentioned")
         except Exception:
             pass
-    if plugin._should_ignore(event): return None
+    # Group recipient filtering is authoritative in
+    # ``_preflight_group_message``. Re-running the older framework-flag gate
+    # here used to swallow valid At messages containing an inline QQ face.
+    if not _event_group_id(event) and plugin._should_ignore(event):
+        return None
     # Topic capsules never wake the bot. This runs only after the existing
     # recipient/ambient gates have independently admitted the current event.
     media_source = _semantic_media_candidate(event)
@@ -2799,7 +2859,8 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
         return (await _semantic_meme_reply(plugin, event, candidate)) or None
     if chat_source:
         return (await _semantic_chat_reply(plugin, event, chat_source)) or None
-    if _stash_group_media(plugin, event, msgs):
+    if (not getattr(event, "is_at_or_wake_command", False)
+            and _stash_group_media(plugin, event, msgs)):
         return None
     state = RuntimeState(run_id=run_id, trace_id=trace_id)
     action, reason = plugin._social_decision(event)

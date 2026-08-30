@@ -16,6 +16,7 @@ import pytest
 
 from dududa.application import dududa_handlers as h
 from dududa.application.dududa_core import DududaCore
+from dududa.core import group_ambient as group_ambient_module
 from dududa.core.group_policy import GroupPolicyStore
 from dududa.core.group_ambient import GroupAmbientTracker
 from dududa.core.idempotency import MessageIdempotencyRegistry
@@ -68,6 +69,14 @@ class _Reply:
 
     def __init__(self, message_id="quoted-1"):
         self.id = str(message_id)
+
+
+class _Face:
+    type = "ComponentType.Face"
+    text = ""
+
+    def __init__(self, face_id="111"):
+        self.id = str(face_id)
 
 
 class GroupEvent:
@@ -391,6 +400,109 @@ async def test_dynamic_group_circuit_allows_human_explicit_at(
     assert signal["sender_id"] == "10086"
     assert signal["explicit_at_bot"] is True
     assert signal["has_media"] is False
+
+
+@pytest.mark.asyncio
+async def test_composite_at_with_inline_face_uses_raw_self_id_and_replies(
+    tmp_path, monkeypatch,
+):
+    """A QQ face inside a directed text message must not erase its At."""
+    plugin = FlowPlugin(tmp_path)
+    raw = {
+        "self_id": BOT_ID,
+        "message": [
+            {"type": "at", "data": {"qq": BOT_ID}},
+            {"type": "text", "data": {"text": "能记住乐安吗"}},
+            {"type": "face", "data": {"id": "111"}},
+            {"type": "text", "data": {"text": "我是她妈妈呢"}},
+        ],
+    }
+    event = GroupEvent(
+        "能记住乐安吗 我是她妈妈呢",
+        message_id="direct-inline-face", at=False,
+        components=[
+            _At(BOT_ID), _Plain("能记住乐安吗"),
+            _Face("111"), _Plain("我是她妈妈呢"),
+        ],
+        raw_message=raw,
+    )
+    # Reproduce the adapter variant that exposes the real account only in the
+    # original OneBot mapping.
+    event.message_obj.self_id = "0"
+
+    async def fake_perception(plugin_, event_):
+        return PerceptionResult()
+
+    async def fake_handle_text(plugin_, event_, **kwargs):
+        return "记住啦，下次别又换说法考我～"
+
+    monkeypatch.setattr(h, "_perceive_with_model", fake_perception)
+    monkeypatch.setattr(h, "handle_text", fake_handle_text)
+    monkeypatch.setattr(h, "_take_paired_media", lambda plugin_, event_: ())
+    monkeypatch.setattr(
+        h, "_prune_stale_deliveries", lambda plugin_: asyncio.sleep(0))
+
+    reply = await h.run_message_flow(plugin, event)
+
+    assert reply == "记住啦，下次别又换说法考我～"
+    assert event.is_at_or_wake_command is True
+    assert h._semantic_media_candidate(event) == ""
+
+
+@pytest.mark.asyncio
+async def test_split_at_paired_image_never_sends_progress(tmp_path, monkeypatch):
+    plugin = FlowPlugin(tmp_path)
+    plugin.progress_delay = 0
+    event = GroupEvent(
+        f"[At:{BOT_ID}]", message_id="split-at-image", at=True,
+        components=[_At(BOT_ID)])
+
+    monkeypatch.setattr(
+        h, "_take_paired_media",
+        lambda plugin_, event_: ("/tmp/paired.jpg", "paired.jpg", True))
+    monkeypatch.setattr(h, "_drop_stash_file", lambda path: None)
+
+    async def fake_handle_media(*args, **kwargs):
+        await asyncio.sleep(0.01)
+        return "这图挺有意思的～"
+
+    monkeypatch.setattr(h, "handle_media", fake_handle_media)
+    monkeypatch.setattr(
+        h, "_prune_stale_deliveries", lambda plugin_: asyncio.sleep(0))
+
+    assert await h.run_message_flow(plugin, event) == "这图挺有意思的～"
+    assert h._is_group_multimodal(event) is True
+    assert plugin.progress_messages == []
+
+
+def test_directed_chat_resets_late_night_silence_clock(
+    tmp_path, monkeypatch,
+):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    late = group_ambient_module.datetime(2026, 8, 30, 2, 3).timestamp()
+    clock = [late - 1900]
+    monkeypatch.setattr(group_ambient_module.time, "time", lambda: clock[0])
+
+    old = GroupEvent(
+        "之前的话题", message_id="late-old", at=False,
+        sender_id="10001")
+    assert h._preflight_group_message(plugin, old, old.get_messages()) is False
+
+    clock[0] = late - 4
+    directed = GroupEvent(
+        f"[At:{BOT_ID}] 夸夸我", message_id="late-directed", at=True,
+        sender_id="10001", components=[_At(BOT_ID), _Plain("夸夸我")])
+    assert h._preflight_group_message(
+        plugin, directed, directed.get_messages()) is True
+
+    clock[0] = late
+    continuation = GroupEvent(
+        "你不是人机", message_id="late-continuation", at=False,
+        sender_id="10001")
+    assert h._preflight_group_message(
+        plugin, continuation, continuation.get_messages()) is False
+    assert h._group_scene_reply(continuation) == ""
 
 
 def test_directed_casual_sticker_routes_through_summary_then_deepseek(tmp_path):
