@@ -206,6 +206,12 @@ def create_persona_shadow(plugin_data_dir: str) -> PersonaShadowEvaluator:
     )
 
 
+def install_persona_shadow(plugin, plugin_data_dir: str) -> None:
+    """Keep AstrBot's adapter shell thin while installing shadow state."""
+    plugin.persona_shadow = create_persona_shadow(plugin_data_dir)
+    plugin._persona_shadow_tasks = set()
+
+
 def schedule_persona_shadow(plugin, event, *, user_message: str,
                             response: str, run_id: str,
                             trace_id: str) -> bool:
