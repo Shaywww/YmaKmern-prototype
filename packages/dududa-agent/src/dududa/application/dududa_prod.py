@@ -1133,6 +1133,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "旧的 /dududa_help 也仍然可用。"
             )
         if self._weather_needs_location(state, combined):
+            try:
+                event.set_extra(
+                    "dududa_pending_followup_kind", "weather_location")
+            except Exception:
+                setattr(
+                    event, "_dududa_pending_followup_kind",
+                    "weather_location")
             return "你想查哪里的天气呀？告诉我城市或区县就好～(｡･ω･｡)"
         plan_steps = tuple(
             getattr(getattr(state, "tool_plan", None), "steps", ()) or ())

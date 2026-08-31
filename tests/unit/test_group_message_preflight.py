@@ -280,9 +280,11 @@ class FlowPlugin:
 def _reset_split_at_tracker():
     h._AT_ONLY_TS.clear()
     h._RECENT_GROUP_TEXT.clear()
+    h._PENDING_FOLLOWUPS.clear()
     yield
     h._AT_ONLY_TS.clear()
     h._RECENT_GROUP_TEXT.clear()
+    h._PENDING_FOLLOWUPS.clear()
 
 
 def _install_side_effect_spies(monkeypatch):
@@ -345,6 +347,44 @@ async def test_unmentioned_plain_group_message_is_dropped_before_ux_progress_and
     assert inner_calls == []
     _assert_zero_flow_side_effects(plugin, trace, created_tasks, prune_calls)
     assert event.call_llm_markers == [True]
+
+
+@pytest.mark.asyncio
+async def test_same_user_weather_clarification_reply_wakes_without_second_at(
+    tmp_path, monkeypatch
+):
+    plugin = FlowPlugin(tmp_path)
+    prompt = GroupEvent(
+        "今天天气怎么样", message_id="weather-prompt",
+        sender_id="weather-user", at=True)
+    h._mark_pending_followup(prompt, "weather_location")
+    followup = GroupEvent(
+        "兰州", message_id="weather-city",
+        sender_id="weather-user", at=False)
+
+    async def handled_inner(plugin_arg, event_arg, *args):
+        assert plugin_arg is plugin
+        assert event_arg is followup
+        assert followup.is_at_or_wake_command is True
+        return "兰州今天晴，20℃。"
+
+    monkeypatch.setattr(h, "_run_flow_inner", handled_inner)
+    monkeypatch.setattr(
+        h, "_prune_stale_deliveries", lambda plugin: asyncio.sleep(0))
+
+    assert await h.run_message_flow(plugin, followup) == "兰州今天晴，20℃。"
+    assert h._consume_pending_followup(followup, "兰州") == ""
+
+
+def test_pending_weather_followup_is_isolated_by_sender(tmp_path):
+    prompt = GroupEvent(
+        "今天天气怎么样", message_id="weather-isolated-prompt",
+        sender_id="weather-owner", at=True)
+    h._mark_pending_followup(prompt, "weather_location")
+    other = GroupEvent(
+        "兰州", message_id="weather-other",
+        sender_id="another-user", at=False)
+    assert h._consume_pending_followup(other, "兰州") == ""
 
 
 @pytest.mark.asyncio

@@ -2623,6 +2623,20 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
             _mark_group_multimodal(event)
         return True
 
+    followup_kind = _consume_pending_followup(
+        event, str(getattr(event, "message_str", "") or ""))
+    if followup_kind:
+        _note_group_ambient_activity(plugin, group_id)
+        try:
+            event.is_at_or_wake_command = True
+            event.set_extra("dududa_direct_followup_kind", followup_kind)
+        except Exception:
+            setattr(event, "_dududa_direct_followup_kind", followup_kind)
+        logger.info(
+            "Group directed follow-up wake | group=%s sender=%s kind=%s",
+            group_id, sender_id, followup_kind)
+        return True
+
     scene_reason = _detect_group_scene(event, msgs)
     if scene_reason:
         _note_group_ambient_activity(plugin, group_id)
@@ -2888,6 +2902,9 @@ async def run_message_flow(plugin, event) -> str | None:
             _sanitize_conversational_reply(
                 _strip_tool_leak(reply),
                 str(getattr(event, "message_str", "") or "")))
+        followup_kind = _requested_followup_kind(event)
+        if reply and followup_kind:
+            _mark_pending_followup(event, followup_kind)
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               reply=(reply or "")[:200])
@@ -3233,9 +3250,11 @@ _AT_ONLY_REPLIES = (
 # 一个人的纯 @ 把其他人或另一个 Bot 的后续消息误当成拆条。
 _AT_ONLY_TS: dict[tuple[str, str, str, str], float] = {}
 _RECENT_GROUP_TEXT: dict[tuple[str, str, str, str], tuple[float, str]] = {}
+_PENDING_FOLLOWUPS: dict[tuple[str, str, str, str], tuple[float, str]] = {}
 _AT_ONLY_WINDOW_SECONDS = 5.0
 _AT_ONLY_MAX_ENTRIES = 1024
 _AT_ONLY_LOCK = threading.Lock()
+_FOLLOWUP_WINDOW_SECONDS = 120.0
 
 
 def _nonempty_event_value(value) -> str:
@@ -3288,6 +3307,56 @@ def _at_only_key(event) -> tuple[str, str, str, str] | None:
     return platform, group, sender, bot
 
 
+def _requested_followup_kind(event) -> str:
+    try:
+        value = event.get_extra("dududa_pending_followup_kind")
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return str(getattr(
+        event, "_dududa_pending_followup_kind", "") or "")
+
+
+def _mark_pending_followup(event, kind: str) -> None:
+    """Open one short, same-user continuation window after a bot question."""
+    key = _at_only_key(event)
+    value = str(kind or "").strip()
+    if key is None or value not in {"weather_location"}:
+        return
+    now = time.monotonic()
+    with _AT_ONLY_LOCK:
+        _prune_at_only_ts(now)
+        if (key not in _PENDING_FOLLOWUPS
+                and len(_PENDING_FOLLOWUPS) >= _AT_ONLY_MAX_ENTRIES):
+            oldest = min(
+                _PENDING_FOLLOWUPS,
+                key=lambda item: _PENDING_FOLLOWUPS[item][0])
+            _PENDING_FOLLOWUPS.pop(oldest, None)
+        _PENDING_FOLLOWUPS[key] = (now, value)
+
+
+def _consume_pending_followup(event, text: str) -> str:
+    """Consume an eligible direct continuation; unrelated traffic closes it."""
+    key = _at_only_key(event)
+    if key is None:
+        return ""
+    now = time.monotonic()
+    with _AT_ONLY_LOCK:
+        _prune_at_only_ts(now)
+        stored = _PENDING_FOLLOWUPS.pop(key, None)
+    if stored is None:
+        return ""
+    kind = stored[1]
+    value = " ".join(str(text or "").split()).strip()
+    if kind == "weather_location":
+        if value in {"不知道", "不清楚", "算了", "不用了", "没事"}:
+            return ""
+        if re.fullmatch(r"[一-鿿]{2,12}", value):
+            return kind
+    return ""
+
+
 def _prune_at_only_ts(now: float) -> None:
     """Drop expired windows. Caller must hold ``_AT_ONLY_LOCK``."""
     expired = [key for key, marked_at in _AT_ONLY_TS.items()
@@ -3300,6 +3369,12 @@ def _prune_at_only_ts(now: float) -> None:
     ]
     for key in expired_text:
         _RECENT_GROUP_TEXT.pop(key, None)
+    expired_followups = [
+        key for key, (marked_at, _) in _PENDING_FOLLOWUPS.items()
+        if now - marked_at >= _FOLLOWUP_WINDOW_SECONDS
+    ]
+    for key in expired_followups:
+        _PENDING_FOLLOWUPS.pop(key, None)
 
 
 def _mark_recent_group_text(event) -> None:
