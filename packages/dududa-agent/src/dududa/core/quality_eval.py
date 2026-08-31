@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Awaitable, Callable
 
 
@@ -89,3 +93,103 @@ class LLMPersonaJudge:
             non_customer_tone=score("non_customer_tone"),
             rationale=str(payload["rationale"])[:500],
         )
+
+
+@dataclass(frozen=True)
+class PersonaQualityRecord:
+    """Privacy-minimised online persona score.
+
+    Raw messages and replies deliberately are not fields of this record.  The
+    opaque scope hash is only useful for detecting repeated regressions inside
+    one conversation and cannot reveal the QQ/group identifier by itself.
+    """
+
+    run_id: str
+    trace_id: str
+    scope_hash: str
+    is_group: bool
+    persona_consistency: float
+    conversationality: float
+    non_customer_tone: float
+    overall: float
+    violations: tuple[str, ...] = ()
+    observed_at: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "observed_at": self.observed_at or time.time(),
+            "run_id": self.run_id,
+            "trace_id": self.trace_id,
+            "scope_hash": self.scope_hash,
+            "is_group": self.is_group,
+            "persona_consistency": self.persona_consistency,
+            "conversationality": self.conversationality,
+            "non_customer_tone": self.non_customer_tone,
+            "overall": self.overall,
+            "violations": list(self.violations),
+        }
+
+
+class PersonaQualityStore:
+    """Daily JSONL score store with aggregate-only reads."""
+
+    def __init__(self, directory):
+        self._directory = Path(directory)
+        self._lock = threading.Lock()
+
+    def append(self, record: PersonaQualityRecord) -> None:
+        payload = record.to_dict()
+        day = time.strftime(
+            "%Y-%m-%d", time.localtime(float(payload["observed_at"])))
+        path = self._directory / f"{day}.jsonl"
+        line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        self._directory.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+
+    def summary(self, days: int = 7, now: float | None = None) -> dict:
+        """Return score trends without exposing individual conversation text."""
+        now_dt = datetime.fromtimestamp(now or time.time())
+        records: list[dict] = []
+        for offset in range(max(1, int(days))):
+            day = (now_dt - timedelta(days=offset)).strftime("%Y-%m-%d")
+            path = self._directory / f"{day}.jsonl"
+            if not path.is_file():
+                continue
+            try:
+                with path.open(encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            payload = json.loads(line)
+                        except (TypeError, ValueError):
+                            continue
+                        if isinstance(payload, dict):
+                            records.append(payload)
+            except OSError:
+                continue
+        count = len(records)
+
+        def average(field: str) -> float:
+            values = []
+            for item in records:
+                try:
+                    values.append(float(item[field]))
+                except (KeyError, TypeError, ValueError):
+                    pass
+            return round(sum(values) / len(values), 4) if values else 0.0
+
+        violation_counts: dict[str, int] = {}
+        for item in records:
+            for violation in item.get("violations", ()):
+                key = str(violation)
+                violation_counts[key] = violation_counts.get(key, 0) + 1
+        return {
+            "days": max(1, int(days)),
+            "sample_count": count,
+            "overall": average("overall"),
+            "persona_consistency": average("persona_consistency"),
+            "conversationality": average("conversationality"),
+            "non_customer_tone": average("non_customer_tone"),
+            "violations": violation_counts,
+        }

@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 20
     env:
       DUDUDA_PLUGIN_DIR: ${{ github.workspace }}/plugin
+      PYTHONHASHSEED: "0"
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Shanghai
     steps:
       - name: Check out runtime
         uses: actions/checkout@v4
@@ -37,5 +40,26 @@ jobs:
         working-directory: runtime
         run: python -m compileall -q packages/dududa-agent/src tests
       - name: Test
+        id: pytest
+        continue-on-error: true
         working-directory: runtime
-        run: python -m pytest -q -m "not net"
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -m "not net" --junitxml=pytest-report.xml \
+            2>&1 | tee pytest-output.log
+      - name: Publish test summary
+        if: always()
+        working-directory: runtime
+        shell: bash
+        run: |
+          {
+            echo "## Pytest"
+            echo
+            echo '```text'
+            tail -n 160 pytest-output.log 2>/dev/null || echo "pytest did not start"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce test result
+        if: steps.pytest.outcome != 'success'
+        run: exit 1

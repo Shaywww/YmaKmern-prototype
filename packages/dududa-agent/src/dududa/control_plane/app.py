@@ -617,6 +617,50 @@ def _register_routes(app: FastAPI):
             'error_rate': (errors / n) if n else 0.0,
         }
 
+    @app.get('/metrics/persona')
+    async def metrics_persona():
+        """线上人格影子评分趋势；只聚合分数和违规标签，不返回原始对话。"""
+        events = _load_trace_events(app.state.trace_dir)
+        scores = [e for e in events
+                  if e.get('event') == 'persona_shadow_score']
+        errors = sum(1 for e in events
+                     if e.get('event') == 'persona_shadow_error')
+        dimensions = (
+            'persona_consistency', 'conversationality',
+            'non_customer_tone', 'overall',
+        )
+
+        def average(rows: list, field: str) -> float | None:
+            values = [float(row[field]) for row in rows
+                      if isinstance(row.get(field), (int, float))]
+            return round(sum(values) / len(values), 4) if values else None
+
+        by_day: dict[str, list] = {}
+        violations: Counter = Counter()
+        for event in scores:
+            day = str(event.get('ts', ''))[:10] or '?'
+            by_day.setdefault(day, []).append(event)
+            for violation in event.get('violations', []):
+                if isinstance(violation, str) and violation:
+                    violations[violation] += 1
+
+        return {
+            'samples': len(scores),
+            'errors': errors,
+            'averages': {field: average(scores, field)
+                         for field in dimensions},
+            'violations': dict(violations.most_common()),
+            'by_day': [
+                {
+                    'day': day,
+                    'samples': len(rows),
+                    'overall': average(rows, 'overall'),
+                }
+                for day, rows in sorted(by_day.items())
+            ],
+            'privacy': 'scores_only',
+        }
+
     @app.get('/metrics/tools')
     async def metrics_tools():
         """P3 trace 可视化：工具使用率 / 失败率（按工具 + 按天，只读）。"""
@@ -851,6 +895,9 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <h2>成本周报</h2><div id="cost">加载中...</div>
 </div>
 <div class="card">
+<h2>人格质量趋势</h2><div id="persona">加载中...</div>
+</div>
+<div class="card">
 <h2>影子进化</h2><div id="evo">加载中...</div>
 <button class="btn btn-p" onclick="analyzeE()" style="margin-top:.5rem">扫描并生成候选</button>
 </div>
@@ -865,7 +912,7 @@ footer{text-align:center;padding:1rem;color:#475569;font-size:.8rem}
 <footer>YmaKmern Agent 运行状态 - v0.7.0</footer>
 <script>
 const A="";let TK=localStorage.getItem("cp_token")||"";function showLogin(){document.getElementById("lg").style.display="flex"}function hideLogin(){document.getElementById("lg").style.display="none"}async function login(){const t=document.getElementById("lgt").value.trim();if(!t)return alert("请输入 Token");TK=t;localStorage.setItem("cp_token",t);hideLogin();rf()}async function api(u,o){o=o||{};o.headers=Object.assign({},o.headers||{});if(TK)o.headers["Authorization"]="Bearer "+TK;const r=await fetch(A+u,o);if(r.status===401){showLogin();throw new Error("需要 Token")}if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()}
-async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th;const tw=await api("/metrics/tools");let toh='<div class="row"><span>窗口调用</span><strong>'+tw.window_calls+'</strong></div><div class="row"><span>失败率</span><strong>'+(tw.window_fail_rate*100).toFixed(1)+'%</strong></div>';if(!tw.by_tool.length)toh="<em>暂无工具调用</em>";for(const t of tw.by_tool.slice(0,6)){toh+='<div class="row"><span>'+escapeHtml(t.capability_id)+'</span><span>'+t.calls+' 次 · 失败 '+(t.fail_rate*100).toFixed(1)+'%</span></div>'}document.getElementById("tool").innerHTML=toh;const cw=await api("/metrics/costs");let coh='<div class="row"><span>窗口调用</span><strong>'+cw.window_events+'</strong></div><div class="row"><span>估算成本</span><strong>¥'+cw.est_cost_yuan.toFixed(4)+'</strong></div>';if(!cw.weekly.length)coh+="<em>暂无模型调用</em>";for(const w of cw.weekly.slice(0,6)){coh+='<div class="row"><span>'+escapeHtml(w.week)+'</span><span>'+w.calls+' 次 · ¥'+w.est_cost_yuan.toFixed(4)+'</span></div>'}document.getElementById("cost").innerHTML=coh;const ev=await api("/evolution/status");document.getElementById("evo").innerHTML='<div class="row"><span>模式</span><strong>'+ev.mode+'</strong></div><div class="row"><span>脱敏经验</span><strong>'+ev.experience_count+'</strong></div><div class="row"><span>待审候选</span><strong>'+ev.candidate_count+'</strong></div><div class="row"><span>自动生效 / 部署</span><strong>关闭 / 关闭</strong></div>'}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}
+async function rf(){try{const h=await api("/health");document.getElementById("ap").textContent=h.active_persona;document.getElementById("mc").textContent=Object.keys(h.services).length;const dot=document.querySelector(".status-dot");dot.className="status-dot "+(h.status==="ok"?"ok":"degraded");const p=await api("/personas");document.getElementById("pc").textContent=p.count;let ph="";for(const[id,d]of Object.entries(p.personas)){let cls=id.startsWith("dududa_")?id.replace("dududa_",""):"default";ph+='<div class="row"><span>'+escapeHtml(d.display_name||id)+'</span><span class="tag tag-'+cls+'">'+escapeHtml(id)+'</span></div>'}document.getElementById("pl").innerHTML=ph;const s=await api("/mcp/services");let mh="";for(const[id,sd]of Object.entries(s.services)){mh+='<div class="row"><span>'+escapeHtml(sd.name)+'</span><span class="badge badge-'+sd.health+'">'+sd.health+'</span>';if(sd.mock_mode)mh+='<span class="badge badge-mock">mock</span>';mh+="</div>"}document.getElementById("ml").innerHTML=mh;document.getElementById("qs").innerHTML=Object.keys(s.services).map(id=>'<option value="'+id+'">'+id+'</option>').join("");const t=await api("/traces?limit=6");document.getElementById("tc").textContent=t.count;let th=t.events.length?"":"<em>暂无追踪记录</em>";for(const e of t.events){th+='<div style="font-size:.7rem;margin-bottom:3px"><span class="badge badge-'+(e.level==="error"?"unavailable":"healthy")+'">'+e.level+'</span> '+escapeHtml(e.phase||"")+' <span style="color:#64748b">'+new Date(e.timestamp).toLocaleTimeString()+"</span></div>"}document.getElementById("tl").innerHTML=th;const tw=await api("/metrics/tools");let toh='<div class="row"><span>窗口调用</span><strong>'+tw.window_calls+'</strong></div><div class="row"><span>失败率</span><strong>'+(tw.window_fail_rate*100).toFixed(1)+'%</strong></div>';if(!tw.by_tool.length)toh="<em>暂无工具调用</em>";for(const t of tw.by_tool.slice(0,6)){toh+='<div class="row"><span>'+escapeHtml(t.capability_id)+'</span><span>'+t.calls+' 次 · 失败 '+(t.fail_rate*100).toFixed(1)+'%</span></div>'}document.getElementById("tool").innerHTML=toh;const cw=await api("/metrics/costs");let coh='<div class="row"><span>窗口调用</span><strong>'+cw.window_events+'</strong></div><div class="row"><span>估算成本</span><strong>¥'+cw.est_cost_yuan.toFixed(4)+'</strong></div>';if(!cw.weekly.length)coh+="<em>暂无模型调用</em>";for(const w of cw.weekly.slice(0,6)){coh+='<div class="row"><span>'+escapeHtml(w.week)+'</span><span>'+w.calls+' 次 · ¥'+w.est_cost_yuan.toFixed(4)+'</span></div>'}document.getElementById("cost").innerHTML=coh;const pq=await api("/metrics/persona");let pqh='<div class="row"><span>评分样本</span><strong>'+pq.samples+'</strong></div><div class="row"><span>综合得分</span><strong>'+(pq.averages.overall===null?"-":(pq.averages.overall*100).toFixed(1)+" 分")+'</strong></div><div class="row"><span>评测失败</span><strong>'+pq.errors+'</strong></div>';for(const d of pq.by_day.slice(-5)){pqh+='<div class="row"><span>'+escapeHtml(d.day)+'</span><span>'+d.samples+' 条 · '+(d.overall===null?"-":(d.overall*100).toFixed(1)+" 分")+'</span></div>'}document.getElementById("persona").innerHTML=pqh;const ev=await api("/evolution/status");document.getElementById("evo").innerHTML='<div class="row"><span>模式</span><strong>'+ev.mode+'</strong></div><div class="row"><span>脱敏经验</span><strong>'+ev.experience_count+'</strong></div><div class="row"><span>待审候选</span><strong>'+ev.candidate_count+'</strong></div><div class="row"><span>自动生效 / 部署</span><strong>关闭 / 关闭</strong></div>'}catch(e){console.error(e);document.querySelector(".status-dot").className="status-dot unavailable"}}
 async function analyzeE(){try{const r=await api("/evolution/analyze",{method:"POST"});alert("新增失败经验 "+r.trace_failures_ingested+" 条，候选更新 "+r.created_or_updated+" 个。候选不会自动生效或部署。");rf()}catch(e){alert(e.message)}}
 function showForm(){document.getElementById("pf").style.display="block"}
 function hideForm(){document.getElementById("pf").style.display="none"}

@@ -158,12 +158,16 @@ class TestMainWiring:
         assert comp.fallback_model_id == main.FALLBACK_MODEL
         assert comp.allow_sensitive is False
         assert comp.route_hint_allowed is False
+        quality = cfg.get(ModelRole.MEMORY_SUMMARY)
+        assert quality.allow_sensitive is True
+        assert quality.fallback_model_id is None
 
     @pytest.mark.asyncio
     async def test_call_llm_uses_router_with_injected_provider(self, monkeypatch, tmp_path):
         monkeypatch.setattr(main, "MEMORY_FILE", str(tmp_path / "memory.json"))
         monkeypatch.setattr(main, "CONFIRM_FILE", str(tmp_path / "confirmations.json"))
         plugin = main.Main(_make_context())
+        assert plugin.persona_shadow.enabled is True
         prov = _RecProvider(text="嗨嗨~ 测试回复 (≧▽≦)")
         plugin._core._llm_provider = prov
         assert plugin._core._model_router is not None

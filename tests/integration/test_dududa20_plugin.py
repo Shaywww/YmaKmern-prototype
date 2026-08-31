@@ -46,6 +46,20 @@ class TestDetectMedia:
         assert url.startswith("/")
         assert is_img
 
+    def test_image_component_windows_local_path(self):
+        """Windows absolute media paths are recognised on non-Windows CI too."""
+        class FakeComponent:
+            type = "ComponentType.Image"
+            url = r"C:\\Users\\tester\\AppData\\Local\\Temp\\photo.jpg"
+            file = url
+            name = "photo.jpg"
+        class FakeEvent:
+            def get_messages(self): return [FakeComponent()]
+        url, name, is_img = main._detect_media(FakeEvent())
+        assert url.startswith("C:\\")
+        assert name == "photo.jpg"
+        assert is_img
+
     def test_image_component_http(self):
         """Image component with HTTP URL detected."""
         class FakeComponent:

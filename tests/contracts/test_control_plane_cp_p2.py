@@ -86,6 +86,32 @@ def _write_tool_traces(trace_dir):
     (trace_dir / "2026-08-08.jsonl").write_text(
         "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
 
+
+def _write_persona_traces(trace_dir):
+    """写入不含原始消息的人格影子评分 trace。"""
+    lines = [
+        {"ts": "2026-08-08T10:00:00", "event": "persona_shadow_score",
+         "run_id": "pr1", "trace_id": "pt1", "scope_hash": "opaque1",
+         "persona_consistency": 0.9, "conversationality": 0.8,
+         "non_customer_tone": 0.7, "overall": 0.8,
+         "violations": ["customer_template"]},
+        {"ts": "2026-08-08T11:00:00", "event": "persona_shadow_score",
+         "run_id": "pr2", "trace_id": "pt2", "scope_hash": "opaque2",
+         "persona_consistency": 1.0, "conversationality": 0.9,
+         "non_customer_tone": 0.8, "overall": 0.9,
+         "violations": []},
+        {"ts": "2026-08-09T10:00:00", "event": "persona_shadow_score",
+         "run_id": "pr3", "trace_id": "pt3", "scope_hash": "opaque3",
+         "persona_consistency": 0.8, "conversationality": 0.7,
+         "non_customer_tone": 0.6, "overall": 0.7,
+         "violations": ["customer_template", "listicle"]},
+        {"ts": "2026-08-09T10:01:00", "event": "persona_shadow_error",
+         "run_id": "pr4", "trace_id": "pt4", "error": "TimeoutError"},
+    ]
+    (trace_dir / "2026-08-09.jsonl").write_text(
+        "\n".join(json.dumps(line) for line in lines) + "\n",
+        encoding="utf-8")
+
 def _auth(**extra):
     h = {"Authorization": f"Bearer {TOKEN}"}
     h.update(extra)
@@ -150,12 +176,49 @@ class TestDashboard:
         r = client.get("/", headers={"Authorization": ""})
         assert r.status_code == 200
         assert "工具使用率" in r.text and "成本周报" in r.text
+        assert "人格质量趋势" in r.text
         assert "cp_token" in r.text  # 前端登录框（localStorage）
 
     def test_dashboard_api_still_protected(self, cp):
         app, client = cp
-        for p in ("/metrics/tools", "/metrics/costs", "/personas"):
+        for p in ("/metrics/tools", "/metrics/costs",
+                  "/metrics/persona", "/personas"):
             assert client.get(p, headers={"Authorization": ""}).status_code == 401
+
+
+class TestMetricsPersona:
+    def test_persona_quality_aggregation(self, cp, tmp_path):
+        app, client = cp
+        _write_persona_traces(tmp_path / "traces")
+        r = client.get("/metrics/persona")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["samples"] == 3
+        assert data["errors"] == 1
+        assert data["averages"] == {
+            "persona_consistency": 0.9,
+            "conversationality": 0.8,
+            "non_customer_tone": 0.7,
+            "overall": 0.8,
+        }
+        assert data["violations"] == {
+            "customer_template": 2, "listicle": 1}
+        assert data["by_day"] == [
+            {"day": "2026-08-08", "samples": 2, "overall": 0.85},
+            {"day": "2026-08-09", "samples": 1, "overall": 0.7},
+        ]
+        assert data["privacy"] == "scores_only"
+        assert "user_message" not in json.dumps(data)
+
+    def test_persona_quality_empty(self, cp):
+        app, client = cp
+        r = client.get("/metrics/persona")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["samples"] == 0
+        assert data["errors"] == 0
+        assert data["averages"]["overall"] is None
+        assert data["by_day"] == []
 
 
 class TestMetricsTools:

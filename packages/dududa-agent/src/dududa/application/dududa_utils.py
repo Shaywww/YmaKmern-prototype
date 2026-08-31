@@ -3,7 +3,9 @@
 
 原 main.py 模块级函数与常量原样迁移；main.py 保留 re-export 以兼容测试。
 """
+import ntpath
 import os
+import posixpath
 import re
 import json as _json
 import logging
@@ -201,7 +203,7 @@ def _detect_media(event) -> tuple:
             # QQ official bot: url/file/path can be local or http
             for url_attr in ("url", "file_", "file", "path"):
                 url = getattr(c, url_attr, "")
-                if url and (url.startswith("http") or url.startswith("/")):
+                if _is_media_source(url):
                     return url, name, is_image
     # Some AstrBot adapters discard mface or cannot construct an Image component
     # containing NapCat extension fields.  The raw OneBot segment still has a URL.
@@ -213,9 +215,9 @@ def _detect_media(event) -> tuple:
         is_image = kind in ("image", "mface")
         url = str(data.get("url", "") or "")
         file_value = str(data.get("file", "") or "")
-        if not (url.startswith("http") or url.startswith("/")):
+        if not _is_media_source(url):
             url = file_value
-        if not (url.startswith("http") or url.startswith("/")):
+        if not _is_media_source(url):
             continue
         name = str(data.get("name", "") or data.get("file_name", "") or "")
         if not name:
@@ -226,6 +228,32 @@ def _detect_media(event) -> tuple:
                     else "media"))
         return url, name, is_image
     return "", "", False
+
+
+def _is_local_media_path(value) -> bool:
+    """Recognise POSIX and Windows absolute paths on every host OS.
+
+    ``os.path.isabs`` follows the host platform, so a Linux CI runner does not
+    recognise ``C:\\...`` and Windows does not recognise every POSIX fixture.
+    Media metadata can originate on a different host from the runtime; accept
+    both lexical forms and let the later existence check decide availability.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    path = value.strip()
+    return (os.path.isabs(path) or ntpath.isabs(path)
+            or posixpath.isabs(path))
+
+
+def _is_media_source(value) -> bool:
+    """Return whether *value* is a supported remote, inline or local source."""
+    if not isinstance(value, str):
+        return False
+    source = value.strip()
+    return bool(
+        source.startswith(("http://", "https://", "data:"))
+        or _is_local_media_path(source)
+    )
 
 
 def _has_media_in_raw(event) -> bool:

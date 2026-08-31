@@ -43,6 +43,13 @@
 - `DUDUDA_VISION_TRUSTED_HOSTS` 用于配置经管理员审核的官方端点域名，默认仅为 `api.openai.com`。自定义中转不会自动获得信任。
 - 外部服务的日志和保留周期由该服务提供方决定；部署者应在开启前审查其隐私与数据保留政策。
 
+## 线上人格质量影子评测
+
+- 成功投递后默认低频抽样 5%，每天最多 12 条；评测在后台运行，不增加用户等待时间，也不会改变或拦截已经生成的回复。
+- 待评文本按 `sensitive` 送往官方 DeepSeek 的受控摘要角色，禁用第三方备用线路；评分失败只记 Trace，不影响聊天。
+- 落盘内容仅包含人格一致性、口语度、非客服腔分数、确定性违规标签及脱敏会话哈希，不保存用户原话、机器人回复、QQ 号、群号或模型评语。
+- 可用 `DUDUDA_PERSONA_SHADOW=0` 关闭；`DUDUDA_PERSONA_SHADOW_RATE`、`DUDUDA_PERSONA_SHADOW_DAILY_LIMIT` 和 `DUDUDA_PERSONA_SHADOW_DIR` 分别控制采样率、每日上限和聚合数据目录。
+
 
 ## 项目结构
 

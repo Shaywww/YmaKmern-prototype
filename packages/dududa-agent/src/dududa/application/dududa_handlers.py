@@ -25,6 +25,7 @@ from dududa.application.dududa_utils import (
     _detect_media, _detect_media_kind, _raw_message_segments, _segment_data,
     _has_media_in_raw, _contains_restricted,
     _redact_text, _file_ext, _parse_document, _IMAGE_EXTS, _VIDEO_EXTS,
+    _is_local_media_path,
 )
 
 from dududa.application.dududa_log import get_logger as _get_logger
@@ -304,7 +305,7 @@ async def handle_media(plugin, event, url, name, is_image,
                     run_id, trace_id, name, ext, is_image)
         if isinstance(url, (bytes, bytearray)):
             data = bytes(url)
-        elif url.startswith("/"):
+        elif _is_local_media_path(url):
             import os as _os
             if _os.path.exists(url):
                 with open(url, "rb") as f:
@@ -520,7 +521,7 @@ async def _load_bounded_batch_image(url, client) -> bytes:
     """Load one proactive batch item without exceeding the media budget."""
     if isinstance(url, (bytes, bytearray)):
         data = bytes(url)
-    elif str(url or "").startswith("/"):
+    elif _is_local_media_path(str(url or "")):
         import os
         path = str(url)
         if not os.path.exists(path):
@@ -724,7 +725,7 @@ async def complete_delivery_after_send(plugin, event) -> None:
     item = pending.pop(run_id, None)
     if not item:
         return
-    result, _reply, ready_ts = item
+    result, reply, ready_ts = item
     latency_ms = int((time.time() - ready_ts) * 1000)
     try:
         _plat = getattr(event, "platform", None)
@@ -748,6 +749,20 @@ async def complete_delivery_after_send(plugin, event) -> None:
         "memory=%d latency=%dms",
         run_id, result.trace_id, receipt.status.value, comp.final_phase,
         len(comp.memory_write_receipts), latency_ms)
+    try:
+        from dududa.application.persona_shadow import schedule_persona_shadow
+        schedule_persona_shadow(
+            plugin,
+            event,
+            user_message=str(getattr(event, "message_str", "") or ""),
+            response=reply,
+            run_id=run_id,
+            trace_id=result.trace_id,
+        )
+    except Exception as exc:
+        # Quality evaluation is shadow-only: it must never affect delivery.
+        logger.warning(
+            "Persona shadow scheduling failed | run_id=%s: %s", run_id, exc)
     maybe_consolidate = getattr(plugin, "_maybe_consolidate_memory", None)
     if maybe_consolidate is not None:
         try:
@@ -3201,7 +3216,7 @@ def _preserve_media(url: str) -> str:
     """本地路径的媒体复制到自管目录，防止 AstrBot 清理 temp 后配对失败。"""
     import os as _os
     import shutil as _shutil
-    if not _os.path.isabs(url):
+    if not _is_local_media_path(url):
         return url
     try:
         if not _os.path.exists(url):
@@ -3469,7 +3484,7 @@ def _stash_via_repo(repo, event, gid, f_url, f_name, f_img) -> bool:
             platform = "qq"
         data, source_url = b"", ""
         import os as _os
-        if _os.path.isabs(f_url):
+        if _is_local_media_path(f_url):
             if not _os.path.exists(f_url):
                 # 本地文件已被清理：回退 raw_message 里的远程 URL（惰性下载）
                 remote = _remote_media_url(event)
@@ -3522,7 +3537,7 @@ def _stash_group_media(plugin, event, msgs) -> bool:
         if repo is not None:
             return _stash_via_repo(repo, event, gid, f_url, f_name, f_img)
         f_url = _preserve_media(f_url)
-        if not f_url.startswith("/"):
+        if not _is_local_media_path(f_url):
             remote = _remote_media_url(event)
             if remote:
                 f_url = remote
