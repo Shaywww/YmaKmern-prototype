@@ -6,6 +6,7 @@
 import logging
 import re
 import time
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -242,16 +243,18 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     def _phase_perceive(self, state):
         if self._injected_perception is not None:
+            perception = self._promote_weather_followup(
+                state, self._injected_perception)
             record_state_perception(
-                self._injected_perception, state, source="rule")
-            self._record_profile(state, self._injected_perception)
+                perception, state, source="rule")
+            self._record_profile(state, perception)
             self._record_style(
-                state, self._injected_perception,
+                state, perception,
                 persona_id=getattr(self._plugin.personas, "active_id",
                                    "dududa_default"),
                 bot_id=self._prod_bot_id())
             return state.transition(RuntimePhase.PERCEIVED,
-                                    perception=self._injected_perception)
+                                    perception=perception)
         return super()._phase_perceive(state)
 
     def _plan(self, state, candidates, max_steps, permissions):
@@ -735,6 +738,24 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return raw + "天气"
         return raw
 
+    def _promote_weather_followup(self, state, perception):
+        """Turn a bare city after a weather question into a tool intent."""
+        if getattr(perception, "needs_tools", False):
+            return perception
+        raw = self._intent_of(state)
+        effective = self._effective_tool_intent(state, raw)
+        promoted = bool(effective != raw and any(
+            token in effective for token in
+            ("天气", "气温", "温度", "预报", "weather", "forecast")))
+        if not promoted:
+            return perception
+        suggested = tuple(dict.fromkeys(
+            tuple(getattr(perception, "suggested_capabilities", ()) or ())
+            + ("mcp.weather",)))
+        return replace(
+            perception, needs_tools=True,
+            suggested_capabilities=suggested)
+
     @staticmethod
     def _is_progress_placeholder(text: str) -> bool:
         """Compatibility wrapper around the unified response contract."""
@@ -813,23 +834,38 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         except Exception:
             return "dududa"
 
-    def _style_lines(self, state) -> tuple:
-        """用户 style 摘要（文档 2.5.8）：具名 selector 读取，注入 LLM 上下文。"""
+    def _current_style(self, state):
         store = getattr(self, "_style_store", None)
         if store is None:
-            return ()
+            return None
         try:
             env = state.envelope
             if env is None or env.sender is None:
-                return ()
-            style = store.get(
+                return None
+            return store.get(
                 self._platform(state), self._prod_bot_id(),
                 env.sender.actor_id,
                 getattr(self._plugin.personas, "active_id",
                         "dududa_default"))
         except Exception:
+            return None
+
+    def _style_lines(self, state) -> tuple:
+        """用户 style 摘要（文档 2.5.8）：具名 selector 读取，注入 LLM 上下文。"""
+        style = self._current_style(state)
+        if style is None:
             return ()
         return style.summary_lines() if style else ()
+
+    def _apply_required_address(self, state, text: str) -> str:
+        """Apply explicit per-message address rules to every compose path."""
+        value = str(text or "").strip()
+        style = self._current_style(state)
+        address = str(getattr(style, "address", "") or "").strip()
+        required = bool(getattr(style, "address_required", False))
+        if not value or not required or not address or address in value:
+            return value
+        return f"{address}，{value}"
 
     def _dynamic_persona_lines(self, state, now: float | None = None) -> tuple:
         """Familiarity, local-time energy and short emotion continuity."""
@@ -940,6 +976,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     async def _phase_compose_prod(self, state):
         draft_text = await self._compose_prod_text(state)
+        draft_text = self._apply_required_address(state, draft_text)
         kind = self._response_kind(state)
         atomic_facts = self._prod_atomic_facts(state)
         contract = validate_response_contract(

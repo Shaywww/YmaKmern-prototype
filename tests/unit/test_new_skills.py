@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for new skills: weather / news / translate (mocked, no network)."""
+from types import SimpleNamespace
+
 import pytest
 
 from dududa.mcp.registry import create_all_services, register_all_mcp_services
@@ -121,6 +123,31 @@ class TestProdEnrichArgs:
         orch = object.__new__(_ProdOrchestrator)
         orch._recent_chat_context = lambda *a, **k: ""
         assert orch._effective_tool_intent(None, "西藏拉萨") == "西藏拉萨"
+
+    def test_short_location_weather_followup_promotes_perception(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        from dududa.core.perception import PerceptionResult
+        orch = object.__new__(_ProdOrchestrator)
+        orch._recent_chat_context = lambda *a, **k: (
+            "【近期对话】\n[用户]: 今天天气怎么样\n"
+            "YmaKmern: 你想查哪里的天气呀？\n")
+        state = SimpleNamespace(
+            envelope=SimpleNamespace(text="兰州", mentions=()))
+        perception = orch._promote_weather_followup(
+            state, PerceptionResult(needs_tools=False))
+        assert perception.needs_tools is True
+        assert "mcp.weather" in perception.suggested_capabilities
+
+    def test_short_location_without_context_keeps_perception_plain(self):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        from dududa.core.perception import PerceptionResult
+        orch = object.__new__(_ProdOrchestrator)
+        orch._recent_chat_context = lambda *a, **k: ""
+        state = SimpleNamespace(
+            envelope=SimpleNamespace(text="兰州", mentions=()))
+        perception = orch._promote_weather_followup(
+            state, PerceptionResult(needs_tools=False))
+        assert perception.needs_tools is False
 
     def test_weather_final_placeholder_has_deterministic_fallback(self):
         from dududa.application.dududa_prod import _ProdOrchestrator

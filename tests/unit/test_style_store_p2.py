@@ -65,6 +65,15 @@ class TestExtractSignals:
         sig = extract_style_signals("叫我一下")
         assert sig.address == ""
 
+    def test_required_address(self):
+        sig = extract_style_signals("以后回答问题要加上是的，主人")
+        assert sig.address == "主人"
+        assert sig.address_required is True
+        sig = extract_style_signals("以后回答问题只需要加上主人")
+        assert sig.address == "主人"
+        assert sig.address_required is True
+        assert extract_style_signals("回答要加上来源").address == ""
+
     def test_tone(self):
         sig = extract_style_signals("以后叫我小刚，说话正式一点")
         assert sig.address == "小刚"
@@ -73,6 +82,8 @@ class TestExtractSignals:
         assert sig.tone == "casual"
         sig = extract_style_signals("对我温柔点")
         assert sig.tone == "gentle"
+        assert extract_style_signals(
+            "以后和我聊天切换为雌小鬼模式").tone == "teasing"
 
     def test_length(self):
         assert extract_style_signals("回复简短点").length == "short"
@@ -336,6 +347,27 @@ class TestProdStyle:
         orch = object.__new__(_ProdOrchestrator)
         orch._style_store = None
         assert orch._style_lines(_state(conv="c1", actor="u1")) == ()
+
+    def test_required_address_applies_to_deterministic_reply(self, tmp_path):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        store = UserStyleStore(path=str(tmp_path / "s.json"))
+        store.record_message(
+            "qq", "bot1", "c1", "u1", "dududa_default",
+            "以后回答问题只需要加上主人", engaged=True)
+        fake_plugin = types.SimpleNamespace(
+            personas=types.SimpleNamespace(active_id="dududa_default"),
+            _get_bot_id=lambda event: "bot1")
+        orch = object.__new__(_ProdOrchestrator)
+        orch._style_store = store
+        orch._plugin = fake_plugin
+        orch._pending_event = None
+        reply = orch._apply_required_address(
+            _state(conv="c1", actor="u1"),
+            "你想查哪里的天气呀？")
+        assert reply == "主人，你想查哪里的天气呀？"
+        assert orch._apply_required_address(
+            _state(conv="c1", actor="u1"),
+            "主人，今天天气不错。") == "主人，今天天气不错。"
 
     def test_prod_record_style_persona_bot(self, tmp_path):
         from dududa.application.dududa_prod import _ProdOrchestrator

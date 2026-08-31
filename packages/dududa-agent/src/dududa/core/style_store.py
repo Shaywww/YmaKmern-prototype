@@ -32,10 +32,19 @@ _ADDRESS_RE = re.compile(
     r"\s*([一-龥A-Za-z0-9_\-]{1,6})"
 )
 
+# 强制称呼也必须覆盖不经过 LLM 的确定性回复。只接受典型人际
+# 称呼，避免把“回答要加上来源”之类内容要求误当成用户称呼。
+_REQUIRED_ADDRESS_RE = re.compile(
+    r"(?:以后|今后|每次).{0,6}(?:回答|回复).{0,12}"
+    r"(?:加上|带上)\s*(?:是的[,，\s]*)?"
+    r"(主人|老板|大人|陛下|殿下|哥哥|姐姐|哥|姐|同学|学长|学姐|老师)"
+)
+
 _TONE_PATTERNS = {
     "formal": ("正式", "官方", "严肃", "正经"),
     "casual": ("随意", "轻松", "活泼", "皮一点", "俏皮", "搞笑"),
     "gentle": ("温柔", "亲切", "暖心"),
+    "teasing": ("雌小鬼模式", "傲娇嘴欠", "嘴欠一点", "傲娇一点"),
 }
 
 _LENGTH_PATTERNS = {
@@ -54,13 +63,15 @@ _EMOJI_PATTERNS = {
 class StyleSignals:
     """一次消息中提取到的风格信号（全空表示无信号）。"""
     address: str = ""
+    address_required: bool = False
     tone: str = ""
     length: str = ""
     emoji: str = ""
 
     @property
     def empty(self) -> bool:
-        return not (self.address or self.tone or self.length or self.emoji)
+        return not (self.address or self.address_required or self.tone
+                    or self.length or self.emoji)
 
 
 def extract_style_signals(text: str) -> StyleSignals:
@@ -68,22 +79,35 @@ def extract_style_signals(text: str) -> StyleSignals:
     if not text:
         return StyleSignals()
     sig = StyleSignals()
+    required = _REQUIRED_ADDRESS_RE.search(text)
+    if required:
+        sig = StyleSignals(
+            address=required.group(1)[:_FIELD_MAX_LEN],
+            address_required=True)
     m = _ADDRESS_RE.search(text)
     if m:
         name = re.sub(r"[的啦哦啊呢呀吧]?$", "", m.group(1)).strip()
         if name:
-            sig = StyleSignals(address=name[:_FIELD_MAX_LEN])
+            sig = StyleSignals(
+                address=name[:_FIELD_MAX_LEN],
+                address_required=sig.address_required)
     for tone, kws in _TONE_PATTERNS.items():
         if any(k in text for k in kws):
-            sig = StyleSignals(address=sig.address, tone=tone)
+            sig = StyleSignals(
+                address=sig.address, address_required=sig.address_required,
+                tone=tone)
             break
     for length, kws in _LENGTH_PATTERNS.items():
         if any(k in text for k in kws):
-            sig = StyleSignals(address=sig.address, tone=sig.tone, length=length)
+            sig = StyleSignals(
+                address=sig.address, address_required=sig.address_required,
+                tone=sig.tone, length=length)
             break
     for emoji, kws in _EMOJI_PATTERNS.items():
         if any(k in text for k in kws):
-            sig = StyleSignals(address=sig.address, tone=sig.tone,
+            sig = StyleSignals(address=sig.address,
+                               address_required=sig.address_required,
+                               tone=sig.tone,
                                length=sig.length, emoji=emoji)
             break
     return sig
@@ -104,6 +128,7 @@ class UserStyle:
     user_id: str = ""
     persona_id: str = "dududa_default"
     address: str = ""
+    address_required: bool = False
     tone: str = ""
     length: str = ""
     emoji: str = ""
@@ -112,7 +137,10 @@ class UserStyle:
     first_seen_ts: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
-    _TONE_LABELS = {"formal": "正式", "casual": "随意活泼", "gentle": "温柔"}
+    _TONE_LABELS = {
+        "formal": "正式", "casual": "随意活泼", "gentle": "温柔",
+        "teasing": "傲娇嘴欠（克制，不辱骂不贬低）",
+    }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +149,7 @@ class UserStyle:
             "user_id": self.user_id,
             "persona_id": self.persona_id,
             "address": self.address,
+            "address_required": self.address_required,
             "tone": self.tone,
             "length": self.length,
             "emoji": self.emoji,
@@ -138,6 +167,7 @@ class UserStyle:
             user_id=str(data.get("user_id", "")),
             persona_id=str(data.get("persona_id", "dududa_default")),
             address=str(data.get("address", "")),
+            address_required=bool(data.get("address_required", False)),
             tone=str(data.get("tone", "")),
             length=str(data.get("length", "")),
             emoji=str(data.get("emoji", "")),
@@ -151,7 +181,9 @@ class UserStyle:
         """供 LLM 上下文使用的风格摘要（不含来源，避免提示词噪音）。"""
         parts: list[str] = []
         if self.address:
-            parts.append(f"称呼「{self.address}」")
+            parts.append(
+                f"每次回复都要称呼「{self.address}」"
+                if self.address_required else f"称呼「{self.address}」")
         if self.tone in self._TONE_LABELS:
             parts.append(f"语气{self._TONE_LABELS[self.tone]}")
         if self.length == "short":
@@ -175,6 +207,7 @@ class UserStyle:
                  else "关" if self.emoji == "off" else "未设置")
         return ("；".join([
             f"称呼: {self.address or '未设置'}",
+            f"每次称呼: {'是' if self.address_required else '否'}",
             f"语气: {tone}",
             f"长度: {length}",
             f"表情: {emoji}",
@@ -233,7 +266,9 @@ class UserStyleStore:
 
     def set(self, platform: str, bot_id: str, user_id: str, persona_id: str,
             *, origin_conversation: str = "", visibility: str = "public",
-            address: Optional[str] = None, tone: Optional[str] = None,
+            address: Optional[str] = None,
+            address_required: Optional[bool] = None,
+            tone: Optional[str] = None,
             length: Optional[str] = None, emoji: Optional[str] = None,
             now: Optional[float] = None) -> UserStyle:
         now = now if now is not None else time.time()
@@ -252,6 +287,8 @@ class UserStyleStore:
                 raw["visibility"] = str(visibility)
             if address is not None:
                 raw["address"] = str(address)[:_FIELD_MAX_LEN]
+            if address_required is not None:
+                raw["address_required"] = bool(address_required)
             if tone is not None:
                 raw["tone"] = str(tone)[:_FIELD_MAX_LEN]
             if length is not None:
@@ -279,7 +316,9 @@ class UserStyleStore:
         self.set(platform, bot_id, user_id, persona_id,
                   origin_conversation=conversation_id or "",
                   visibility=visibility,
-                  address=sig.address or None, tone=sig.tone or None,
+                  address=sig.address or None,
+                  address_required=(True if sig.address_required else None),
+                  tone=sig.tone or None,
                   length=sig.length or None, emoji=sig.emoji or None,
                   now=now)
 
