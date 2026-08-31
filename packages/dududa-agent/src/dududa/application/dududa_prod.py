@@ -1241,6 +1241,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         dynamic_lines = self._dynamic_persona_lines(state)
         if dynamic_lines:
             extra += " 本轮动态语气：" + " ".join(dynamic_lines)
+        received_at = getattr(getattr(state, "envelope", None),
+                              "received_at", None)
+        try:
+            received_ts = received_at.timestamp() if received_at else None
+        except (AttributeError, OSError, OverflowError, ValueError):
+            received_ts = None
+        extra += " " + self._temporal_context(received_ts)
         system = self._build_compose_system(p, extra)
         mem_prefix = plugin._read_memory(event)
         if any(kw in combined for kw in ["文件", "图片", "刚才", "之前", "刚刚", "那个", "这个"]):
@@ -1262,13 +1269,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             mem_prefix = ("\n".join(style_lines) + "\n") + (mem_prefix or "")
         if live_group_context:
             mem_prefix = live_group_context + "\n\n" + (mem_prefix or "")
-        received_at = getattr(getattr(state, "envelope", None),
-                              "received_at", None)
-        try:
-            received_ts = received_at.timestamp() if received_at else None
-        except (AttributeError, OSError, OverflowError, ValueError):
-            received_ts = None
-        mem_prefix = self._temporal_context(received_ts) + "\n" + (mem_prefix or "")
         try:
             is_group = bool(getattr(getattr(event, "message_obj", None), "group", None))
         except Exception:

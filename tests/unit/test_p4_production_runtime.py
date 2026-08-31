@@ -87,11 +87,13 @@ class _FakePlugin:
             main.ActorMappingConfig(hash_user_ids=True))
         self.context_builder = ContextBuilder(
             memory_repo=self.memory, capability_registry=CapabilityRegistry())
+        self.last_system = ""
         self.last_user_msg = ""
         self.llm_reply = "测试回复 (・ω・)"
 
     async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
                         run_id="", trace_id="", skip_render=False):
+        self.last_system = system
         self.last_user_msg = user_msg
         return self.llm_reply
 
@@ -387,7 +389,7 @@ class TestProdOrchestrator:
             perception=PerceptionResult(needs_tools=False), event=event)
 
         assert result.final_response
-        assert "【当前时间背景】北京时间" in plugin.last_user_msg
+        assert "【当前时间背景】北京时间" in plugin.last_system
         assert "用户当前所在地（近期明确说明）: 兰州" in plugin.last_user_msg
 
     def test_nineteen_hundred_is_dinner_context(self):
