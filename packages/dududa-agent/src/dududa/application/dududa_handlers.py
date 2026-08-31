@@ -31,6 +31,7 @@ from dududa.application.dududa_utils import (
 from dududa.application.dududa_log import get_logger as _get_logger
 from dududa.application.user_experience import make_support_id
 from dududa.core.memory import set_memory_access_mode, reset_memory_access_mode
+from dududa.core.quality_eval import strip_self_degrading_abuse
 from dududa.core.group_ambient import GroupAmbientTracker
 from dududa.core.group_context import GroupConversationTracker
 from dududa.core.meme_library import MemeLibrary
@@ -292,6 +293,7 @@ def _sanitize_conversational_reply(text: str, user_text: str = "") -> str:
             else:
                 cleaned = "这个我还真拿不准，就不硬猜啦～"
 
+    cleaned = strip_self_degrading_abuse(cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .quality_eval import persona_contract_violations, strip_unicode_emoji
+from .quality_eval import (
+    persona_contract_violations, strip_self_degrading_abuse,
+    strip_unicode_emoji,
+)
 from .renderer import FactAnchor, ResponseKind, unsupported_numeric_claims
 
 
@@ -26,7 +29,9 @@ class ResponseContractResult:
     unsupported_claims: tuple[str, ...] = ()
 
 
-_AUTO_REPAIRABLE_VIOLATIONS = frozenset({"unicode_emoji"})
+_AUTO_REPAIRABLE_VIOLATIONS = frozenset({
+    "self_degrading_abuse", "unicode_emoji",
+})
 
 
 def repair_response_style(
@@ -36,7 +41,11 @@ def repair_response_style(
     violations = frozenset(result.violations)
     if not violations or not violations.issubset(_AUTO_REPAIRABLE_VIOLATIONS):
         return str(text or ""), ()
-    repaired = strip_unicode_emoji(text)
+    repaired = str(text or "")
+    if "unicode_emoji" in violations:
+        repaired = strip_unicode_emoji(repaired)
+    if "self_degrading_abuse" in violations:
+        repaired = strip_self_degrading_abuse(repaired)
     if not repaired or repaired == str(text or ""):
         return str(text or ""), ()
     return repaired, tuple(sorted(violations))
@@ -77,7 +86,9 @@ def validate_response_contract(
         violations.append("internal_tool_leak")
     for violation in persona_contract_violations(
             value, casual_chat=(kind == ResponseKind.CHAT)):
-        if violation in {"customer_template", "unicode_emoji"}:
+        if violation in {
+                "customer_template", "self_degrading_abuse",
+                "unicode_emoji"}:
             violations.append(violation)
     unsupported: tuple[str, ...] = ()
     if kind == ResponseKind.TOOL_ANSWER:

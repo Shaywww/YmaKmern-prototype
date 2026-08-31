@@ -144,6 +144,12 @@ def test_reply_sanitizer_does_not_remove_real_preference_or_question():
     assert h._sanitize_conversational_reply("现在去吃饭吗？") == "现在去吃饭吗？"
 
 
+def test_reply_sanitizer_replaces_echoed_self_abuse_with_specific_miss():
+    cleaned = h._sanitize_conversational_reply(
+        "哈，行行行，我是二逼，你说了算。")
+    assert cleaned == "哈，行行行，这次是我没接住，你说了算。"
+
+
 def test_reply_sanitizer_turns_full_refusal_into_playful_superlative_answer():
     reply = "对不起，我还没有学会回答这个问题。"
     cleaned = h._sanitize_conversational_reply(

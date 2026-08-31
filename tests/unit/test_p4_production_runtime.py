@@ -9,6 +9,8 @@ from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 - _ProdOrchestrator：模式化工具执行、LLM 合成、生产记忆作用域、回执落盘
 """
 import pathlib, sys, types
+from datetime import datetime
+from zoneinfo import ZoneInfo
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(PLUGIN_DIR))
 
@@ -353,6 +355,48 @@ class TestProdOrchestrator:
         assert result.final_response.text == "LCR应该还是CS那边的"
         assert "再问" not in result.final_response.text
         assert "我收回" not in result.final_response.text
+
+    @pytest.mark.asyncio
+    async def test_chat_self_abuse_is_repaired_without_losing_correction(self):
+        orch, plugin, _, _ = _make_orchestrator()
+        plugin.llm_reply = "行行行，我是二逼，你说的是兰州。"
+        event = _FakeEvent("你是二逼不是，我说了我现在在兰州")
+
+        result = await orch.run(
+            _make_envelope("你是二逼不是，我说了我现在在兰州"),
+            budget=RuntimeBudget(deadline_seconds=20),
+            perception=PerceptionResult(needs_tools=False), event=event)
+
+        assert result.final_response
+        assert "我是二逼" not in result.final_response.text
+        assert "这次是我没接住" in result.final_response.text
+        assert "兰州" in result.final_response.text
+
+    @pytest.mark.asyncio
+    async def test_chat_prompt_has_time_and_latest_location_priority(self):
+        orch, plugin, _, _ = _make_orchestrator()
+        plugin._read_memory = lambda *args, **kwargs: (
+            "【近期对话】\n[用户]: 我之前在临泽县\n---\n"
+            "YmaKmern: 临泽那边有店吗\n---\n"
+            "[用户]: 我现在在兰州\n======\n")
+        event = _FakeEvent("吃海底捞")
+
+        result = await orch.run(
+            _make_envelope("吃海底捞"),
+            budget=RuntimeBudget(deadline_seconds=20),
+            perception=PerceptionResult(needs_tools=False), event=event)
+
+        assert result.final_response
+        assert "【当前时间背景】北京时间" in plugin.last_user_msg
+        assert "用户当前所在地（近期明确说明）: 兰州" in plugin.last_user_msg
+
+    def test_nineteen_hundred_is_dinner_context(self):
+        timestamp = datetime(
+            2026, 8, 31, 19, 0,
+            tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        context = main._ProdOrchestrator._temporal_context(timestamp)
+        assert "19:00" in context
+        assert "晚饭时段" in context
 
     @pytest.mark.asyncio
     async def test_tool_query_runs_mcp_and_injects_data(self):

@@ -23,6 +23,7 @@ from dududa.core.response_contract import (
 )
 from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from dududa.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
+from dududa.core.profile import extract_location
 from dududa.runtime.orchestrator import RuntimeOrchestrator
 from dududa.core.perception_store import record_state_perception
 from dududa.core.trace_recorder import trace_recorder
@@ -910,6 +911,43 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return tuple(line for line in (familiarity, energy, emotion) if line)
 
     @staticmethod
+    def _temporal_context(now: float | None = None) -> str:
+        """为闲聊提供低成本时间感；精确查时仍由 clock 工具回答。"""
+        current = float(now if now is not None else time.time())
+        local = datetime.fromtimestamp(current, ZoneInfo("Asia/Shanghai"))
+        hour = local.hour
+        if hour < 6:
+            period = "深夜"
+        elif hour < 11:
+            period = "早上"
+        elif hour < 14:
+            period = "午饭时段"
+        elif hour < 18:
+            period = "下午"
+        elif hour < 22:
+            period = "晚饭时段"
+        else:
+            period = "夜间"
+        return (
+            f"【当前时间背景】北京时间 "
+            f"{local:%Y-%m-%d %H:%M}，{period}。"
+            "涉及「现在/今天/下午/晚上/吃什么」时以此为准；"
+            "用户明确指出时间时优先尊重其表达。")
+
+    @staticmethod
+    def _latest_explicit_location(memory_text: str) -> str:
+        """从按时间排列的近期用户消息中取最后一个位置更正。"""
+        latest = ""
+        for line in str(memory_text or "").splitlines():
+            value = line.strip()
+            if not value.startswith("[用户]:"):
+                continue
+            location = extract_location(value.split(":", 1)[1].strip())
+            if location:
+                latest = location
+        return latest
+
+    @staticmethod
     def _build_compose_system(p, extra: str) -> str:
         """生产回复系统提示：人设 + 公开自述知识 + 数据安全 + 风格红线。"""
         return (
@@ -924,6 +962,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "先对齐情绪再谈办法：开心时真诚一起高兴，吐槽时先接住情绪，"
             "低落时温和追问；求助、道歉、严肃冲突时收起嘴欠，不要机械说"
             "『加油』『恭喜』『都可以』。"
+            "被用户辱骂或纠错时，不得照抄、认领辱骂标签，也不卖惨自辱；"
+            "直接承认具体哪里没接住，更正后继续聊。"
             "可以有明确但不过度武断的偏好。日常闲聊允许有明显是玩笑或"
             "人设小剧场的生活化经历，不必机械强调自己没有身体；"
             "但涉及科学、医学、安全、法律、金钱、实时数据和工具结果时必须严谨，"
@@ -1205,7 +1245,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         mem_prefix = plugin._read_memory(event)
         if any(kw in combined for kw in ["文件", "图片", "刚才", "之前", "刚刚", "那个", "这个"]):
             mem_prefix = plugin._read_memory(event, include_episodic=True)
+        current_location = extract_location(combined)
+        recent_location = (
+            current_location or self._latest_explicit_location(mem_prefix))
         profile_lines = self._profile_lines(state)
+        if recent_location:
+            profile_lines = tuple(
+                line for line in profile_lines
+                if not str(line).startswith("用户所在地:"))
+            profile_lines += (
+                f"用户当前所在地（近期明确说明）: {recent_location}",)
         if profile_lines:
             mem_prefix = ("\n".join(profile_lines) + "\n") + (mem_prefix or "")
         style_lines = self._style_lines(state)
@@ -1213,6 +1262,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             mem_prefix = ("\n".join(style_lines) + "\n") + (mem_prefix or "")
         if live_group_context:
             mem_prefix = live_group_context + "\n\n" + (mem_prefix or "")
+        received_at = getattr(getattr(state, "envelope", None),
+                              "received_at", None)
+        try:
+            received_ts = received_at.timestamp() if received_at else None
+        except (AttributeError, OSError, OverflowError, ValueError):
+            received_ts = None
+        mem_prefix = self._temporal_context(received_ts) + "\n" + (mem_prefix or "")
         try:
             is_group = bool(getattr(getattr(event, "message_obj", None), "group", None))
         except Exception:

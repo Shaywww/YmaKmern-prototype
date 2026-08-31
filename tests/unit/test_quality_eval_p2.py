@@ -11,6 +11,14 @@ def test_persona_floor_detects_customer_tone_and_colored_emoji():
     assert not persona_contract_violations("行吧，勉强帮你看看 (≧▽≦)")
 
 
+def test_persona_floor_detects_echoed_self_abuse():
+    violations = persona_contract_violations(
+        "行行行，我是二逼，你说了算。")
+    assert "self_degrading_abuse" in violations
+    assert "self_degrading_abuse" not in persona_contract_violations(
+        "这次是我没接住，你说的是兰州。")
+
+
 @pytest.mark.asyncio
 async def test_llm_persona_judge_uses_strict_structured_output():
     calls = []

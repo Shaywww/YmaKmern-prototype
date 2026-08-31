@@ -44,6 +44,14 @@ _LOC_SUFFIX = r"(?:省|市|县|区|镇|乡|州|盟)"
 _LOC_PREFIX_RE = re.compile(
     r"(?:我现在在|我目前在|我当前在|我人在|我这几天在|我住在|我家在|住在|家住|家在)"
 )
+_NON_LOCATION_HEADS = (
+    "学", "学习", "上课", "上学", "吃", "吃饭", "看", "看书", "想",
+    "想事", "打", "打游戏", "做", "做事", "用", "忙", "睡觉", "玩", "聊天",
+    "等", "等人", "开会", "工作", "写", "听", "找", "收拾",
+)
+_BARE_LOCATION_TAIL_RE = re.compile(
+    r"(?:继续)?(?:上学|读书|工作|出差|旅游|玩|开会|办事|吃饭)$"
+)
 _LOC_REN_RE = re.compile(
     r"(?:我是|来自)\s*([一-龥]{2,6}?" + _LOC_SUFFIX + r"?人)"
 )
@@ -64,10 +72,10 @@ def _strip_tail_particles(text: str) -> str:
 
 
 def extract_location(text: str) -> str:
-    """从消息提取用户所在地（带行政区划后缀才认，防误判）；无匹配返回空。
+    """从强位置陈述中提取用户当前所在地；无匹配返回空。
 
     「我现在在临泽县」/「我家在甘肃临泽县」-> 临泽县（取最具体一级）；
-    「我是甘肃人」-> 甘肃。
+    「我现在在兰州」-> 兰州；「我是甘肃人」-> 甘肃。
     """
     if not text:
         return ""
@@ -81,6 +89,13 @@ def extract_location(text: str) -> str:
                 seg.group(0))
             if cands:
                 return _strip_tail_particles(cands[-1])[:_SIGNAL_MAX_LEN]
+            # 明确的「我现在在…」允许省略「市」，但不把动作当地名。
+            bare = _BARE_LOCATION_TAIL_RE.sub(
+                "", _strip_tail_particles(seg.group(0)))
+            if (2 <= len(bare) <= 8
+                    and not any(bare.startswith(head)
+                                for head in _NON_LOCATION_HEADS)):
+                return bare[:_SIGNAL_MAX_LEN]
     for m in _LOC_REN_RE.finditer(text):
         val = re.sub(r"人$", "", m.group(1)).strip()
         if val:

@@ -124,3 +124,14 @@ def test_hard_violation_is_not_silently_repaired():
 
     assert repaired == original
     assert violations == ()
+
+
+def test_echoed_self_abuse_is_repaired_without_losing_correction():
+    original = "行行行，我是二逼，兰州海底捞确实更方便。"
+    result = validate_response_contract(original)
+
+    repaired, violations = repair_response_style(original, result)
+
+    assert repaired == "行行行，这次是我没接住，兰州海底捞确实更方便。"
+    assert violations == ("self_degrading_abuse",)
+    assert validate_response_contract(repaired).passed

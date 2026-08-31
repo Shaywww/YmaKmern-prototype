@@ -19,6 +19,10 @@ _COLOR_EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF]"
 )
 _NUMBERED_LIST_RE = re.compile(r"(?m)^\s*\d+[.、)]\s*")
+_SELF_DEGRADING_ABUSE_RE = re.compile(
+    r"(?:我|咱)(?:可?真)?(?:是|就是|算是|成了)(?:个)?\s*"
+    r"(?:二[逼比]|傻[逼比]|智障|脑残|废物)"
+)
 
 
 def strip_unicode_emoji(response: str) -> str:
@@ -36,6 +40,12 @@ def strip_unicode_emoji(response: str) -> str:
     return value.strip()
 
 
+def strip_self_degrading_abuse(response: str) -> str:
+    """不照抄用户的辱骂标签，改为承认具体失误。"""
+    return _SELF_DEGRADING_ABUSE_RE.sub(
+        "这次是我没接住", str(response or ""))
+
+
 def persona_contract_violations(
     response: str, *, casual_chat: bool = True
 ) -> tuple[str, ...]:
@@ -49,6 +59,8 @@ def persona_contract_violations(
         violations.append("customer_template")
     if _COLOR_EMOJI_RE.search(value):
         violations.append("unicode_emoji")
+    if _SELF_DEGRADING_ABUSE_RE.search(value):
+        violations.append("self_degrading_abuse")
     if casual_chat and _NUMBERED_LIST_RE.search(value):
         violations.append("casual_numbered_list")
     if value.count("～") >= 4 or value.count("!") >= 6:
