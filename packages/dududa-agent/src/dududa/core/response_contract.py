@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .quality_eval import persona_contract_violations
+from .quality_eval import persona_contract_violations, strip_unicode_emoji
 from .renderer import FactAnchor, ResponseKind, unsupported_numeric_claims
 
 
@@ -24,6 +24,22 @@ class ResponseContractResult:
     passed: bool
     violations: tuple[str, ...] = ()
     unsupported_claims: tuple[str, ...] = ()
+
+
+_AUTO_REPAIRABLE_VIOLATIONS = frozenset({"unicode_emoji"})
+
+
+def repair_response_style(
+    text: str, result: ResponseContractResult
+) -> tuple[str, tuple[str, ...]]:
+    """Repair style-only violations while leaving hard failures untouched."""
+    violations = frozenset(result.violations)
+    if not violations or not violations.issubset(_AUTO_REPAIRABLE_VIOLATIONS):
+        return str(text or ""), ()
+    repaired = strip_unicode_emoji(text)
+    if not repaired or repaired == str(text or ""):
+        return str(text or ""), ()
+    return repaired, tuple(sorted(violations))
 
 
 def is_progress_placeholder(text: str) -> bool:

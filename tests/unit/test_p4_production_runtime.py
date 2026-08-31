@@ -337,6 +337,24 @@ class TestProdOrchestrator:
         assert orch._last_state.tool_observations == ()
 
     @pytest.mark.asyncio
+    async def test_chat_emoji_violation_keeps_the_model_answer(self):
+        orch, plugin, _, _ = _make_orchestrator()
+        plugin.llm_reply = "LCR应该还是CS那边的🤔"
+        event = _FakeEvent("lcr是AI英才班？")
+
+        result = await orch.run(
+            _make_envelope("lcr是AI英才班？"),
+            budget=RuntimeBudget(deadline_seconds=20),
+            perception=PerceptionResult(needs_tools=False),
+            event=event,
+        )
+
+        assert result.final_response
+        assert result.final_response.text == "LCR应该还是CS那边的"
+        assert "再问" not in result.final_response.text
+        assert "我收回" not in result.final_response.text
+
+    @pytest.mark.asyncio
     async def test_tool_query_runs_mcp_and_injects_data(self):
         orch, plugin, memory, reg = _make_orchestrator()
         event = _FakeEvent("帮我查一下数据结构课程")

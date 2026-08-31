@@ -18,7 +18,8 @@ from dududa.core.renderer import (
 )
 from dududa.core.capability import CapProvider, ToolObservation
 from dududa.core.response_contract import (
-    is_progress_placeholder, validate_response_contract,
+    is_progress_placeholder, repair_response_style,
+    validate_response_contract,
 )
 from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from dududa.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
@@ -986,6 +987,21 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             allowed_text=getattr(state.envelope, "text", "") or "",
             has_tool_data=(kind == ResponseKind.TOOL_ANSWER),
         )
+        repaired_violations: tuple[str, ...] = ()
+        repaired_text, repair_candidates = repair_response_style(
+            draft_text, contract)
+        if repair_candidates:
+            repaired_contract = validate_response_contract(
+                repaired_text,
+                kind=kind,
+                facts=atomic_facts,
+                allowed_text=getattr(state.envelope, "text", "") or "",
+                has_tool_data=(kind == ResponseKind.TOOL_ANSWER),
+            )
+            if repaired_contract.passed:
+                draft_text = repaired_text
+                contract = repaired_contract
+                repaired_violations = repair_candidates
         if not contract.passed:
             trace_recorder.record(
                 event="response_contract", run_id=state.run_id,
@@ -996,7 +1012,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         else:
             trace_recorder.record(
                 event="response_contract", run_id=state.run_id,
-                trace_id=state.trace_id, passed=True, violations=[])
+                trace_id=state.trace_id, passed=True, violations=[],
+                repaired=list(repaired_violations))
         draft = DraftResponse(
             text=draft_text,
             kind=kind,
@@ -1026,8 +1043,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 and weather is not None):
             return self._weather_fallback_reply(weather.data)
         if state.tool_observations:
-            return "查询已经结束，但刚才的回复没通过一致性检查。你再问我一次吧。"
-        return "刚才那句说得不对，我收回。你再问我一次吧。"
+            return "这次查询结果没能整理成可靠答案，我先不乱说。"
+        return "这句我没说稳，先不乱猜。"
 
     @staticmethod
     def _observation_status(obs, now: float | None = None) -> tuple[str, bool]:

@@ -21,6 +21,21 @@ _COLOR_EMOJI_RE = re.compile(
 _NUMBERED_LIST_RE = re.compile(r"(?m)^\s*\d+[.、)]\s*")
 
 
+def strip_unicode_emoji(response: str) -> str:
+    """Remove coloured emoji without discarding the surrounding answer.
+
+    The persona contract deliberately rejects coloured emoji, but that is a
+    repairable style issue rather than evidence that the answer itself is
+    unsafe or ungrounded.  Keep text emoticons such as ``(・ω・)`` intact.
+    """
+    value = _COLOR_EMOJI_RE.sub("", str(response or ""))
+    value = value.replace("\ufe0f", "").replace("\u200d", "")
+    value = re.sub(r"[ \t]{2,}", " ", value)
+    value = re.sub(r" +\n", "\n", value)
+    value = re.sub(r"\s+([，。！？；：,.!?;:])", r"\1", value)
+    return value.strip()
+
+
 def persona_contract_violations(
     response: str, *, casual_chat: bool = True
 ) -> tuple[str, ...]:

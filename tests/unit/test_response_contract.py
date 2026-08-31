@@ -5,7 +5,9 @@ import pytest
 from dududa.core.renderer import (
     DraftResponse, FinalResponse, ResponseKind, extract_atomic_facts,
 )
-from dududa.core.response_contract import validate_response_contract
+from dududa.core.response_contract import (
+    repair_response_style, validate_response_contract,
+)
 from dududa.core.state import RuntimePhase, RuntimeState
 from dududa.runtime.orchestrator import RuntimeOrchestrator
 
@@ -100,3 +102,25 @@ def test_requested_and_returned_course_count_is_not_rejected():
         has_tool_data=True,
     )
     assert result.passed
+
+
+def test_unicode_emoji_is_repaired_without_discarding_answer():
+    original = "LCR应该还是CS那边的🤔"
+    result = validate_response_contract(original)
+    assert result.violations == ("unicode_emoji",)
+
+    repaired, violations = repair_response_style(original, result)
+
+    assert repaired == "LCR应该还是CS那边的"
+    assert violations == ("unicode_emoji",)
+    assert validate_response_contract(repaired).passed
+
+
+def test_hard_violation_is_not_silently_repaired():
+    original = "你好！有什么我可以帮你的吗？🤔"
+    result = validate_response_contract(original)
+
+    repaired, violations = repair_response_style(original, result)
+
+    assert repaired == original
+    assert violations == ()
