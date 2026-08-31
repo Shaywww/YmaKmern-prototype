@@ -55,6 +55,8 @@ PERCEPTION_SYSTEM_PROMPT = (
     "act_type 只能是 question/statement/command/greeting/complaint/"
     "acknowledgment/farewell/noun_query。"
     "tool_plan 仅在需要查实时数据/执行操作时给出（不需要时给 {\"steps\":[]}）；"
+    "开放式生活建议、吃什么、穿什么等普通闲聊不需要联网；"
+    "不能仅因为消息里出现地名就调用天气工具，必须明确提到天气、气温或降水；"
     "capability_id 必须从可用工具中选，arguments 键名必须与工具参数一致。"
 )
 

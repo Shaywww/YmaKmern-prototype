@@ -453,6 +453,64 @@ class TestProdPerceiveWithModel:
                                                "arguments": {"q": "合肥"}}]}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("text", "capability_id", "arguments"),
+        [
+            ("中午吃什么", "mcp.web_search", {"q": "中午吃什么"}),
+            ("兰州有没有什么建议", "mcp.weather",
+             {"q": "兰州有没有什么建议"}),
+        ],
+    )
+    async def test_irrelevant_model_tool_plan_is_dropped(
+        self, plugin, monkeypatch, text, capability_id, arguments
+    ):
+        async def fake_signal(_text, capabilities=()):
+            return {
+                "confidence": 0.9,
+                "speech_acts": [{"act_type": "question", "confidence": 0.9}],
+                "topics": ["advice"], "entities": [],
+                "candidate_intents": ["chitchat"],
+                "suggested_capabilities": [capability_id],
+                "needs_tools": True, "ambiguities": [],
+                "tool_plan": {"steps": [{
+                    "capability_id": capability_id,
+                    "arguments": arguments,
+                }]},
+            }
+        monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
+
+        merged = await dududa_handlers._perceive_with_model(
+            plugin, _FakeEvent(text, group="g1"))
+
+        assert merged.tool_plan is None
+        assert merged.needs_tools is False
+
+    @pytest.mark.asyncio
+    async def test_explicit_weather_model_tool_plan_remains_allowed(
+        self, plugin, monkeypatch
+    ):
+        async def fake_signal(_text, capabilities=()):
+            return {
+                "confidence": 0.9,
+                "speech_acts": [{"act_type": "question", "confidence": 0.9}],
+                "topics": ["weather"], "entities": [],
+                "candidate_intents": ["weather_query"],
+                "suggested_capabilities": ["mcp.weather"],
+                "needs_tools": True, "ambiguities": [],
+                "tool_plan": {"steps": [{
+                    "capability_id": "mcp.weather",
+                    "arguments": {"q": "兰州"},
+                }]},
+            }
+        monkeypatch.setattr(plugin, "_perception_signal", fake_signal)
+
+        merged = await dududa_handlers._perceive_with_model(
+            plugin, _FakeEvent("兰州明天适合出门吗", group="g1"))
+
+        assert merged.needs_tools is True
+        assert merged.tool_plan["steps"][0]["capability_id"] == "mcp.weather"
+
+    @pytest.mark.asyncio
     async def test_bad_tool_plan_invalidates_signal(self, plugin, monkeypatch):
         async def fake_signal(text, capabilities=()):
             return {

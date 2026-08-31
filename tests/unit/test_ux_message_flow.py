@@ -64,6 +64,29 @@ async def test_message_flow_shows_progress_without_unsolicited_welcome(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_casual_food_advice_never_shows_lookup_progress(
+    tmp_path, monkeypatch
+):
+    p = plugin(tmp_path)
+
+    async def inner(*args):
+        await asyncio.sleep(0.03)
+        return "来碗浆水面，清爽点。"
+
+    monkeypatch.setattr(dududa_handlers, "_run_flow_inner", inner)
+    monkeypatch.setattr(
+        dududa_handlers, "_prune_stale_deliveries",
+        lambda plugin: asyncio.sleep(0))
+    event = Event("lunch")
+    event.message_str = "中午吃什么"
+
+    reply = await dududa_handlers.run_message_flow(p, event)
+
+    assert event.sent == []
+    assert reply == "来碗浆水面，清爽点。"
+
+
+@pytest.mark.asyncio
 async def test_message_flow_rejects_parallel_and_cancel_stops_active(tmp_path, monkeypatch):
     p = plugin(tmp_path)
     entered = asyncio.Event()
@@ -92,4 +115,3 @@ async def test_message_flow_returns_support_id_on_unhandled_error(tmp_path, monk
     reply = await dududa_handlers.run_message_flow(p, Event())
     assert "错误编号：FLOW-" in reply
     assert "provider exploded" not in reply
-

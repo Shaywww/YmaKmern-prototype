@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from uuid import uuid4
 
 from dududa.core.state import SocialAction, RuntimeState, RuntimePhase, RunOutcome, RuntimeBudget
@@ -873,6 +874,7 @@ async def _perceive_with_model(plugin, event):
         if raw is None:
             return rule
         merged, used = merge_perception_with_model(rule, raw)
+        merged = _gate_model_tool_plan(rule, merged, text)
         if used:
             model_conf = raw.get("confidence", 0.0) if isinstance(raw, dict) else 0.0
             logger.debug(
@@ -882,6 +884,97 @@ async def _perceive_with_model(plugin, event):
     except Exception as e:
         logger.warning("Perception model failed, rule-only: %s", e)
         return rule
+
+
+_EXPLICIT_LOOKUP_RE = re.compile(
+    r"(?:帮我)?(?:搜|搜索|查|查询|百度)|网上|官网|最新|实时|附近|"
+    r"哪家|餐厅|饭店|酒店|景点|攻略|评价|口碑|招生|录取|分数线|"
+    r"排名|价格|票价|营业时间|地址|路线|怎么去|资料"
+)
+_CASUAL_ADVICE_RE = re.compile(
+    r"(?:(?:早上|中午|晚上|夜宵|今天|明天)?(?:吃|喝|穿|做|玩)"
+    r"(?:点|些)?(?:什么|啥)|(?:有(?:没有)?|给|来)?(?:什么|啥|点)建议|怎么办)"
+)
+
+
+def _is_casual_advice_without_lookup(text: str) -> bool:
+    """Light lifestyle prompts should stay in the normal chat path."""
+    value = re.sub(r"(?:\[At:[^\]]+\]|\[CQ:at,[^\]]+\]|@\S+)", " ",
+                   str(text or ""), flags=re.I).strip()
+    return bool(
+        value and _CASUAL_ADVICE_RE.search(value)
+        and not _EXPLICIT_LOOKUP_RE.search(value)
+    )
+
+
+def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
+    """Require capability-specific evidence before executing a model plan.
+
+    The model still performs semantic discovery, but a bare location must not
+    become a weather query and a casual choice must not become a web search.
+    Deterministic rule-triggered plans are handled before this gate.
+    """
+    value = str(text or "")
+    cid = str(capability_id or "")
+    evidence = {
+        "mcp.weather": (
+            "天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷",
+            "热不热", "适合出门", "要不要带伞", "带不带伞",
+            "weather", "forecast"),
+        "mcp.clock": (
+            "几点", "时间", "几号", "星期几", "日期", "现在是", "现在几"),
+        "mcp.news": ("新闻", "资讯", "热点", "热搜", "报道"),
+        "mcp.translate": ("翻译", "译成", "translate"),
+        "mcp.course_schedule": (
+            "课程", "查课", "课表", "开课", "课程号", "谁教", "上课时间",
+            "上课地点", "二分制", "二等级制", "两级制"),
+        "mcp.icourse_reviews": (
+            "评课", "课程评价", "老师怎么样", "值得选", "给分", "作业多",
+            "难不难"),
+        "mcp.exam_schedule": ("考试", "期中", "期末", "考表"),
+        "mcp.academic_calendar": ("校历", "放假", "节假日"),
+        "mcp.training_program": ("培养方案", "毕业要求", "学分", "选课"),
+        "mcp.second_classroom": ("第二课堂", "活动", "讲座", "竞赛", "社团"),
+        "mcp.campus_notice": ("校园通知", "学校通知", "公告"),
+        "mcp.academic_affairs": ("成绩", "绩点", "分数"),
+    }
+    if cid == "mcp.web_search":
+        return bool(
+            not _is_casual_advice_without_lookup(value)
+            and _EXPLICIT_LOOKUP_RE.search(value)
+        )
+    markers = evidence.get(cid)
+    if markers is None:
+        return False
+    lowered = value.lower()
+    return any(marker.lower() in lowered for marker in markers)
+
+
+def _gate_model_tool_plan(rule, merged, text: str):
+    """Drop semantically unrelated model-proposed tools, fail closed."""
+    plan = getattr(merged, "tool_plan", None)
+    if not plan or getattr(rule, "needs_tools", False):
+        return merged
+    steps = list(plan.get("steps", ())) if isinstance(plan, dict) else []
+    kept = [
+        step for step in steps
+        if isinstance(step, dict) and _tool_step_has_textual_evidence(
+            text, step.get("capability_id", ""))
+    ]
+    if len(kept) == len(steps):
+        return merged
+    dropped = [
+        str(step.get("capability_id", "")) for step in steps
+        if isinstance(step, dict) and step not in kept
+    ]
+    if dropped:
+        logger.info("Perception tool plan dropped as irrelevant | tools=%s",
+                    dropped[:4])
+    return replace(
+        merged,
+        tool_plan=({"steps": kept} if kept else None),
+        needs_tools=bool(getattr(rule, "needs_tools", False) or kept),
+    )
 
 
 def _capability_lines(plugin, limit: int = 20) -> tuple:
@@ -2804,7 +2897,9 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
             return bool(
                 _is_ambient_wake(event)
                 or _semantic_media_candidate(event)
-                or group_multimodal)
+                or group_multimodal
+                or _is_casual_advice_without_lookup(
+                    getattr(event, "message_str", "")))
 
         if suppressed():
             return
