@@ -19,16 +19,16 @@ jobs:
       TZ: Asia/Shanghai
     steps:
       - name: Check out runtime
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: runtime
       - name: Check out plugin
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Shaywww/YmaKmern-plugin
           path: plugin
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -46,8 +46,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q -m "not net" --junitxml=pytest-report.xml \
-            2>&1 | tee pytest-output.log
+          python -m pytest -q -m "not net" \
+            --junitxml="$RUNNER_TEMP/pytest-report.xml" \
+            2>&1 | tee "$RUNNER_TEMP/pytest-output.log"
       - name: Publish test summary
         if: always()
         working-directory: runtime
@@ -57,7 +58,8 @@ jobs:
             echo "## Pytest"
             echo
             echo '```text'
-            tail -n 160 pytest-output.log 2>/dev/null || echo "pytest did not start"
+            tail -n 160 "$RUNNER_TEMP/pytest-output.log" 2>/dev/null \
+              || echo "pytest did not start"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Enforce test result
