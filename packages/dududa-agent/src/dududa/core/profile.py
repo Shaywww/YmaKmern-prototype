@@ -319,6 +319,34 @@ class ProfileStore:
 
     # ---- 写（合并语义，幂等） ----
 
+    def set_location(
+        self, platform: str, bot_id: str, actor_id: str,
+        location: str, now: Optional[float] = None,
+    ) -> bool:
+        """用有明确用户证据的新位置幂等更新画像。"""
+        value = str(location or "").strip()[:_SIGNAL_MAX_LEN]
+        if not actor_id or actor_id == "unknown" or not value:
+            return False
+        timestamp = now if now is not None else time.time()
+        platform = platform or "qq"
+        bot_id = bot_id or "dududa"
+        changed = False
+        with self._lock:
+            key = self._user_key(platform, bot_id, actor_id)
+            user = self._users.get(key)
+            if user is None:
+                user = UserProfile(
+                    actor_id=actor_id, platform=platform, bot_id=bot_id,
+                    first_seen_ts=timestamp)
+            if user.location != value:
+                user.location = value
+                user.updated_at = timestamp
+                self._users[key] = user
+                changed = True
+        if changed:
+            self._save()
+        return changed
+
     def record_message(
         self,
         platform: str,

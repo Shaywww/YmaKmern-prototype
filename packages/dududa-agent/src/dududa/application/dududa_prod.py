@@ -947,6 +947,19 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 latest = location
         return latest
 
+    def _sync_profile_location(self, state, location: str) -> None:
+        store = getattr(self, "_profile_store", None)
+        setter = getattr(store, "set_location", None)
+        env = getattr(state, "envelope", None)
+        sender = getattr(env, "sender", None)
+        if not callable(setter) or sender is None:
+            return
+        try:
+            setter(
+                self._platform(state), "dududa", sender.actor_id, location)
+        except Exception:
+            logger.debug("Recent location profile sync skipped", exc_info=True)
+
     @staticmethod
     def _build_compose_system(p, extra: str) -> str:
         """生产回复系统提示：人设 + 公开自述知识 + 数据安全 + 风格红线。"""
@@ -1255,6 +1268,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         current_location = extract_location(combined)
         recent_location = (
             current_location or self._latest_explicit_location(mem_prefix))
+        if recent_location:
+            self._sync_profile_location(state, recent_location)
         profile_lines = self._profile_lines(state)
         if recent_location:
             profile_lines = tuple(

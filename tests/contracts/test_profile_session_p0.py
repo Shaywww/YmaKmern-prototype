@@ -136,6 +136,18 @@ class TestProfileStore:
         assert store.get_user("qq", "dududa", "u1") is None
         assert store.get_session("c1", "u1").message_count == 1
 
+    def test_explicit_recent_location_can_repair_stale_profile(self, tmp_path):
+        path = str(tmp_path / "p.json")
+        store = ProfileStore(path=path)
+        store.record_message(
+            "qq", "dududa", "c1", "u1",
+            "我现在在临泽县", engaged=True)
+
+        assert store.set_location("qq", "dududa", "u1", "兰州") is True
+        assert store.set_location("qq", "dududa", "u1", "兰州") is False
+        assert ProfileStore(path=path).get_user(
+            "qq", "dududa", "u1").location == "兰州"
+
     def test_corrupt_file_fail_closed(self, tmp_path):
         path = tmp_path / "p.json"
         path.write_text("{not json", encoding="utf-8")
