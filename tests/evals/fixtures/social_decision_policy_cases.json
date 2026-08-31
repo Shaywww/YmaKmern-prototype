@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {"name": "interrupt_cost=1 blocks passive reply",
      "setup": {"mode": "normal", "reply_rate": 1.0, "interruption_cost": 1.0},
@@ -13,9 +13,12 @@
     {"name": "@ mention unaffected by interrupt_cost",
      "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 1.0},
      "text": "@bot 明天考什么？", "at": true, "expect": "direct_reply"},
-    {"name": "greeting react respects meme_rate",
+    {"name": "textual greeting always receives words",
      "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0, "meme_rate": 1.0},
-     "text": "@bot 你好", "at": true, "session": "pe_greet1", "expect": "react"},
+     "text": "@bot 你好", "at": true, "session": "pe_greet1", "expect": "direct_reply"},
+    {"name": "emoji-only interaction can react",
+     "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0, "meme_rate": 1.0},
+     "text": "@bot 😄", "at": true, "session": "pe_emoji1", "expect": "react"},
     {"name": "privacy grades in group",
      "text": "@bot 我的成绩", "at": true, "expect": "ignore"},
     {"name": "privacy schedule in group",

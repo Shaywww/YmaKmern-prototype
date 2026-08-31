@@ -1,10 +1,11 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {"text": "@bot USTC", "expect": "direct_reply"},
     {"text": "@bot AI", "expect": "direct_reply"},
-    {"text": "@bot 你好", "expect": "react", "session": "s_greet1"},
-    {"text": "@bot 哈", "expect": "react", "session": "s_greet2"},
+    {"text": "@bot 你好", "expect": "direct_reply", "session": "s_greet1"},
+    {"text": "@bot 哈", "expect": "direct_reply", "session": "s_greet2"},
+    {"text": "@bot 😄", "expect": "react", "session": "s_emoji1"},
     {"text": "@bot 帮我查一下数据结构课程", "expect": "use_tools"},
     {"text": "@bot 明天考什么？", "expect": "direct_reply"},
     {"text": "大家好", "at": false, "expect": "ignore"},
