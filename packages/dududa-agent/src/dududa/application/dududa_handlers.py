@@ -214,6 +214,44 @@ def _normalize_reply_style(text: str) -> str:
     return cleaned.strip()
 
 
+_EXPLICIT_CHOICE_RE = re.compile(
+    r"从\s+(.{3,180}?)\s+(?:中\s*)?"
+    r"(?:随机(?:地)?(?:选|挑)|随便(?:选|挑)|任选|选择|选|挑|抽取)"
+    r"\s*(?:一个|1个)(?:\s*(?:回答|回复|作答))?",
+    re.S,
+)
+
+
+def _explicit_choice_reply(text: str) -> str:
+    """Execute a bounded, explicit "pick one" request without old context.
+
+    This deliberately accepts only a short, separator-delimited candidate
+    list.  Ambiguous prose falls through to the normal model path.  Keeping
+    this decision at the current-message boundary prevents a previously
+    stored bot utterance from being copied instead of following the request.
+    """
+    value = " ".join(str(text or "").split()).strip()
+    match = _EXPLICIT_CHOICE_RE.search(value)
+    if not match:
+        return ""
+    raw = match.group(1).strip(" ，,、；;|/“”‘’'\"")
+    candidates = [
+        item.strip(" 《》〈〉「」『』“”‘’'\"")
+        for item in re.split(r"(?:\s+|[，,、；;|/]+)", raw)
+    ]
+    candidates = [item for item in candidates if item]
+    if not 2 <= len(candidates) <= 12:
+        return ""
+    if any(
+        len(item) > 16
+        or re.search(r"[\r\n！？?!：:]|https?://|\[CQ:|\[At:|@", item, re.I)
+        or _contains_restricted(item)
+        for item in candidates
+    ):
+        return ""
+    return random.choice(candidates)
+
+
 _GENERIC_FALLBACK_MARKERS = (
     "对不起，我还没有学会回答这个问题",
     "抱歉，我还没有学会回答这个问题",
@@ -3077,6 +3115,19 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
                              social_decision=action,
                              decision_reason=reason)
     state = state.transition(RuntimePhase.VALIDATED)
+    choice_reply = (
+        _explicit_choice_reply(
+            str(getattr(event, "message_str", "") or ""))
+        if action == SocialAction.DIRECT_REPLY else ""
+    )
+    if choice_reply:
+        trace_recorder.record(
+            event="response_contract", run_id=run_id, trace_id=trace_id,
+            passed=True, violations=[], shortcut="explicit_choice")
+        logger.info(
+            "Explicit choice executed | run_id=%s trace_id=%s reply=%r",
+            run_id, trace_id, choice_reply)
+        return choice_reply
     _mark_task_phase(plugin, event, "perception")
     perception = await _perceive_with_model(plugin, event)
     state = state.transition(RuntimePhase.PERCEIVED, perception=perception)

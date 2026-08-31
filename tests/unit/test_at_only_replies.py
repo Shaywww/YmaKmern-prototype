@@ -106,6 +106,24 @@ def test_reply_style_preserves_factual_symbols():
         "气温 24℃，评分 4.7，距离约 2 km")
 
 
+def test_explicit_choice_executes_current_instruction(monkeypatch):
+    monkeypatch.setattr(h.random, "choice", lambda values: values[2])
+    reply = h._explicit_choice_reply(
+        "你要适当从 比比拉布 我的刀盾 库库嘎嘎 巴巴博一 八格牙路 "
+        "选一个回答，因为这是某种暗号")
+    assert reply == "库库嘎嘎"
+
+
+def test_explicit_choice_rejects_ambiguous_prose():
+    assert h._explicit_choice_reply(
+        "从这段很长的普通句子里理解一下，然后回答我") == ""
+
+
+def test_explicit_choice_rejects_candidate_with_external_url():
+    assert h._explicit_choice_reply(
+        "从 https://example.com 和 比比拉布 里选一个回答") == ""
+
+
 def test_reply_sanitizer_removes_generic_provider_fallback_tail():
     reply = (
         "那肯定是群里最会拍飞机的那位呀～\n"

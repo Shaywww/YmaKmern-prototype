@@ -541,7 +541,8 @@ class DududaCore:
                 scope, viewer_actor_id=viewer, limit=limit))
             bot_scope = self._make_scope(event, msg_type="bot")
             recent += list(self._memory.query_visible(
-                bot_scope, viewer_actor_id=viewer, limit=max(2, limit // 2)))
+                bot_scope, viewer_actor_id=viewer,
+                limit=min(2, max(1, limit // 3))))
             profile_scope = MemoryScope(
                 memory_type=MemoryType.USER_PROFILE,
                 platform=scope.platform,
