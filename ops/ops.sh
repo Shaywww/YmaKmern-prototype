@@ -127,7 +127,9 @@ cmd_smoke() {
             "$PROTO/tests/unit/test_runtime_limits.py" \
             "$PROTO/tests/unit/test_renderer_delivery.py" -q --tb=line
     fi
-    check systemctl is-active "$SERVICE"
+    if [ "${DUDUDA_SMOKE_REQUIRE_SERVICE:-1}" = "1" ]; then
+        check systemctl is-active "$SERVICE"
+    fi
     echo "smoke: $pass passed, $fail failed"
     [ "$fail" -eq 0 ]
 }
