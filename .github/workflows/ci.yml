@@ -62,6 +62,18 @@ jobs:
               || echo "pytest did not start"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.pytest.outcome }}" != "success" ]; then
+            python - "$RUNNER_TEMP/pytest-output.log" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(
+              encoding="utf-8", errors="replace")[-12000:]
+          escaped = (text.replace("%", "%25").replace("\r", "%0D")
+                     .replace("\n", "%0A"))
+          print(f"::error title=Pytest failure tail::{escaped}")
+          PY
+          fi
       - name: Enforce test result
         if: steps.pytest.outcome != 'success'
         run: exit 1
