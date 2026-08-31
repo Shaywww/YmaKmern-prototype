@@ -300,15 +300,22 @@ class TestProdGroupPolicy:
     def test_meme_rate_zero_falls_back_to_text(self, plugin):
         plugin.group_policy.set("g1", mode="normal", meme_rate=0.0)
         action, reason = plugin._social_decision(
-            _FakeEvent("@bot 哈", group="g1"))
+            _FakeEvent("@bot 😄", group="g1"))
         assert action == SocialAction.DIRECT_REPLY
         assert reason == DecisionReason.GREETING_ONLY.value
 
     def test_meme_rate_one_reacts(self, plugin):
         plugin.group_policy.set("g1", mode="normal", meme_rate=1.0)
         action, reason = plugin._social_decision(
-            _FakeEvent("@bot 哈", group="g1"))
+            _FakeEvent("@bot 😄", group="g1"))
         assert action == SocialAction.REACT
+        assert reason == DecisionReason.GREETING_ONLY.value
+
+    def test_textual_greeting_always_gets_text_reply(self, plugin):
+        plugin.group_policy.set("g1", mode="normal", meme_rate=1.0)
+        action, reason = plugin._social_decision(
+            _FakeEvent("@bot 晚上好", group="g1"))
+        assert action == SocialAction.DIRECT_REPLY
         assert reason == DecisionReason.GREETING_ONLY.value
 
     def test_private_ignores_group_policy(self, plugin):

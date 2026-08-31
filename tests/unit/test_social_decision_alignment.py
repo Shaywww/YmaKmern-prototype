@@ -78,11 +78,11 @@ class TestSocialDecisionAlignment:
         assert action == SocialAction.USE_TOOLS
         assert reason == DecisionReason.EXPLICIT_COMMAND.value
 
-    def test_greeting_react(self, monkeypatch, tmp_path):
+    def test_textual_greeting_direct_reply(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
         action, reason = plugin._social_decision(
             _FakeEvent("@bot 哈", group="g1", user="u1"))
-        assert action == SocialAction.REACT
+        assert action == SocialAction.DIRECT_REPLY
         assert reason == DecisionReason.GREETING_ONLY.value
 
     def test_tool_intent_use_tools(self, monkeypatch, tmp_path):
@@ -94,7 +94,7 @@ class TestSocialDecisionAlignment:
 
     def test_react_cooldown_ignores_second_greeting(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
-        ev = _FakeEvent("@bot 哈", group="g1", user="u1")
+        ev = _FakeEvent("@bot 😄", group="g1", user="u1")
         action1, _ = plugin._social_decision(ev)
         assert action1 == SocialAction.REACT
         action2, reason2 = plugin._social_decision(ev)
@@ -103,7 +103,7 @@ class TestSocialDecisionAlignment:
 
     def test_questions_not_affected_by_cooldown(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
-        ev = _FakeEvent("@bot 哈", group="g1", user="u1")
+        ev = _FakeEvent("@bot 😄", group="g1", user="u1")
         plugin._social_decision(ev)
         q = _FakeEvent("@bot 明天考什么？", group="g1", user="u1")
         action, reason = plugin._social_decision(q)

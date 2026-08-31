@@ -144,6 +144,16 @@ def test_reply_sanitizer_does_not_remove_real_preference_or_question():
     assert h._sanitize_conversational_reply("现在去吃饭吗？") == "现在去吃饭吗？"
 
 
+def test_reply_sanitizer_makes_kaomoji_a_greeting_decoration():
+    assert h._sanitize_conversational_reply(
+        "(。・ω・。)", "@YmaKmern 晚上好") == "晚上好呀～(。・ω・。)"
+
+
+def test_reply_sanitizer_keeps_textual_greeting_reply_unchanged():
+    reply = "晚上好呀～今天过得怎么样？(。・ω・。)"
+    assert h._sanitize_conversational_reply(reply, "晚上好") == reply
+
+
 def test_reply_sanitizer_replaces_echoed_self_abuse_with_specific_miss():
     cleaned = h._sanitize_conversational_reply(
         "哈，行行行，我是二逼，你说了算。")

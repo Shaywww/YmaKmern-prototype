@@ -25,7 +25,7 @@ from dududa.application.dududa_utils import (
     _detect_media, _detect_media_kind, _raw_message_segments, _segment_data,
     _has_media_in_raw, _contains_restricted,
     _redact_text, _file_ext, _parse_document, _IMAGE_EXTS, _VIDEO_EXTS,
-    _is_local_media_path,
+    _is_local_media_path, _is_textual_greeting,
 )
 
 from dududa.application.dududa_log import get_logger as _get_logger
@@ -262,6 +262,33 @@ _GENERIC_FALLBACK_MARKERS = (
 )
 
 
+def _textual_greeting_lead(text: str) -> str:
+    """Build the smallest natural text lead for a directed greeting."""
+    value = re.sub(r"@\S+", "", str(text or "")).strip().lower()
+    if not _is_textual_greeting(value):
+        return ""
+    if "晚上好" in value:
+        return "晚上好呀～"
+    if "晚安" in value:
+        return "晚安呀～"
+    if "早上好" in value:
+        return "早上好呀～"
+    if "早安" in value:
+        return "早安呀～"
+    if "中午好" in value or "午安" in value:
+        return "中午好呀～"
+    if "下午好" in value:
+        return "下午好呀～"
+    if "拜拜" in value or "再见" in value:
+        return "拜拜～"
+    if "在吗" in value or "在嘛" in value:
+        return "在呀～"
+    if re.search(r"(?:你好|您好|大家好|各位好|嗨|哈喽|\bhi\b|\bhello\b|\bhey\b)",
+                 value, re.IGNORECASE):
+        return "你好呀～"
+    return "嘿～"
+
+
 def _sanitize_conversational_reply(text: str, user_text: str = "") -> str:
     """Remove provider fallbacks without flattening harmless role-play.
 
@@ -294,6 +321,12 @@ def _sanitize_conversational_reply(text: str, user_text: str = "") -> str:
                 cleaned = "这个我还真拿不准，就不硬猜啦～"
 
     cleaned = strip_self_degrading_abuse(cleaned)
+    # A kaomoji is welcome as punctuation, but it must never be the complete
+    # response to a directed textual greeting.  This is a delivery-boundary
+    # safeguard in case a provider ignores the compose instruction.
+    greeting_lead = _textual_greeting_lead(user_text)
+    if greeting_lead and not re.search(r"[A-Za-z0-9\u3400-\u9fff]", cleaned):
+        cleaned = greeting_lead + cleaned
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 

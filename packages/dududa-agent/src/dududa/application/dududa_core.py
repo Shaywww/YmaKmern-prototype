@@ -34,6 +34,7 @@ from dududa.safeguards.security import (
 from dududa.application.dududa_utils import (
     _redact_text, _contains_restricted, _atomic_write_json,
     _has_media_in_raw, _IGNORE_PATTERNS, _is_greeting_text,
+    _is_textual_greeting,
 )
 
 from dududa.application.dududa_log import get_logger as _get_logger
@@ -381,9 +382,11 @@ class DududaCore:
         # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）
         if any(kw in clean for kw in self._TOOL_KW):
             return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
-        # 纯问候/单表情 -> REACT（同会话 10s 冷却，文档 2.5.4 速率冷却）
-        # meme_rate 控制表情回复比例；未命中回退文本回复（保证 @ 必回）。
-        # 短名词（USTC/AI/课程名）不属于问候，走 DIRECT_REPLY 解释含义
+        # 明确的文字问候要用文字回应；颜文字只能点缀，不能代替回答。
+        # 只有单表情/非文字轻互动才走 REACT（同会话 10s 冷却）。
+        # 短名词（USTC/AI/课程名）不属于问候，走 DIRECT_REPLY 解释含义。
+        if _is_textual_greeting(clean):
+            return SocialAction.DIRECT_REPLY, DecisionReason.GREETING_ONLY.value
         if len(clean) <= 1 or _is_greeting_text(clean):
             if (policy is not None and policy.meme_rate < 1.0
                     and random.random() >= policy.meme_rate):

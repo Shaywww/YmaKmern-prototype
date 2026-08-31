@@ -26,10 +26,25 @@ _IGNORE_PATTERNS = {
     "哈哈", "嘿嘿", "呵呵", "。。。", "……", ".....", "？", "?", "！",
 }
 
-_GREETING_RE = re.compile(
-    r"(?:你好|您好|嗨|哈喽|在吗|在嘛|早上好|中午好|下午好|晚上好|"
-    r"早安|晚安|拜拜|再见|\bhi\b|\bhello\b|\bhey\b|"
-    r"^哈+|^嘿+|^呵+|^h+$|^233+$|^[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+$)")
+_TEXT_GREETING_RE = re.compile(
+    r"^(?:(?:你好|您好|大家好|各位好|嗨|哈喽|在吗|在嘛|"
+    r"早上好|中午好|下午好|晚上好|早安|午安|晚安|拜拜|再见)"
+    r"(?:呀|啊|哇|啦|呢|哦|喔)?|(?:hi|hello|hey)(?:\s+there)?|"
+    r"哈+|嘿+|呵+|h+|233+)[~～!！。,.，…？?]*$",
+    re.IGNORECASE,
+)
+_EMOJI_GREETING_RE = re.compile(
+    r"^[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+$")
+
+
+def _is_textual_greeting(text: str) -> bool:
+    """Return true only when the whole message is a textual greeting.
+
+    This deliberately uses ``fullmatch`` semantics.  A sentence such as
+    ``你为什么不说晚上好`` mentions a greeting but is not itself a greeting.
+    """
+    t = " ".join(str(text or "").strip().lower().split())
+    return bool(t and _TEXT_GREETING_RE.fullmatch(t))
 
 def _is_greeting_text(text: str) -> bool:
     """是否纯问候/轻互动（文档 2.5.4：REACT / greeting_only 判定）。
@@ -39,7 +54,8 @@ def _is_greeting_text(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
         return False
-    return _GREETING_RE.search(t) is not None
+    return (_is_textual_greeting(t)
+            or _EMOJI_GREETING_RE.fullmatch(t) is not None)
 
 # Restricted 数据（文档 2.5.9）：密码/Token/Cookie/私钥/QQ 登录态
 # 不进 Memory、不发模型或 Tool。

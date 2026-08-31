@@ -60,8 +60,13 @@ def _plugin(monkeypatch, tmp_path):
 class TestGreetingDetection:
     def test_real_greetings(self):
         for t in ("你好", "您好", "嗨", "哈喽", "hello", "hi", "hey",
-                  "在吗", "早上好", "晚安", "哈哈", "233", "哈", "😄😄"):
+                  "在吗", "早上好", "晚上好呀！", "晚安", "哈哈", "233",
+                  "哈", "😄😄"):
             assert _is_greeting_text(t), t
+
+    def test_greeting_word_inside_a_sentence_is_not_a_greeting(self):
+        for t in ("你为什么不说晚上好", "晚上好是什么意思", "我说晚上好"):
+            assert not _is_greeting_text(t), t
 
     def test_short_nouns_not_greeting(self):
         for t in ("USTC", "AI", "GPT", "数据结构", "今天天气不错", "this is a test"):
@@ -82,12 +87,19 @@ class TestShortNounDecision:
             _FakeEvent("@bot AI", group="g1", user="u1"))
         assert action == SocialAction.DIRECT_REPLY
 
-    def test_greeting_still_react(self, monkeypatch, tmp_path):
+    def test_textual_greeting_gets_text_reply(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
         action, reason = plugin._social_decision(
             _FakeEvent("@bot 你好", group="g1", user="u1"))
-        assert action == SocialAction.REACT
+        assert action == SocialAction.DIRECT_REPLY
         assert reason == DecisionReason.GREETING_ONLY.value
+
+    def test_sentence_containing_greeting_is_direct_reply(self, monkeypatch, tmp_path):
+        plugin = _plugin(monkeypatch, tmp_path)
+        action, reason = plugin._social_decision(
+            _FakeEvent("@bot 你为什么不说晚上好", group="g1", user="u1"))
+        assert action == SocialAction.DIRECT_REPLY
+        assert reason == DecisionReason.DIRECT_MENTION.value
 
     def test_question_ending_me(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
@@ -175,3 +187,4 @@ class TestComposePrompt:
         await orch._compose_prod_text(state)
         system, _ = plugin._call_llm.call_args.args[:2]
         assert "不要当打招呼" not in system
+        assert "严禁只发颜文字" in system
