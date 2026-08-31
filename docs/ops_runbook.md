@@ -26,7 +26,7 @@ bash ops/ops.sh health              # 健康快照
 bash ops/ops.sh manifest            # 供应链 manifest v2
 bash ops/ops.sh smoke               # 完整 smoke（含关键 pytest）
 bash ops/ops.sh smoke --fast        # 快速 smoke（跳过 pytest）
-bash ops/ops.sh backup              # 先写 health 快照，再委托 /root/manage.sh backup
+bash ops/ops.sh backup              # 先写 health 快照，再委托 ops/manage.sh backup
 ```
 
 | 子命令 | 产物 | 关键字段 |
@@ -55,7 +55,7 @@ bash ops/exit_gate_check.sh --fast  # 静态 38 项
 覆盖内容：
 - P0：forbidden imports / 插件拆分 / 事件契约 / 权限负向 / 提示词注入 / Memory 隔离 / 迁移回滚 / 插件真实加载。
 - P1：`DUDUDA_ROUTER`、`DUDUDA_HYBRID_RENDER`、`DUDUDA_LIMITS_ENABLED`、`DUDUDA_MCP_CLIENT` 四个开关 + 429 降级 / 工具链降级重试硬上限 / 无重复回复、重复 Tool、错误 Memory。
-- P2：`manage.sh` 有 rollback / `ops.sh` 可执行 / 插件薄壳 < 500 行 / 应用层不引用旧 main / manifest 与 health 实际生成且 `ok`。
+- P2：仓库内 `ops/manage.sh` 有 rollback / `ops.sh` 可执行 / 插件薄壳 < 560 行 / 应用层不引用旧 main / manifest 与 health 实际生成且 `ok`。
 - P10：两仓库无 legacy 副本（`*.bak*`/`*.swp`/`main.py.final` 等）、工作区干净、应用层无旧入口路径引用、文档含 rollback/清理清单。
 
 退出码：全部 PASS 为 0；任一 FAIL 为 1。末尾输出 `summary: 门禁检查 N 项, PASS=... FAIL=...`。
@@ -71,15 +71,15 @@ bash ops/eval_gate.sh
 
 ## 4. 备份/恢复 `manage.sh`
 
-位于 `/root/manage.sh`，供 `ops.sh backup` 委托，也支持独立使用：
+权威版本位于仓库内 `ops/manage.sh`，供 `ops.sh backup` 委托，也支持独立使用。`DUDUDA_PROTO_DIR`、`DUDUDA_PLUGIN_DIR`、`DUDUDA_BACKUP_DIR`、`DUDUDA_DATA_DIR`、`DUDUDA_SERVICE` 和 `DUDUDA_PYTHON` 均可覆盖，CI 不依赖服务器目录：
 
 ```bash
-/root/manage.sh backup                      # 打包插件+packages+systemd 单元
-/root/manage.sh restore <tar.gz>            # 停服解包恢复再启动
-/root/manage.sh rollback                    # 恢复到最近一份备份
-/root/manage.sh status                      # 服务状态 + 最近日志关键行
-/root/manage.sh restart                     # 重启 + 3s + status
-/root/manage.sh logs [n]                    # 最近 n 行日志（默认 30）
+bash ops/manage.sh backup                   # 打包插件+packages+systemd 单元
+bash ops/manage.sh restore <tar.gz>         # 停服解包恢复再启动
+bash ops/manage.sh rollback                 # 恢复到最近一份备份
+bash ops/manage.sh status                   # 服务状态 + 最近日志关键行
+bash ops/manage.sh restart                  # 重启 + 3s + status
+bash ops/manage.sh logs [n]                 # 最近 n 行日志（默认 30）
 ```
 
 备份位置：`/root/backups/dududa20/`，保留最近 5 份。
@@ -153,17 +153,17 @@ systemctl is-active astrbot                 # active
     /opt/dududa20-prototype/packages/dududa-agent/src/dududa/   # 权威源码（core/runtime/router/...)
     /opt/dududa20-prototype/ops/                                # 运维脚本（exit_gate/ops/eval_gate/smoke_net）
     /opt/dududa20-prototype/tests/{unit,contracts,integration,evals,fixtures,smoke}/
-    /root/manage.sh                                             # 根运维入口
+    /opt/dududa20-prototype/ops/manage.sh                       # 版本化运维入口
 
 Python 导入从 `packages.*` 切换为 `dududa.*`；插件薄壳 main.py 的 sys.path 指向
 `/opt/dududa20-prototype/packages/dududa-agent/src`。
 
 完整部署生命周期（P2 门禁覆盖）：
 
-    bash /root/manage.sh backup               # 快照（自动保留 5 份）
-    bash /root/manage.sh upgrade [tarball]    # 备份→health 门禁→更新→全量测试→重启；失败自动 rollback
-    bash /root/manage.sh bootstrap [tarball]  # 全新部署：前置检查→源码/插件→systemd→启动验证
-    bash /root/manage.sh rollback             # 回到最近备份
+    bash ops/manage.sh backup               # 快照（自动保留 5 份）
+    bash ops/manage.sh upgrade [tarball]    # 备份→health 门禁→更新→全量测试→重启；失败自动 rollback
+    bash ops/manage.sh bootstrap [tarball]  # 全新部署：前置检查→源码/插件→systemd→启动验证
+    bash ops/manage.sh rollback             # 回到最近备份
 
 
 ## 9. Dashboard 收敛（文档清单第 7 项）
@@ -200,11 +200,11 @@ Python 导入从 `packages.*` 切换为 `dududa.*`；插件薄壳 main.py 的 sy
 - 两仓库不得存在 legacy 代码副本：`*.bak*`、`*.swp`/`*.swo`、`main.py.final`/`main.py.stable*`/`main.py.v2.final`。
   缓存（`__pycache__`、`.pytest_cache`）与运行数据（`data/`、`deploy/.env*`）不在清单内。
 - `packages/dududa-agent/src/dududa/` 不得引用插件旧入口路径 `/root/data/plugins/dududa20/main.py`；测试与运维脚本加载薄壳是预期行为，不算 legacy。
-- 生产入口 = 插件薄壳 `main.py`（< 500 行），业务逻辑在 `/opt/dududa20-prototype/packages/dududa-agent/src/dududa/`。
+- 生产入口 = 插件薄壳 `main.py`（< 560 行），业务逻辑在 `/opt/dududa20-prototype/packages/dududa-agent/src/dududa/`。
 
 回滚路径（rollback 清单）：
 - 代码回滚：两仓库均以 git 为唯一事实源，历史提交即回滚证据；按需 `git revert` 或 `git checkout <rev>`。
-- 数据回滚：`/root/manage.sh rollback`（自动取最新 `dududa20_*.tar.gz` 恢复）；`/root/manage.sh restore <file>` 指定备份。
+- 数据回滚：`bash ops/manage.sh rollback`（自动取最新 `dududa20_*.tar.gz` 恢复）；`bash ops/manage.sh restore <file>` 指定备份。
 - 发布前必须全绿：`bash ops/exit_gate_check.sh`（P0/P1/P2/CP/P10）+ `bash ops/eval_gate.sh` + `bash ops/ops.sh smoke-net`。
 
 验证：
@@ -246,4 +246,4 @@ Python 导入从 `packages.*` 切换为 `dududa.*`；插件薄壳 main.py 的 sy
   Restart=always）长期占用，kill 进程后会被自动拉起，导致 dududa-cp 反复 restart 失败。
   处理：`systemctl disable --now dududa20.service`（ADR-0001 正式单元为 dududa-cp）后再 restart。
   若仍有占用，用 `ss -ltnp | grep ':8000 '` 定位并清理。
-- CP 备份已纳入 /root/manage.sh backup（dududa-cp.service + cp.env + packages）。
+- CP 备份已纳入 `ops/manage.sh backup`（dududa-cp.service + cp.env + packages）。

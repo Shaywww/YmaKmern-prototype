@@ -4,7 +4,7 @@
 #   manifest - 生成供应链 manifest v2（仓库 commit + 工作区干净 + 镜像 digest + 最小挂载）
 #   smoke    - 一次性 bootstrap smoke（语法 + 插件 import [+ 关键 pytest] + 服务状态）
 #   smoke-net - 真实网络 smoke（网关可达性 + 生产 LLM 往返，与阻塞 CI 分开）
-#   backup   - 先写 health 快照，再委托 /root/manage.sh backup
+#   backup   - 先写 health 快照，再委托可移植的 ops/manage.sh backup
 #   cp       - Control Plane 状态/启停（ADR-0001 CP-P0，鉴权访问）
 # 所有命令只读（backup 除外），输出目录用 OPS_OUT 覆盖（默认 /root/data/ops）。
 set -euo pipefail
@@ -15,6 +15,7 @@ PLUGIN="${DUDUDA_PLUGIN_DIR:-${HOME}/data/plugins/dududa20}"
 AGENT_SRC="${DUDUDA_AGENT_SRC:-$PROTO/packages/dududa-agent/src}"
 SERVICE="astrbot"
 OUT="${OPS_OUT:-/root/data/ops}"
+MANAGE="${DUDUDA_MANAGE_SCRIPT:-$SCRIPT_DIR/manage.sh}"
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -175,7 +176,8 @@ cmd_cp() {
 # ---------- backup（先写 health 快照，再委托 manage.sh） ----------
 cmd_backup() {
     OPS_OUT=/tmp cmd_health >/dev/null
-    /root/manage.sh backup
+    [ -f "$MANAGE" ] || { echo "manage script not found: $MANAGE" >&2; return 1; }
+    bash "$MANAGE" backup
 }
 
 case "${1:-}" in

@@ -8,6 +8,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROTO="${DUDUDA_PROTO_DIR:-$(dirname "$SCRIPT_DIR")}"
 PLUGIN="${DUDUDA_PLUGIN_DIR:-${HOME}/data/plugins/dududa20}"
 AGENT_SRC="${DUDUDA_AGENT_SRC:-$PROTO/packages/dududa-agent/src}"
+MANAGE="${DUDUDA_MANAGE_SCRIPT:-$PROTO/ops/manage.sh}"
 FAST="${1:-}"
 
 pass=0
@@ -65,14 +66,16 @@ if [ "$FAST" != "--fast" ]; then
 fi
 
 echo "== P2 gate（部署全生命周期 + legacy 清零）=="
-static "P2 manage.sh backup/restore/rollback" grep -q 'rollback' /root/manage.sh
+static "P2 manage.sh backup/restore/rollback" bash -c \
+    "grep -q backup '$MANAGE' && grep -q restore '$MANAGE' && grep -q rollback '$MANAGE'"
 
 static "P2 Phase8 权威源码布局" test -d "$PROTO/packages/dududa-agent/src/dududa"
 static "P2 Phase8 旧顶层 packages 清零" bash -c "! ls '$PROTO'/packages/*.py 2>/dev/null | grep -q . && [ ! -e '$PROTO/packages/core' ]"
 static "P2 Phase8 import 无 packages. 残留" bash -c "! grep -rn 'from packages\.\|import packages\.' '$PROTO/packages' --include='*.py' | grep -v __pycache__ | grep -q ."
 static "P2 Phase8 tests 分层" bash -c "for d in unit contracts integration evals fixtures smoke; do [ -d "$PROTO/tests/\$d" ] || exit 1; done"
 static "P2 Phase8 ops/ 目录" test -d "$PROTO/ops"
-static "P2 manage.sh bootstrap/upgrade/rollback" bash -c "grep -q bootstrap /root/manage.sh && grep -q upgrade /root/manage.sh && grep -q rollback /root/manage.sh"
+static "P2 manage.sh bootstrap/upgrade/rollback" bash -c \
+    "grep -q bootstrap '$MANAGE' && grep -q upgrade '$MANAGE' && grep -q rollback '$MANAGE'"
 static "P2 Phase8 根入口兼容（dududa import）" env \
     PYTHONPATH="$AGENT_SRC${PYTHONPATH:+:$PYTHONPATH}" \
     python3.12 -c "import dududa.core, dududa.router, dududa.control_plane"
