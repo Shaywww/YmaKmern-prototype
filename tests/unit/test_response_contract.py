@@ -84,3 +84,19 @@ def test_unified_contract_enforces_semantic_numeric_grounding():
         facts=facts, has_tool_data=True)
     assert "unsupported_numeric_claim" in bad.violations
     assert set(bad.unsupported_claims) == {"31℃", "85%"}
+
+
+def test_requested_and_returned_course_count_is_not_rejected():
+    facts = extract_atomic_facts({
+        "total_courses": 60,
+        "returned_courses": 10,
+        "courses": [{"course_name": "数据结构"}],
+    })
+    result = validate_response_contract(
+        "查到60门二分制课程，按你的要求列出10门。",
+        kind=ResponseKind.TOOL_ANSWER,
+        facts=facts,
+        allowed_text="列举10门二等级制课程",
+        has_tool_data=True,
+    )
+    assert result.passed

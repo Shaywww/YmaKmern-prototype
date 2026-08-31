@@ -125,7 +125,7 @@ def _semantic_from_field(field: str) -> str:
         return "credits"
     if any(key in value for key in (
             "count", "reviews", "review_count", "capacity", "enrolled",
-            "total", "items")):
+            "total", "returned", "items")):
         return "count"
     if any(key in value for key in ("price", "cost", "amount")):
         return "price"

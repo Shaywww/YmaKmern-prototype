@@ -29,6 +29,7 @@ from dududa.core.delivery import DeliveryReceipt, DeliveryStatus
 from dududa.core.renderer import Persona
 from dududa.core.capability import (
     Capability, CapabilityCandidate, CapabilityRegistry, CapabilitySchema,
+    ToolObservation,
 )
 from dududa.core.context import ContextBuilder
 from dududa.core.persona.registry import PersonaRegistry
@@ -259,8 +260,68 @@ class TestEnrichPlanArgs:
         assert args["grading"] == "二分制"
         assert args["limit"] == 10
 
+    def test_all_binary_courses_raises_bounded_limit(self):
+        from dududa.planner.planner import GeneratedPlan, PlannedStep
+        plan = GeneratedPlan(goal="g", steps=(PlannedStep(
+            step_id="s1", capability_id="mcp.course_schedule",
+            arguments={"action": "list_by_grading", "limit": 20},
+            purpose="p"),))
+        out = main._ProdOrchestrator._enrich_plan_args(
+            plan, "找出所有的二等级制课程")
+        assert out.steps[0].arguments["limit"] == 100
+
+    def test_grading_payload_has_deterministic_user_facing_fallback(self):
+        data = {
+            "grading": "二分制", "total_courses": 60,
+            "returned_courses": 2,
+            "courses": [
+                {"course_name": "数据结构", "base_course_id": "011127",
+                 "teachers": ["王老师", "李老师"]},
+                {"course_name": "常微分方程", "base_course_id": "001101",
+                 "teachers": ["章老师"]},
+            ],
+        }
+        reply = main._ProdOrchestrator._course_grading_reply(data)
+        assert "共有 60 门二分制课程" in reply
+        assert "这次列出 2 门" in reply
+        assert "1. 数据结构（011127）｜王老师、李老师" in reply
+        assert "2. 常微分方程（001101）｜章老师" in reply
+        assert "不是评课社区字段" in reply
+        assert "一致性" not in reply and "再问" not in reply
+        assert "{'grading'" not in main._ProdOrchestrator._format_tool_data(data)
+
 
 class TestProdOrchestrator:
+    @pytest.mark.asyncio
+    async def test_grading_result_bypasses_model_placeholder_and_requery_loop(self):
+        orch, plugin, _, _ = _make_orchestrator()
+        event = _FakeEvent("列举2门二等级制课程")
+        orch._pending_event = event
+        data = {
+            "grading": "二分制", "total_courses": 60,
+            "returned_courses": 2,
+            "courses": [
+                {"course_name": "数据结构", "base_course_id": "011127",
+                 "teachers": ["王老师"]},
+                {"course_name": "常微分方程", "base_course_id": "001101",
+                 "teachers": ["章老师"]},
+            ],
+        }
+        state = RuntimeState(
+            envelope=_make_envelope("列举2门二等级制课程"),
+            perception=PerceptionResult(needs_tools=True),
+            tool_observations=(ToolObservation(
+                step_id="s1", capability_id="mcp.course_schedule",
+                success=True, data=data, source="ustc_catalog_snapshot"),),
+        )
+
+        reply = await orch._compose_prod_text(state)
+
+        assert "共有 60 门二分制课程" in reply
+        assert "数据结构" in reply and "常微分方程" in reply
+        assert "一致性" not in reply and "再问" not in reply
+        assert plugin.last_user_msg == "", "structured list should not call the LLM"
+
     @pytest.mark.asyncio
     async def test_plain_chat_no_tools_composes_via_llm(self):
         orch, plugin, memory, reg = _make_orchestrator()

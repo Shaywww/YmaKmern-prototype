@@ -387,7 +387,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "合格/不合格", "合格不合格"))
         if grading_intent and "mcp.course_schedule" in allowed:
             requested = re.search(r"(?:列举|找出|给我|返回)?\s*(\d+)\s*门", text)
-            limit = min(100, max(1, int(requested.group(1)))) if requested else 20
+            limit = (min(100, max(1, int(requested.group(1))))
+                     if requested else (100 if any(
+                         token in text for token in ("所有", "全部", "全都"))
+                         else 20))
             return GeneratedPlan(
                 goal=text,
                 steps=(PlannedStep(
@@ -612,6 +615,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     r"(?:列举|找出|给我|返回)?\s*(\d+)\s*门", raw)
                 if requested:
                     args["limit"] = min(100, max(1, int(requested.group(1))))
+                elif any(token in raw for token in ("所有", "全部", "全都")):
+                    args["limit"] = 100
             elif cap_id == "mcp.news" and args.get("action") == "search":
                 # 新闻关键词：去掉新闻类填充词，保留「科技/体育/国际」等话题词
                 kw = re.sub(
@@ -961,6 +966,14 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return state.transition(RuntimePhase.COMPOSED, draft_response=draft)
 
     def _contract_fallback(self, state, contract) -> str:
+        grading = next((
+            obs.data for obs in state.tool_observations
+            if getattr(obs, "success", False)
+            and obs.capability_id == "mcp.course_schedule"
+            and self._is_course_grading_payload(getattr(obs, "data", None))
+        ), None)
+        if grading is not None:
+            return self._course_grading_reply(grading)
         if "unsupported_numeric_claim" in contract.violations:
             return self._grounding_fallback(state)
         weather = next((
@@ -1093,6 +1106,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 "刚才的查询没有拿到可靠结果，我先不乱猜。"
                 "你可以稍后再试一次。"
             )
+        grading = next((
+            obs.data for obs in usable_observations
+            if obs.capability_id == "mcp.course_schedule"
+            and self._is_course_grading_payload(obs.data)
+        ), None)
+        if grading is not None:
+            # This answer is fully representable from structured fields.  A
+            # deterministic composition avoids a model turning a successful
+            # list query back into a progress placeholder.
+            return self._course_grading_reply(grading)
         perception = state.perception
         p = plugin.personas.active
         extra = ""
@@ -1169,6 +1192,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     @staticmethod
     def _format_tool_data(data: Any) -> str:
         """工具结果转可读文本：list[dict] 抽 title/link/snippet，避免裸 JSON 泄漏。"""
+        if _ProdOrchestrator._is_course_grading_payload(data):
+            return _ProdOrchestrator._course_grading_reply(data)
         if isinstance(data, dict) and "forecast_3d" in data:
             lines = [f"查询地点: {data.get('query_city') or data.get('city') or ''}"]
             area = str(data.get("observation_area", "") or "").strip()
@@ -1202,6 +1227,61 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if lines:
                 return "\n".join(lines)
         return str(data)
+
+    @staticmethod
+    def _is_course_grading_payload(data: Any) -> bool:
+        return bool(
+            isinstance(data, dict)
+            and str(data.get("grading", "")).strip()
+            and isinstance(data.get("courses"), list)
+            and "total_courses" in data
+            and "returned_courses" in data
+        )
+
+    @staticmethod
+    def _course_grading_reply(data: dict[str, Any]) -> str:
+        """Render a grading-filter result without inventing or dropping rows."""
+        grading = str(data.get("grading", "")).strip() or "指定等级制"
+        courses = [item for item in data.get("courses", [])
+                   if isinstance(item, dict)][:100]
+        try:
+            total = max(0, int(data.get("total_courses", len(courses)) or 0))
+        except (TypeError, ValueError):
+            total = len(courses)
+        try:
+            returned = max(
+                0, int(data.get("returned_courses", len(courses)) or 0))
+        except (TypeError, ValueError):
+            returned = len(courses)
+        returned = min(returned, len(courses))
+        if total > returned:
+            intro = (
+                f"行，给你捞出来了——公开开课缓存里共有 {total} 门{grading}课程，"
+                f"按课程号去重；这次列出 {returned} 门：")
+        else:
+            intro = (
+                f"行，给你捞出来了——公开开课缓存里共有 {total} 门{grading}课程，"
+                "按课程号去重：")
+        lines = [intro]
+        for index, course in enumerate(courses[:returned], 1):
+            name = str(course.get("course_name", "")).strip()
+            course_id = str(
+                course.get("base_course_id")
+                or course.get("course_id") or "").strip()
+            title = name or course_id or "课程名暂缺"
+            if course_id and course_id not in title:
+                title += f"（{course_id}）"
+            teachers = course.get("teachers")
+            if not isinstance(teachers, (list, tuple)):
+                teacher = str(course.get("teacher", "")).strip()
+                teachers = [teacher] if teacher and teacher != "教师待定" else []
+            teacher_text = "、".join(
+                str(item).strip() for item in teachers
+                if str(item).strip())
+            lines.append(
+                f"{index}. {title}" + (f"｜{teacher_text}" if teacher_text else ""))
+        lines.append("这项筛选依据来自科大公开开课缓存，不是评课社区字段。")
+        return "\n".join(lines)
 
     @staticmethod
     def _prod_anchors(state, text=""):
