@@ -191,3 +191,46 @@ class TestComposeProdBehavior:
         plugin._call_llm = fake_llm
         await plugin.runtime._compose_prod_text(_state("@bot 好的"))
         assert "通用客服式开场白" in cap.system
+
+    @pytest.mark.asyncio
+    async def test_live_level_one_uses_kernel_without_legacy_prompt(
+            self, plugin, monkeypatch):
+        monkeypatch.setenv("DUDUDA_RESPONSE_POLICY_LIVE", "1")
+        plugin.runtime._pending_event = _FakeEvent("@bot 你是怎么搭出来的")
+        cap = _Capture()
+
+        async def fake_llm(system, user_msg, **kw):
+            cap.system = system
+            cap.user = user_msg
+            return "公开架构我可以讲。"
+
+        plugin._call_llm = fake_llm
+        await plugin.runtime._compose_prod_text(
+            _state("@bot 你是怎么搭出来的"))
+        assert "住在 QQ 里的 AI 群友" in cap.system
+        assert "NapCat 与 AstrBot" in cap.system
+        assert "不要把校园背景带进无关闲聊" in cap.system
+        assert "群里谁最帅" not in cap.system
+        assert "旧的 /dududa_help" not in cap.system
+
+    @pytest.mark.asyncio
+    async def test_live_invalid_value_fails_back_to_shadow_prompt(
+            self, plugin, monkeypatch):
+        monkeypatch.setenv("DUDUDA_RESPONSE_POLICY_LIVE", "invalid")
+        plugin.runtime._pending_event = _FakeEvent("@bot 好的")
+        cap = _Capture()
+
+        async def fake_llm(system, user_msg, **kw):
+            cap.system = system
+            return "好。"
+
+        plugin._call_llm = fake_llm
+        await plugin.runtime._compose_prod_text(_state("@bot 好的"))
+        assert "群里谁最帅" in cap.system
+        assert "住在 QQ 里的 AI 群友" not in cap.system
+
+    def test_pure_kaomoji_fallback_keeps_semantic_greeting(self):
+        assert _ProdOrchestrator._semantic_style_fallback(
+            _state("@bot 晚上好")) == "晚上好。"
+        assert _ProdOrchestrator._semantic_style_fallback(
+            _state("@bot 你好")) == "你好，我在。"

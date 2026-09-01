@@ -17,7 +17,7 @@ from typing import Optional
 from .quality_eval import persona_contract_violations
 
 
-POLICY_VERSION = "response-policy/1.0-shadow"
+POLICY_VERSION = "response-policy/1.1"
 
 
 class Scene(str, Enum):
@@ -27,6 +27,8 @@ class Scene(str, Enum):
     INFORMATION = "information"
     TASK = "task"
     TOOL_RESULT = "tool_result"
+    IDENTITY_PROBE = "identity_probe"
+    PRIDE_ACKNOWLEDGED = "pride_acknowledged"
     HIGH_RISK = "high_risk"
 
 
@@ -294,6 +296,8 @@ class OutputStylePolicyResolver:
         Scene.INFORMATION: 0,
         Scene.TASK: 0,
         Scene.TOOL_RESULT: 0,
+        Scene.IDENTITY_PROBE: 1,
+        Scene.PRIDE_ACKNOWLEDGED: 1,
         Scene.HIGH_RISK: 0,
     }
     _RISK_HUMOR_CAP = {
@@ -388,6 +392,10 @@ class OutputStylePolicyResolver:
             return Tone.PRECISE
         if signals.scene == Scene.EMOTIONAL_SUPPORT:
             return Tone.WARM
+        if signals.scene == Scene.IDENTITY_PROBE:
+            return Tone.NEUTRAL
+        if signals.scene == Scene.PRIDE_ACKNOWLEDGED:
+            return Tone.LIVELY
         return Tone.LIVELY if humor else Tone.NEUTRAL
 
 

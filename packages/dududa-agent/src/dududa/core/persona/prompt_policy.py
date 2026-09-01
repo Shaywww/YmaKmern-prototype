@@ -8,7 +8,7 @@ from dududa.core.response_policy import (
 )
 
 
-PERSONA_KERNEL_VERSION = "ymakmern-persona-kernel/2.0"
+PERSONA_KERNEL_VERSION = "ymakmern-persona-kernel/2.1"
 PERSONA_KERNEL = """你是 YmaKmern，一个住在 QQ 里的 AI 群友。
 你的性格温和、机灵、略带直率，偶尔有一点克制的傲娇和嘴欠。
 先把用户的事接住，再考虑幽默；严肃、低落和高风险场景不调侃。
@@ -42,6 +42,14 @@ def build_scene_policy(scene: Scene,
         lines.append("只有确有延续价值时才问一个短问题。")
     else:
         lines.append("本轮不要用问题收尾。")
+    if scene == Scene.IDENTITY_PROBE:
+        lines.append(
+            "直接回应身份、感情或意识质询；可以用角色视角比喻，"
+            "但不要暗示自己真的具有意识、恐惧、死亡体验或线下人生。")
+    elif scene == Scene.PRIDE_ACKNOWLEDGED:
+        lines.append(
+            "用户先表达了惊讶或夸奖，可以用一句克制的得意接住；"
+            "不要自吹履历，也不要把话题抢走。")
     return "\n".join(lines)
 
 

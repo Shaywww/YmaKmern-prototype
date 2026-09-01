@@ -88,6 +88,33 @@ def test_emotional_support_may_continue_but_casual_chat_does_not_have_to():
     assert casual.policy.interaction.followup_mode == FollowupMode.FORBIDDEN
 
 
+def test_identity_probe_has_bounded_humor_and_no_kaomoji():
+    prompts = (
+        "你是不是AI？",
+        "你有意识吗？",
+        "你会害怕自己死掉吗？",
+        "你的底层模型是什么？",
+    )
+    results = [_resolve(text) for text in prompts]
+    assert {item.style_signals.scene for item in results} == {
+        Scene.IDENTITY_PROBE}
+    assert {item.policy.style.humor_level for item in results} == {1}
+    assert {item.policy.style.max_kaomoji for item in results} == {0}
+
+
+def test_user_praise_enables_only_one_level_of_pride():
+    result = _resolve("卧槽，你真会啊")
+    assert result.style_signals.scene == Scene.PRIDE_ACKNOWLEDGED
+    assert result.policy.style.humor_level == 1
+    assert result.policy.style.max_kaomoji == 0
+
+
+def test_praise_does_not_override_a_real_question_or_tool_intent():
+    result = _resolve("你真厉害，今天天气怎么样？")
+    assert result.style_signals.scene == Scene.INFORMATION
+    assert result.policy.style.humor_level == 0
+
+
 def test_control_plane_origin_is_task_and_never_playful():
     result = _resolve("帮助", origin=ResponseOrigin.COMMAND)
     assert result.style_signals.scene == Scene.TASK

@@ -48,9 +48,17 @@ _NEGATIVE_RE = re.compile(
     r"(?:难受|伤心|烦死|好烦|焦虑|害怕|生气|委屈|失败|翻车|糟糕)"
 )
 _POSITIVE_RE = re.compile(
-    r"(?:成功了|过了|太好了|开心|高兴|爽|赢了|好耶|哈哈)"
+    r"(?:成功了|过了|太好了|开心|高兴|爽|赢了|好耶|哈哈|厉害|真会)"
 )
 _QUESTION_RE = re.compile(r"(?:[？?]$|吗[？?]?$|呢[？?]?$|为什么|怎么|多少|哪[里个])")
+_IDENTITY_PROBE_RE = re.compile(
+    r"(?:你(?:到底)?是(?:不是)?\s*(?:AI|人工智能|机器人)|"
+    r"你有(?:没有)?(?:意识|感情|灵魂)|你会(?:害怕|死|难过)|"
+    r"你用的什么模型|你的底层模型|你真的懂吗)", re.I)
+_PRAISE_RE = re.compile(
+    r"(?:你真(?:厉害|会|聪明)|有点东西|太强了|牛啊|卧槽.{0,6}(?:会|强)|"
+    r"居然真让你说中了|这都能答)"
+)
 
 _EXTRA_ORIGIN = "dududa_response_origin"
 _EXTRA_FALLBACK = "dududa_fallback_reason"
@@ -229,7 +237,11 @@ def _risk(state, text: str) -> tuple[
 
 def _emotion(text: str) -> tuple[Emotion, EmotionIntensity,
                                  tuple[SignalEvidence, ...]]:
-    if _STRONG_NEGATIVE_RE.search(text):
+    if _IDENTITY_PROBE_RE.search(text):
+        emotion, intensity, rule = (
+            Emotion.NEUTRAL, EmotionIntensity.MILD,
+            "emotion.identity_probe_neutral.v1")
+    elif _STRONG_NEGATIVE_RE.search(text):
         emotion, intensity, rule = (
             Emotion.NEGATIVE, EmotionIntensity.STRONG,
             "emotion.strong_negative_terms.v1")
@@ -353,6 +365,8 @@ def _scene(state, text: str, origin: ResponseOrigin,
             ResponseOrigin.SUBSCRIPTION, ResponseOrigin.USER_CANCELLED,
             ResponseOrigin.SYSTEM_ERROR):
         scene, rule = Scene.TASK, "scene.control_plane_origin.v1"
+    elif _IDENTITY_PROBE_RE.search(text):
+        scene, rule = Scene.IDENTITY_PROBE, "scene.identity_probe.v1"
     elif emotion == Emotion.NEGATIVE:
         scene, rule = Scene.EMOTIONAL_SUPPORT, "scene.negative_emotion.v1"
     else:
@@ -362,6 +376,10 @@ def _scene(state, text: str, origin: ResponseOrigin,
                 or getattr(perception, "needs_tools", False)
                 or _QUESTION_RE.search(text.strip())):
             scene, rule = Scene.INFORMATION, "scene.question_or_lookup.v1"
+        elif _PRAISE_RE.search(text):
+            scene, rule = (
+                Scene.PRIDE_ACKNOWLEDGED,
+                "scene.user_praise_acknowledged.v1")
         elif getattr(perception, "is_explicit_command", False):
             scene, rule = Scene.TASK, "scene.explicit_command.v1"
         else:
@@ -379,6 +397,12 @@ def _user_preference(plugin, state) -> tuple[UserStylePreference,
             getattr(envelope.platform, "value", str(envelope.platform)),
             "dududa", envelope.sender.actor_id,
             getattr(plugin.personas, "active_id", "dududa_default"))
+        kind = getattr(envelope, "kind", None)
+        kind_value = getattr(kind, "value", str(kind or ""))
+        if (style is not None and not style.visible_in_context(
+                envelope.conversation.conversation_id,
+                is_group=kind_value == "group")):
+            style = None
     except Exception:
         style = None
     if style is None:
@@ -430,8 +454,10 @@ def resolve_response_policy_shadow(
     *,
     run_id: str,
     origin_override: Optional[ResponseOrigin] = None,
+    state_override=None,
 ) -> ShadowResolution:
-    state = _runtime_state(plugin, run_id)
+    state = (state_override if state_override is not None
+             else _runtime_state(plugin, run_id))
     text = str(getattr(event, "message_str", "") or "")
     origin = _origin(event, state, origin_override)
     risk, safety, risk_evidence = _risk(state, text)

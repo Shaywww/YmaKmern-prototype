@@ -187,7 +187,10 @@ class ContextBuilder:
                     envelope.platform.value, "dududa",
                     envelope.sender.actor_id,
                     persona_id or "dududa_default")
-                if style is not None:
+                if (style is not None
+                        and style.visible_in_context(
+                            envelope.conversation.conversation_id,
+                            is_group=envelope.kind.value == "group")):
                     style_lines = style.summary_lines()
                     if style_lines:
                         base = user_pref

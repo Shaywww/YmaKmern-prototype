@@ -198,6 +198,23 @@ class UserStyle:
             return ()
         return (f"用户风格: {'；'.join(parts)}。",)
 
+    def visible_in_context(self, conversation_id: str, *,
+                           is_group: bool) -> bool:
+        """Return whether this preference may affect the current response.
+
+        ``private`` preferences are conversation-local and must never cross
+        into a group.  Unknown visibility values fail closed so a corrupted
+        or future record cannot silently broaden its own scope.
+        """
+        visibility = str(self.visibility or "").strip().lower()
+        if visibility == "public":
+            return True
+        if visibility != "private" or is_group:
+            return False
+        origin = str(self.origin_conversation or "").strip()
+        current = str(conversation_id or "").strip()
+        return bool(origin and current and origin == current)
+
     def display(self) -> str:
         """完整视图（含来源会话与可见性），供 dududa_style 命令与审计。"""
         tone = self._TONE_LABELS.get(self.tone, self.tone or "未设置")

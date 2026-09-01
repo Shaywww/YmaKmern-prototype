@@ -51,6 +51,17 @@ def _state(text="", conv="c1", actor="u1", mentions=()):
         envelope=_env(text, conv, actor, mentions), budget=RuntimeBudget())
 
 
+def _private_env(text="", conv="private_u1", actor="u1"):
+    return MessageEnvelope(
+        platform=Platform.QQ, kind=MessageKind.PRIVATE,
+        conversation=ConversationRef(
+            conversation_id=conv, platform=Platform.QQ,
+            kind=MessageKind.PRIVATE),
+        sender=Actor(actor_id=actor, platform=Platform.QQ, display_name="t"),
+        text=text,
+    )
+
+
 # ---- 1. 规则提取 ----
 
 class TestExtractSignals:
@@ -191,6 +202,19 @@ class TestUserStyleStore:
                              "以后叫我小明", engaged=True, visibility="private")
         style = store.get("qq", "bot1", "u1", "dududa_default")
         assert style.visibility == "private"
+        assert style.visible_in_context("c1", is_group=False) is True
+        assert style.visible_in_context("c2", is_group=False) is False
+        assert style.visible_in_context("c1", is_group=True) is False
+
+    def test_summary_excludes_scope_metadata(self):
+        style = UserStyle(
+            user_id="u1", address="小明", origin_conversation="private_u1",
+            visibility="private")
+        summary = "\n".join(style.summary_lines())
+        assert "小明" in summary
+        assert "private" not in summary
+        assert "private_u1" not in summary
+        assert "可见性" not in summary
 
     def test_corrupt_fail_closed(self, tmp_path):
         path = tmp_path / "styles.json"
@@ -235,6 +259,22 @@ class TestContextBuilder:
         builder = ContextBuilder(memory_repo=InMemoryRepository())
         snap = builder.build(_env(conv="c1", actor="u1"))
         assert snap.user_preference is None
+
+    def test_private_style_does_not_cross_into_group(self, tmp_path):
+        store = UserStyleStore(path=str(tmp_path / "s.json"))
+        store.record_message(
+            "qq", "dududa", "private_u1", "u1", "dududa_default",
+            "以后叫我主人，傲娇一点", engaged=True, visibility="private")
+        builder = ContextBuilder(
+            memory_repo=InMemoryRepository(), style_store=store)
+        group = builder.build(
+            _env(conv="g1", actor="u1"), persona_id="dududa_default")
+        assert group.user_preference is None
+        private = builder.build(
+            _private_env(conv="private_u1", actor="u1"),
+            persona_id="dududa_default")
+        assert private.user_preference is not None
+        assert "主人" in private.user_preference.style
 
 
 # ---- 4. Orchestrator 学习（engaged 同画像语义） ----
@@ -347,6 +387,25 @@ class TestProdStyle:
         orch = object.__new__(_ProdOrchestrator)
         orch._style_store = None
         assert orch._style_lines(_state(conv="c1", actor="u1")) == ()
+
+    def test_private_style_neither_injected_nor_applied_in_group(self,
+                                                                 tmp_path):
+        from dududa.application.dududa_prod import _ProdOrchestrator
+        store = UserStyleStore(path=str(tmp_path / "s.json"))
+        store.record_message(
+            "qq", "bot1", "private_u1", "u1", "dududa_default",
+            "以后回答问题只需要加上主人", engaged=True,
+            visibility="private")
+        fake_plugin = types.SimpleNamespace(
+            personas=types.SimpleNamespace(active_id="dududa_default"),
+            _get_bot_id=lambda event: "bot1")
+        orch = object.__new__(_ProdOrchestrator)
+        orch._style_store = store
+        orch._plugin = fake_plugin
+        orch._pending_event = None
+        state = _state(conv="g1", actor="u1")
+        assert orch._style_lines(state) == ()
+        assert orch._apply_required_address(state, "知道了。") == "知道了。"
 
     def test_required_address_applies_to_deterministic_reply(self, tmp_path):
         from dududa.application.dududa_prod import _ProdOrchestrator
