@@ -50,6 +50,13 @@
 - 落盘内容仅包含人格一致性、口语度、非客服腔分数、确定性违规标签及脱敏会话哈希，不保存用户原话、机器人回复、QQ 号、群号或模型评语。
 - 可用 `DUDUDA_PERSONA_SHADOW=0` 关闭；`DUDUDA_PERSONA_SHADOW_RATE`、`DUDUDA_PERSONA_SHADOW_DAILY_LIMIT` 和 `DUDUDA_PERSONA_SHADOW_DIR` 分别控制采样率、每日上限和聚合数据目录。
 
+## 响应策略影子解析
+
+- 用户可见回复统一解析 `SafetyDecision → InteractionPolicy` 和 `StyleSignals → OutputStylePolicy`；两者职责分离，安全要求的必须澄清不会被风格降级取消。
+- 信号只能由带 `rule_id` 和来源的受控提取器产生；引用、记忆、文件和工具正文不能直接设置幽默、颜文字或追问策略。
+- 命令、进度、订阅与主对话都记录版本化策略、来源、策略指纹、风格上限和契约违规；Trace 不保存用户原话、回复正文、记忆或工具数据。
+- 当前默认为影子模式，不改写线上回复；可用 `DUDUDA_RESPONSE_POLICY_SHADOW=0` 关闭。人格 Kernel 只供用户可见的生成入口使用，视觉摘要、感知和工具规划等内部 JSON 任务仍保持无人格、强结构化。
+
 
 ## 项目结构
 

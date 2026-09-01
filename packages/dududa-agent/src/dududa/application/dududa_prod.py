@@ -1297,6 +1297,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             and str(getattr(obs, "data", "")).strip() not in ("", "[]", "{}")
         ]
         if plan_steps and not usable_observations:
+            try:
+                from dududa.application.response_policy_shadow import (
+                    mark_catalog_message_shadow,
+                )
+                from dududa.core.message_catalog import MessageKey
+                mark_catalog_message_shadow(
+                    event, MessageKey.TOOL_NO_RESULT,
+                    run_id=str(getattr(state, "run_id", "") or ""))
+            except Exception:
+                pass
             effective_intent = self._effective_tool_intent(
                 state, combined)
             if is_ustc_course_query(effective_intent):

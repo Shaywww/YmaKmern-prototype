@@ -20,6 +20,7 @@ from dududa.core.delivery import DeliveryReceipt, DeliveryStatus
 from dududa.core.structured_output import merge_perception_with_model
 from dududa.core.trace_recorder import trace_recorder
 from dududa.core.decision import DecisionReason
+from dududa.core.message_catalog import MessageKey
 
 from dududa.application.dududa_utils import (
     _detect_media, _detect_media_kind, _raw_message_segments, _segment_data,
@@ -55,6 +56,17 @@ _MAX_PROACTIVE_BATCH_BYTES = 40 * 1024 * 1024
 _VISUAL_KINDS = {
     "meme", "sticker", "photo", "screenshot", "gif", "video", "other",
 }
+
+
+def _mark_catalog_fallback(event, key: MessageKey, run_id: str) -> None:
+    """Attach semantic fallback metadata; shadow mode keeps current text."""
+    try:
+        from dududa.application.response_policy_shadow import (
+            mark_catalog_message_shadow,
+        )
+        mark_catalog_message_shadow(event, key, run_id=run_id)
+    except Exception:
+        logger.debug("Response catalogue shadow metadata skipped", exc_info=True)
 
 
 def _contact_sheet(images) -> bytes:
@@ -409,7 +421,9 @@ async def handle_media(plugin, event, url, name, is_image,
             return ""
 
         text = _parse_document(data, name)
-        if not text: return "无法解析文件格式~"
+        if not text:
+            _mark_catalog_fallback(event, MessageKey.MEDIA_UNREADABLE, run_id)
+            return "无法解析文件格式~"
         if _contains_restricted(text):
             logger.warning("File contains restricted content: %s", name)
             return "文件里包含敏感信息（密码/Token/登录态），我不能处理哦。"
@@ -441,9 +455,14 @@ async def handle_media(plugin, event, url, name, is_image,
                 event, reply[:500], msg_type="bot",
                 run_id=run_id, trace_id=trace_id)
         plugin._last_file_ts = time.time()
+        if not reply:
+            _mark_catalog_fallback(event, MessageKey.MODEL_UNAVAILABLE, run_id)
         return reply or "生成失败..."
     except Exception as e:
         logger.exception("Media error: %s", e)
+        if not context_only:
+            _mark_catalog_fallback(
+                event, MessageKey.MEDIA_UNREADABLE, run_id)
         return "" if context_only else "文件处理出错，稍后再试吧..."
 
 
@@ -552,6 +571,8 @@ async def handle_image(plugin, event, data, name, ext,
             event, reply[:500], msg_type="bot",
             run_id=run_id, trace_id=trace_id)
     plugin._last_file_ts = time.time()
+    if not reply:
+        _mark_catalog_fallback(event, MessageKey.MEDIA_UNREADABLE, run_id)
     return reply or "(｡•́︿•̀｡) 图片读不出来..."
 
 
@@ -678,8 +699,14 @@ async def handle_video(plugin, event, data, name, ext,
             _video_contact_sheet, data, ext)
     except Exception:
         logger.warning("Video frame sampling failed", exc_info=True)
+        if not context_only:
+            _mark_catalog_fallback(
+                event, MessageKey.MEDIA_UNREADABLE, run_id)
         return "" if context_only else "这个视频暂时没读出来，再试一次吧～"
     if not sheet:
+        if not context_only:
+            _mark_catalog_fallback(
+                event, MessageKey.MEDIA_UNREADABLE, run_id)
         return "" if context_only else "这个视频暂时没读出来，再试一次吧～"
     b64 = base64.b64encode(sheet).decode()
     context = _group_context_text(plugin, event)
@@ -725,10 +752,13 @@ async def handle_video(plugin, event, data, name, ext,
         "未呈现在关键帧中的声音和细节；不要逐帧机械描述，不得编造前因后果。"
         "回复使用自然短句和纯文本颜文字，不使用彩色 Emoji 或 Markdown。"
     )
-    return await plugin._call_vision(
+    reply = await plugin._call_vision(
         system, user_text, b64, "image/jpeg",
         run_id=run_id, trace_id=trace_id,
-        **_vision_privacy_kwargs(plugin, event)) or "视频关键帧没有识别出可靠内容～"
+        **_vision_privacy_kwargs(plugin, event))
+    if not reply:
+        _mark_catalog_fallback(event, MessageKey.MEDIA_UNREADABLE, run_id)
+    return reply or "视频关键帧没有识别出可靠内容～"
 
 
 def _tag_event_run(event, run_id: str) -> None:
@@ -2885,6 +2915,27 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
 
 
 async def run_message_flow(plugin, event) -> str | None:
+    """Run one message and shadow-resolve policy for every visible reply."""
+    run_id, trace_id = uuid4().hex, uuid4().hex
+    try:
+        event.set_extra("dududa_policy_run_id", run_id)
+        event.set_extra("dududa_policy_trace_id", trace_id)
+    except Exception:
+        setattr(event, "_dududa_policy_run_id", run_id)
+        setattr(event, "_dududa_policy_trace_id", trace_id)
+    reply = await _run_message_flow_impl(
+        plugin, event, run_id=run_id, trace_id=trace_id)
+    if reply:
+        from dududa.application.response_policy_shadow import (
+            trace_response_policy_shadow,
+        )
+        trace_response_policy_shadow(
+            plugin, event, reply, run_id=run_id, trace_id=trace_id)
+    return reply
+
+
+async def _run_message_flow_impl(plugin, event, *, run_id: str,
+                                 trace_id: str) -> str | None:
     """on_message 主流程（原 Main.on_message 逻辑）。
 
     返回要发送的文本；None 表示不回复。
@@ -2903,9 +2954,13 @@ async def run_message_flow(plugin, event) -> str | None:
     if _dedupe_message(plugin, event, msg_id): return None
     if _cross_session_reply_dropped(plugin, event): return None
     if not _preflight_group_message(plugin, event, msgs): return None
-    run_id, trace_id = uuid4().hex, uuid4().hex
     scene_reply = _group_scene_reply(event)
     if scene_reply:
+        from dududa.application.response_policy_shadow import (
+            mark_response_origin,
+        )
+        from dududa.core.response_policy import ResponseOrigin
+        mark_response_origin(event, ResponseOrigin.NATIVE_SCENE)
         trace_recorder.record(
             event="social_decision", run_id=run_id, trace_id=trace_id,
             action=SocialAction.DIRECT_REPLY.value,
@@ -2972,6 +3027,16 @@ async def run_message_flow(plugin, event) -> str | None:
                               trace_id=trace_id)
         if silent_background:
             return None
+        from dududa.application.response_policy_shadow import (
+            mark_catalog_message_shadow, mark_response_origin,
+        )
+        from dududa.core.message_catalog import MessageKey
+        from dududa.core.response_policy import ResponseOrigin
+        mark_catalog_message_shadow(
+            event, MessageKey.USER_CANCELLED, run_id=run_id)
+        mark_response_origin(
+            event, ResponseOrigin.USER_CANCELLED,
+            fallback_reason="user_cancelled")
         return "当前任务已取消。你可以换一种问法后重新发送。"
     except Exception as e:
         logger.exception("Flow error | run_id=%s trace_id=%s: %s",
@@ -2981,6 +3046,16 @@ async def run_message_flow(plugin, event) -> str | None:
                               error=str(e)[:300])
         if silent_background:
             return None
+        from dududa.application.response_policy_shadow import (
+            mark_catalog_message_shadow, mark_response_origin,
+        )
+        from dududa.core.message_catalog import MessageKey
+        from dududa.core.response_policy import ResponseOrigin
+        mark_catalog_message_shadow(
+            event, MessageKey.MODEL_UNAVAILABLE, run_id=run_id)
+        mark_response_origin(
+            event, ResponseOrigin.SYSTEM_ERROR,
+            fallback_reason="flow_exception")
         support_id = make_support_id("flow", e, trace_id)
         return ("这次处理没有完成。你可以直接重试，或换一种方式提问。"
                 f"\n错误编号：{support_id}")
@@ -3033,7 +3108,23 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
         }
         sender = getattr(plugin, "_send_progress", None)
         if sender is not None:
-            await sender(event, f"{labels.get(phase, phase)}，请稍等…（可发送 /ymakmern_cancel 取消）")
+            progress = f"{labels.get(phase, phase)}，请稍等…（可发送 /ymakmern_cancel 取消）"
+            from dududa.application.response_policy_shadow import (
+                trace_response_policy_shadow,
+            )
+            from dududa.core.response_policy import ResponseOrigin
+            run_id = str(getattr(event, "_dududa_policy_run_id", "") or "")
+            trace_id = str(getattr(event, "_dududa_policy_trace_id", "") or "")
+            try:
+                run_id = str(event.get_extra("dududa_policy_run_id") or run_id)
+                trace_id = str(event.get_extra("dududa_policy_trace_id") or trace_id)
+            except Exception:
+                pass
+            trace_response_policy_shadow(
+                plugin, event, progress,
+                run_id=run_id, trace_id=trace_id,
+                origin_override=ResponseOrigin.PROGRESS)
+            await sender(event, progress)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -3090,6 +3181,9 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
                 pass
         else:
             _mark_at_only_ts(event)
+            from dududa.application.response_policy_shadow import mark_response_origin
+            from dududa.core.response_policy import ResponseOrigin
+            mark_response_origin(event, ResponseOrigin.LIGHT_REACTION)
             _r = random.choice(_AT_ONLY_REPLIES)
             logger.info("Flow end | run_id=%s trace_id=%s reply=%r",
                         run_id, trace_id, _r[:80])
@@ -3182,6 +3276,9 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
     if action == SocialAction.REACT:
         state = state.transition(RuntimePhase.COMPLETED,
                                  outcome=RunOutcome.SUCCEEDED)
+        from dududa.application.response_policy_shadow import mark_response_origin
+        from dududa.core.response_policy import ResponseOrigin
+        mark_response_origin(event, ResponseOrigin.LIGHT_REACTION)
         _r = random.choice(_REACT_EMOJIS)
         logger.info("Flow react | run_id=%s trace_id=%s: %r",
                     run_id, trace_id, _r)
