@@ -24,6 +24,7 @@ def test_course_recommendation_uses_reviews_then_offerings():
         "mcp.course_schedule",
     )
     assert not ustc_query_has_subject("推荐几门好拿高分的课")
+    assert ustc_search_query("帮我查一下数据结构课程") == "数据结构"
 
 
 def test_short_subject_inherits_ustc_course_goal():

@@ -158,6 +158,7 @@ def _ustc_search_terms(text: str) -> str:
         " ", value)
     value = re.sub(r"(?:哪几个|哪一些|哪些|哪个|哪位)\s*老师", " ", value)
     value = re.sub(r"(?:老师|教师)\s*(?:的)?\s*$", " ", value)
+    value = re.sub(r"(?:这门)?(?:课程|课)\s*$", " ", value)
     value = re.sub(r"[，。！？、?！~～：:；;]+", " ", value)
     return " ".join(value.split()).strip()
 
