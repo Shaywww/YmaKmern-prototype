@@ -8,7 +8,7 @@ from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 - _enrich_plan_args：口语化查询关键词注入（'帮我查一下数据结构课程' -> '数据结构'）
 - _ProdOrchestrator：模式化工具执行、LLM 合成、生产记忆作用域、回执落盘
 """
-import pathlib, sys, types
+import json, pathlib, sys, types
 from datetime import datetime
 from zoneinfo import ZoneInfo
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
@@ -35,8 +35,13 @@ from dududa.core.capability import (
 )
 from dududa.core.context import ContextBuilder
 from dududa.core.persona.registry import PersonaRegistry
-from dududa.mcp.registry import register_all_mcp_services
+from dududa.mcp.course_schedule import CourseScheduleService
+from dududa.mcp.registry import create_all_services, register_all_mcp_services
+from dududa.mcp.weather_service import WeatherService
 from dududa.planner.integration import integrate_with_orchestrator
+
+
+MCP_FIXTURES = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "mcp"
 
 
 def _make_envelope(text="你好"):
@@ -113,9 +118,44 @@ class _FakePlugin:
         )
 
 
-def _make_orchestrator(memory=None):
+def _fixture_json(name):
+    return json.loads((MCP_FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _offline_catalog_service(tmp_path):
+    svc = CourseScheduleService(cache_dir=tmp_path)
+    svc._write_json(
+        svc._manifest_cache_path,
+        _fixture_json("catalog_manifest.json"),
+    )
+    svc._write_json(
+        svc._semester_cache_path("2026-fall"),
+        _fixture_json("catalog_2026-fall.json"),
+    )
+    return svc
+
+
+def _offline_weather_service():
+    svc = WeatherService()
+    payload = _fixture_json("weather_linzexian.json")
+
+    async def _fetch_fixture(**kwargs):
+        requested = str(kwargs.get("city") or kwargs.get("q") or "").strip()
+        result = dict(payload)
+        if requested:
+            result["city"] = requested
+            result["query_city"] = requested
+        return result
+
+    svc._fetch_live = _fetch_fixture
+    return svc
+
+
+def _make_orchestrator(memory=None, service_overrides=None):
     memory = memory or InMemoryRepository()
     reg = CapabilityRegistry()
+    if service_overrides:
+        create_all_services().update(service_overrides)
     register_all_mcp_services(reg)
     # iCourse 按群/按人策略：本文件专注工具链行为，固定为无限制（legacy allow）
     import dududa.runtime.orchestrator as _orch_mod
@@ -401,8 +441,10 @@ class TestProdOrchestrator:
         assert "晚饭时段" in context
 
     @pytest.mark.asyncio
-    async def test_tool_query_runs_mcp_and_injects_data(self):
-        orch, plugin, memory, reg = _make_orchestrator()
+    async def test_tool_query_runs_mcp_and_injects_data(self, tmp_path):
+        orch, plugin, memory, reg = _make_orchestrator(service_overrides={
+            "course_schedule": _offline_catalog_service(tmp_path),
+        })
         event = _FakeEvent("帮我查一下数据结构课程")
         result = await orch.run(
             _make_envelope("帮我查一下数据结构课程"),
@@ -421,9 +463,10 @@ class TestProdOrchestrator:
         assert obs.success and obs.data
 
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
     async def test_weather_query_runs_weather_tool(self):
-        orch, plugin, memory, reg = _make_orchestrator()
+        orch, plugin, memory, reg = _make_orchestrator(service_overrides={
+            "weather": _offline_weather_service(),
+        })
         event = _FakeEvent("临泽县今天天气怎么样")
         result = await orch.run(
             _make_envelope("临泽县今天天气怎么样"),
@@ -491,8 +534,10 @@ class TestProdOrchestrator:
         assert not any("[YmaKmern]" in r.content for r in records)
 
     @pytest.mark.asyncio
-    async def test_tool_memory_episodic_and_bot_scoped(self):
-        orch, plugin, memory, reg = _make_orchestrator()
+    async def test_tool_memory_episodic_and_bot_scoped(self, tmp_path):
+        orch, plugin, memory, reg = _make_orchestrator(service_overrides={
+            "course_schedule": _offline_catalog_service(tmp_path),
+        })
         event = _FakeEvent("帮我查一下数据结构课程")
         result = await orch.run(
             _make_envelope("帮我查一下数据结构课程"),
@@ -592,7 +637,9 @@ class TestLLMPlanning:
 
     @pytest.mark.asyncio
     async def test_rule_miss_then_llm_plan_runs_tool(self):
-        orch, plugin, memory, reg = _make_orchestrator()
+        orch, plugin, memory, reg = _make_orchestrator(service_overrides={
+            "weather": _offline_weather_service(),
+        })
         plan_reply = (
             '{"steps":[{"capability_id":"mcp.weather",'
             '"arguments":{"q":"合肥"}}]}')

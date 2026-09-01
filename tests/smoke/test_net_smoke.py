@@ -19,6 +19,8 @@ from unittest import mock
 import httpx
 import pytest
 from tests.path_config import AGENT_SRC, PLUGIN_DIR
+from dududa.mcp.course_schedule import CourseScheduleService
+from dududa.mcp.weather_service import WeatherService
 
 pytestmark = pytest.mark.net
 
@@ -111,3 +113,20 @@ def test_production_course_capability_health():
                  "mcp.academic_calendar", "mcp.academic_affairs"):
         assert want in caps, f"{want} 未注册"
         assert caps[want].is_healthy, f"{want} 不健康"
+
+
+def test_live_course_snapshot_query(tmp_path):
+    """公开课程快照真实联网查询；仅在显式 net smoke 中运行。"""
+    svc = CourseScheduleService(cache_dir=tmp_path)
+    result = asyncio.run(svc.search("数据结构"))
+    assert result.success, f"课程快照查询失败: {result.error}"
+    assert result.data, "课程快照返回为空"
+    assert any(item.get("course_name") == "数据结构" for item in result.data)
+
+
+def test_live_weather_query():
+    """wttr.in 真实联网查询；仅在显式 net smoke 中运行。"""
+    result = asyncio.run(WeatherService().search(city="临泽县"))
+    assert result.success, f"天气查询失败: {result.error}"
+    assert result.data.get("query_city") == "临泽县"
+    assert result.data.get("temp_c") not in (None, "")

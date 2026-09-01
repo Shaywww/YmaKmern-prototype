@@ -88,8 +88,38 @@ class ServerCircuitBreaker:
         sids = set(self._failures) | set(self._open_until) | set(self._probing)
         return {sid: self.state(sid) for sid in sorted(sids)}
 
+    def reset(self, server_id: Optional[str] = None) -> None:
+        """Forget breaker state for one server, or for every server.
+
+        The all-server form is intentionally explicit so test and controlled
+        reload code can restore a clean process state without having to know
+        which provider IDs failed.  Production request handling must continue
+        to use ``record_success``/``record_failure`` instead of resetting the
+        breaker opportunistically.
+        """
+        if server_id is not None:
+            self._failures.pop(server_id, None)
+            self._open_until.pop(server_id, None)
+            self._probing.discard(server_id)
+            return
+        self._failures.clear()
+        self._open_until.clear()
+        self._probing.clear()
+
 
 breaker = ServerCircuitBreaker()
+
+
+def reset_process_state() -> None:
+    """Reset module-owned MCP state for tests or a controlled reload.
+
+    MCP services keep health and response caches on their instances.  Resetting
+    only the circuit breaker therefore leaves a failed service visible to the
+    next registry.  Keep both layers together so callers cannot accidentally
+    perform a partial reset.
+    """
+    breaker.reset()
+    _SERVICES.clear()
 
 
 def breaker_status() -> dict[str, str]:
@@ -98,9 +128,11 @@ def breaker_status() -> dict[str, str]:
 
 
 def create_all_services() -> dict:
-    global _SERVICES
     if _SERVICES: return _SERVICES
-    _SERVICES = {
+    # Preserve object identity: control-plane and plugin modules may keep a
+    # reference to this process cache.  Rebinding after a controlled reset
+    # would leave those references permanently empty.
+    _SERVICES.update({
         "course_schedule": CourseScheduleService(),
         "exam_schedule": ExamScheduleService(),
         "academic_calendar": AcademicCalendarService(),
@@ -114,7 +146,7 @@ def create_all_services() -> dict:
         "news": NewsService(),
         "translate": TranslateService(),
         "icourse_reviews": ICourseReviewsService(),
-    }
+    })
     return _SERVICES
 
 class MCPProvider:

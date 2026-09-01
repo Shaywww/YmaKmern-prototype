@@ -1,0 +1,20 @@
+{
+  "city": "临泽县",
+  "query_city": "临泽县",
+  "observation_area": "临泽",
+  "region": "甘肃",
+  "observed_at": "2026-09-01 10:00 AM",
+  "temp_c": "24",
+  "feels_like_c": "25",
+  "desc": "晴",
+  "humidity": "42",
+  "wind_kph": "9",
+  "forecast_3d": [
+    {
+      "date": "2026-09-02",
+      "min_c": "16",
+      "max_c": "29",
+      "desc": "晴"
+    }
+  ]
+}

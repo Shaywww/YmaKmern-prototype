@@ -14,6 +14,7 @@ from dududa.mcp.registry import (
     MCPProvider, ServerCircuitBreaker, breaker_status,
     create_all_services, register_all_mcp_services,
 )
+from dududa.mcp.base import ServiceHealth
 from dududa.core.capability import (
     Capability, CapabilityRegistry, CapabilityRisk, CapabilitySchema,
     ProviderType,
@@ -139,6 +140,28 @@ class TestAccessPolicy:
 
 
 class TestServerCircuitBreaker:
+    def test_reset_clears_every_internal_state(self):
+        b = ServerCircuitBreaker(threshold=1, reset_seconds=30.0)
+        b.record_failure("open")
+        b._probing.add("probing")
+        b._failures["failed"] = 1
+
+        b.reset()
+
+        assert b.status() == {}
+        assert b.allow("open") is True
+        assert b.allow("probing") is True
+
+    def test_reset_can_target_one_server(self):
+        b = ServerCircuitBreaker(threshold=1, reset_seconds=30.0)
+        b.record_failure("first")
+        b.record_failure("second")
+
+        b.reset("first")
+
+        assert b.state("first") == "closed"
+        assert b.state("second") == "open"
+
     def test_closed_by_default(self):
         b = ServerCircuitBreaker(threshold=3, reset_seconds=30.0)
         assert b.state("s1") == "closed"
@@ -228,6 +251,23 @@ class TestMCPProviderBreaker:
 
 
 class TestRegistryHealthWiring:
+    def test_process_reset_drops_breaker_and_cached_service_health(self):
+        from dududa.mcp import registry as reg
+        first = create_all_services()
+        first_course = first["course_schedule"]
+        first_course._last_health = ServiceHealth.UNAVAILABLE
+        first_course._last_health_check = time.time()
+        for _ in range(3):
+            reg.breaker.record_failure("course_schedule")
+
+        reg.reset_process_state()
+
+        assert reg.breaker.status() == {}
+        assert reg._SERVICES == {}
+        second_course = create_all_services()["course_schedule"]
+        assert second_course is not first_course
+        assert second_course.check_health() == ServiceHealth.UNKNOWN
+
     def test_breaker_open_excluded_from_healthy(self):
         from dududa.mcp import registry as reg
         reg2 = CapabilityRegistry()

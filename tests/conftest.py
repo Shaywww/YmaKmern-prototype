@@ -17,10 +17,9 @@ def _trace_dir_tmp(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def _reset_mcp_breaker():
-    """MCP 熔断器是进程级状态；某测试把服务打到 OPEN 会污染后续测试
-    （list_healthy 会剔除熔断中的能力）。每个测试后全部复位。"""
+def _reset_mcp_process_state():
+    """MCP 熔断和服务健康缓存不得跨测试泄漏。"""
     from dududa.mcp import registry as _reg
+    _reg.reset_process_state()
     yield
-    for _sid in list(_reg._SERVICES):
-        _reg.breaker.record_success(_sid)
+    _reg.reset_process_state()

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-28T00:00:00Z",
+  "semester": {
+    "key": "2026-fall",
+    "name": "2026年秋季学期"
+  },
+  "revision": "fixture-rev-1",
+  "courses": [
+    {
+      "id": "011127.01",
+      "courseName": "数据结构",
+      "department": {
+        "code": "011",
+        "name": "计算机科学与技术学院"
+      },
+      "teacher": "王老师",
+      "credits": 4,
+      "hours": 80,
+      "rawSchedule": "3A101: 1(1,2)",
+      "capacity": 120,
+      "enrolled": 118,
+      "examType": "笔试（闭卷）",
+      "grading": "二分制"
+    },
+    {
+      "id": "011127.02",
+      "courseName": "数据结构",
+      "department": {
+        "code": "011",
+        "name": "计算机科学与技术学院"
+      },
+      "teacher": "李老师",
+      "credits": 4,
+      "hours": 80,
+      "rawSchedule": "3A102: 2(3,4)",
+      "capacity": 100,
+      "enrolled": 96,
+      "grading": "二分制"
+    }
+  ]
+}
