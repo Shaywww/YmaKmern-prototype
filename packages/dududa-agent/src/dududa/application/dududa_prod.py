@@ -855,7 +855,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         except Exception:
             return ""
 
-    def _profile_lines(self, state) -> tuple:
+    def _profile_lines(self, state, *, include_location: bool = True) -> tuple:
         """画像摘要（称呼/偏好/事实 + 会话活跃话题），注入 LLM 上下文。"""
         store = getattr(self, "_profile_store", None)
         if store is None:
@@ -871,6 +871,12 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         except Exception:
             return ()
         lines = list(user.summary_lines() if user else ())
+        if not include_location:
+            lines = [
+                line for line in lines
+                if not str(line).startswith((
+                    "用户所在地:", "用户当前所在地（近期明确说明）:"))
+            ]
         if sess is not None and sess.active_topics:
             lines.append("最近话题: " + "、".join(sess.active_topics[:6]))
         return tuple(lines)
@@ -994,6 +1000,60 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if location:
                 latest = location
         return latest
+
+    @staticmethod
+    def _location_context_relevant(text: str) -> bool:
+        """Whether location may improve this turn's answer.
+
+        Location is personal context, not a conversational catchphrase.  It
+        is exposed to the reply model only for an explicit location statement
+        or a query whose answer is inherently local.  In particular, generic
+        games and questions about what the bot ate must not inherit a stored
+        city merely because one is available.
+        """
+        raw = re.sub(r"@\S+", " ", str(text or ""))
+        raw = " ".join(raw.split()).strip()
+        if not raw:
+            return False
+        if extract_location(raw):
+            return True
+        if re.search(
+                r"(?:天气|气温|温度|预报|下雨|下雪|冷不冷|热不热|"
+                r"weather|forecast)", raw, re.I):
+            return True
+        if re.search(
+                r"(?:附近|周边|本地|当地|这里|那边|去哪|怎么走|多远|"
+                r"路线|导航|地铁|公交|打车|酒店|宾馆|景点|旅游|外卖|"
+                r"餐馆|饭店|餐厅|哪(?:里|儿)吃|有什么好吃|"
+                r"推荐.{0,8}(?:店|餐|吃)|吃什么|吃啥|海底捞|火锅|"
+                r"烧烤|奶茶)", raw):
+            # “你中午吃的什么”问的是机器人，不是本地推荐。
+            if re.search(r"(?:你|YmaKmern).{0,10}(?:吃|喝|点)", raw, re.I):
+                return False
+            return True
+        return False
+
+    @staticmethod
+    def _without_location_memory(memory_text: str) -> str:
+        """Remove stale location-only turns from unrelated model context."""
+        raw_lines = str(memory_text or "").splitlines()
+        locations: set[str] = set()
+        for line in raw_lines:
+            location = extract_location(line)
+            if location:
+                locations.add(location)
+        kept: list[str] = []
+        for line in raw_lines:
+            value = line.strip()
+            if value.startswith((
+                    "用户所在地:", "用户当前所在地（近期明确说明）:")):
+                continue
+            if extract_location(value):
+                continue
+            if locations and any(location in value for location in locations):
+                continue
+            kept.append(line)
+        return "\n".join(kept)
 
     def _sync_profile_location(self, state, location: str) -> None:
         store = getattr(self, "_profile_store", None)
@@ -1361,12 +1421,18 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         mem_prefix = plugin._read_memory(event)
         if any(kw in combined for kw in ["文件", "图片", "刚才", "之前", "刚刚", "那个", "这个"]):
             mem_prefix = plugin._read_memory(event, include_episodic=True)
+        location_relevant = self._location_context_relevant(combined)
         current_location = extract_location(combined)
-        recent_location = (
-            current_location or self._latest_explicit_location(mem_prefix))
+        recent_location = ""
+        if location_relevant:
+            recent_location = (
+                current_location or self._latest_explicit_location(mem_prefix))
+        else:
+            mem_prefix = self._without_location_memory(mem_prefix)
         if recent_location:
             self._sync_profile_location(state, recent_location)
-        profile_lines = self._profile_lines(state)
+        profile_lines = self._profile_lines(
+            state, include_location=location_relevant)
         if recent_location:
             profile_lines = tuple(
                 line for line in profile_lines

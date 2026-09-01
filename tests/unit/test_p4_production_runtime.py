@@ -432,6 +432,46 @@ class TestProdOrchestrator:
         assert "【当前时间背景】北京时间" in plugin.last_system
         assert "用户当前所在地（近期明确说明）: 兰州" in plugin.last_user_msg
 
+    @pytest.mark.parametrize("text", (
+        "有没有什么小游戏可以玩",
+        "你中午吃的什么",
+    ))
+    @pytest.mark.asyncio
+    async def test_unrelated_chat_does_not_receive_stored_location(self, text, tmp_path):
+        from dududa.core.profile import ProfileStore
+
+        orch, plugin, _, _ = _make_orchestrator()
+        store = ProfileStore(path=str(tmp_path / "profiles.json"))
+        store.set_location("qq", "dududa", "user_1", "兰州")
+        orch._profile_store = store
+        plugin._read_memory = lambda *args, **kwargs: (
+            "【近期对话】\n"
+            "[用户]: 我现在在兰州\n"
+            "YmaKmern: 兰州那边可以看看\n"
+            "======\n")
+        event = _FakeEvent(text)
+
+        result = await orch.run(
+            _make_envelope(text),
+            budget=RuntimeBudget(deadline_seconds=20),
+            perception=PerceptionResult(needs_tools=False), event=event)
+
+        assert result.final_response
+        assert "用户所在地: 兰州" not in plugin.last_user_msg
+        assert "用户当前所在地（近期明确说明）: 兰州" not in plugin.last_user_msg
+        assert "我现在在兰州" not in plugin.last_user_msg
+        assert "兰州那边" not in plugin.last_user_msg
+
+    @pytest.mark.parametrize("text", (
+        "附近有什么好吃的",
+        "今天天气怎么样",
+        "我现在在兰州",
+        "兰州有什么酒店",
+        "吃海底捞",
+    ))
+    def test_location_context_relevance_is_conservative(self, text):
+        assert main._ProdOrchestrator._location_context_relevant(text)
+
     def test_nineteen_hundred_is_dinner_context(self):
         timestamp = datetime(
             2026, 8, 31, 19, 0,

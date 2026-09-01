@@ -39,6 +39,9 @@ _FOLLOWUP_ONLY_RE = re.compile(
     r"^(?:查到了吗|查到没|查好了吗|有结果了吗|结果呢|怎么样了|"
     r"然后呢|那呢|这个呢|哪些呢)[？?。！!~～\s]*$"
 )
+_EXPLICIT_SHORT_SUBJECTS = frozenset({
+    "人工智能", "计算机", "数学", "物理", "化学",
+})
 _USER_LINE_RE = re.compile(r"^\s*\[用户\]\s*[:：]\s*(.+?)\s*$")
 
 
@@ -105,8 +108,11 @@ def contextualize_ustc_course_intent(text: str, context: str) -> str:
         pieces.append(raw)
     elif prior_course and (
             _FOLLOWUP_ONLY_RE.fullmatch(raw)
-            or len(raw) <= 16
-            or raw in {"人工智能", "计算机", "数学", "物理", "化学"}):
+            or raw in _EXPLICIT_SHORT_SUBJECTS):
+        # Only explicit status/follow-up grammar or a controlled subject slot
+        # may inherit the earlier course goal.  The old ``len(raw) <= 16``
+        # shortcut promoted any short new topic (for example “中午吃什么”)
+        # into a course lookup and let stale context override the user.
         latest_course = prior_course[-1]
         if _FOLLOWUP_ONLY_RE.fullmatch(raw):
             pieces = ([subject] if subject else []) + [latest_course, raw]

@@ -52,6 +52,13 @@ def test_status_followup_keeps_last_ustc_query():
     assert ustc_tool_capabilities(effective)[0] == "mcp.icourse_reviews"
 
 
+def test_unrelated_short_topic_does_not_inherit_ustc_course_goal():
+    context = "【近期对话】\n[用户]: 哪些老师评分高\n"
+    assert contextualize_ustc_course_intent(
+        "你中午吃的什么", context) == "你中午吃的什么"
+    assert contextualize_ustc_course_intent("？？？", context) == "？？？"
+
+
 def test_teacher_rating_keeps_subject_from_previous_short_turn():
     context = (
         "【近期对话】\n"
@@ -82,3 +89,23 @@ def test_prod_promotes_contextual_subject_to_tool_intent():
     assert perception.needs_tools is True
     assert perception.suggested_capabilities == (
         "mcp.icourse_reviews", "mcp.course_schedule")
+
+
+def test_prod_keeps_current_unrelated_topic_out_of_course_tools():
+    from dududa.application.dududa_prod import _ProdOrchestrator
+
+    orch = object.__new__(_ProdOrchestrator)
+    orch._recent_chat_context = lambda *a, **k: (
+        "【近期对话】\n[用户]: 哪些老师评分高\n")
+    state = SimpleNamespace(
+        envelope=SimpleNamespace(text="你中午吃的什么", mentions=()))
+    perception = orch._promote_contextual_tools(
+        state,
+        PerceptionResult(
+            needs_tools=False,
+            topics=("饮食", "日常闲聊"),
+            candidate_intents=("chitchat", "闲聊"),
+        ),
+    )
+    assert perception.needs_tools is False
+    assert perception.suggested_capabilities == ()
