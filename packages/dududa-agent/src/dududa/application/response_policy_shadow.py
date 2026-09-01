@@ -645,3 +645,17 @@ def trace_adapter_response_shadow(
         trace_id=trace_id,
         origin_override=origin,
     )
+
+
+def command_result_shadow(plugin, event, response: str):
+    """Trace and adapt a deterministic command result in one thin-shell call."""
+    trace_adapter_response_shadow(
+        plugin, event, response, origin=ResponseOrigin.COMMAND)
+    return event.plain_result(response)
+
+
+def trace_subscription_response_shadow(
+    plugin, response: str
+) -> Optional[ShadowResolution]:
+    return trace_proactive_response_shadow(
+        plugin, response, origin=ResponseOrigin.SUBSCRIPTION)

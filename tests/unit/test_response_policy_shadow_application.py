@@ -23,6 +23,9 @@ class _Event:
     def get_messages(self):
         return ()
 
+    def plain_result(self, text):
+        return {"text": text}
+
 
 def _plugin(state=None):
     persona = SimpleNamespace(
@@ -169,3 +172,23 @@ def test_catalog_shadow_selection_tracks_but_does_not_apply_variant():
     assert event.get_extra("dududa_variant_applied") == "0"
     assert event.get_extra("dududa_variant_seed_source") == (
         "platform_message_id")
+
+
+def test_command_adapter_uses_command_origin(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        shadow, "trace_adapter_response_shadow",
+        lambda plugin, event, response, *, origin: captured.append(origin))
+    result = shadow.command_result_shadow(
+        _plugin(), _Event("/ymakmern_help"), "帮助文本")
+    assert result == {"text": "帮助文本"}
+    assert captured == [ResponseOrigin.COMMAND]
+
+
+def test_subscription_adapter_uses_subscription_origin(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        shadow, "trace_proactive_response_shadow",
+        lambda plugin, response, *, origin: captured.append(origin))
+    shadow.trace_subscription_response_shadow(_plugin(), "显式订阅消息")
+    assert captured == [ResponseOrigin.SUBSCRIPTION]
