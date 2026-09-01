@@ -30,6 +30,9 @@ from dududa.application.dududa_utils import (
 
 from dududa.application.dududa_log import get_logger as _get_logger
 from dududa.application.user_experience import make_support_id
+from dududa.application.ustc_routing import (
+    is_ustc_catalog_query, is_ustc_review_query,
+)
 from dududa.core.memory import set_memory_access_mode, reset_memory_access_mode
 from dududa.core.quality_eval import strip_self_degrading_abuse
 from dududa.core.group_ambient import GroupAmbientTracker
@@ -1015,10 +1018,11 @@ def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
         "mcp.translate": ("翻译", "译成", "translate"),
         "mcp.course_schedule": (
             "课程", "查课", "课表", "开课", "课程号", "谁教", "上课时间",
-            "上课地点", "二分制", "二等级制", "两级制"),
+            "上课地点", "二分制", "二等级制", "两级制", "选课", "推荐课"),
         "mcp.icourse_reviews": (
             "评课", "课程评价", "老师怎么样", "值得选", "给分", "作业多",
-            "难不难"),
+            "难不难", "评分", "高分", "口碑", "哪些老师", "哪位老师",
+            "推荐老师", "好拿分", "拿高分", "水课"),
         "mcp.exam_schedule": ("考试", "期中", "期末", "考表"),
         "mcp.academic_calendar": ("校历", "放假", "节假日"),
         "mcp.training_program": ("培养方案", "毕业要求", "学分", "选课"),
@@ -1031,6 +1035,10 @@ def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
             not _is_casual_advice_without_lookup(value)
             and _EXPLICIT_LOOKUP_RE.search(value)
         )
+    if cid == "mcp.icourse_reviews" and is_ustc_review_query(value):
+        return True
+    if cid == "mcp.course_schedule" and is_ustc_catalog_query(value):
+        return True
     markers = evidence.get(cid)
     if markers is None:
         return False

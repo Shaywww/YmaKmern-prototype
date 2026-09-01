@@ -75,6 +75,18 @@ def test_unified_contract_blocks_progress_customer_tone_and_internal_leaks():
     assert "internal_tool_leak" in leaked.violations
 
 
+@pytest.mark.parametrize("text", [
+    "稍等，我翻翻评课数据。",
+    "我盯着点，一有准信就告诉你。",
+    "你过会儿再戳我一下。",
+])
+def test_final_response_cannot_promise_background_work(text):
+    result = validate_response_contract(text, kind=ResponseKind.CHAT)
+    assert not result.passed
+    assert set(result.violations) & {
+        "progress_placeholder", "future_task_promise"}
+
+
 def test_unified_contract_enforces_semantic_numeric_grounding():
     facts = extract_atomic_facts({"temp_c": 24, "humidity": 60})
     good = validate_response_contract(

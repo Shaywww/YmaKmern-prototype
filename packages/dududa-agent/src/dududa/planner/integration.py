@@ -41,7 +41,10 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
     )
     planner.register_pattern(
         ("评课社区", "评课", "课程评价", "老师怎么样", "老师好不好",
-         "课程怎么样", "课怎么样", "值得选", "推荐老师", "给分怎么样"),
+         "课程怎么样", "课怎么样", "值得选", "推荐老师", "给分怎么样",
+         "评分", "高分", "好拿分", "拿高分", "口碑", "作业多",
+         "难不难", "哪些老师", "哪位老师", "水课", "推荐几门课",
+         "推荐课程", "选什么课", "选哪些课"),
         {"name": "icourse_review_lookup",
          "goal": "Find public USTC course and teacher reviews",
          "steps": [{"step_id": "s1", "capability_id": "mcp.icourse_reviews",

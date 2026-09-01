@@ -15,6 +15,11 @@ _PROGRESS_RE = re.compile(
     r"(?:正在(?:查|搜|看)|这就帮你|马上(?:帮你)?|稍等|等一下|"
     r"等我(?:一下)?|一小下|待会儿)"
 )
+_FUTURE_TASK_PROMISE_RE = re.compile(
+    r"(?:过会儿|稍后|待会儿)(?:再)?(?:问我|戳我|试一次)|"
+    r"我(?:会)?盯着(?:点)?|一有(?:结果|准信|消息).{0,12}(?:告诉|通知)你|"
+    r"查好(?:了)?再(?:告诉|回复)你"
+)
 _TOOL_LEAK_RE = re.compile(
     r"(?:\bmcp\.[A-Za-z0-9_.-]+|\[工具|工具状态\s*[:：]|"
     r"(?:^|[（(\s:：])(?:None|null)(?:$|[）)\s,.，。]))",
@@ -80,8 +85,13 @@ def validate_response_contract(
     violations: list[str] = []
     if not value:
         violations.append("empty")
-    if has_tool_data and is_progress_placeholder(value):
+    # User-visible generation is synchronous.  Real slow-task progress is
+    # emitted by the handler, never by the final answer, so a final promise to
+    # "keep checking" is false regardless of whether a tool returned data.
+    if is_progress_placeholder(value):
         violations.append("progress_placeholder")
+    if _FUTURE_TASK_PROMISE_RE.search(value):
+        violations.append("future_task_promise")
     if _TOOL_LEAK_RE.search(value):
         violations.append("internal_tool_leak")
     for violation in persona_contract_violations(

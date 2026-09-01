@@ -166,6 +166,16 @@ class TestToolIntentGate:
         p = self._perceive(monkeypatch, tmp_path, "你好呀")
         assert p.needs_tools is False
 
+    @pytest.mark.parametrize("text", [
+        "推荐几门课", "拿高分", "哪些老师评分高", "有没有好拿分的课",
+    ])
+    def test_ustc_course_language_always_uses_tools(
+            self, monkeypatch, tmp_path, text):
+        p = self._perceive(monkeypatch, tmp_path, text)
+        assert p.needs_tools is True
+        assert "course" in p.topics
+        assert p.suggested_capabilities
+
 
 class TestRuleFallbackPlan:
     def _cands(self, reg):
@@ -221,6 +231,24 @@ class TestRuleFallbackPlan:
                                         "你好呀")
         assert plan is None
 
+    def test_teacher_rating_prefers_icourse_only(self):
+        orch, _plugin, reg = _make_orchestrator()
+        plan = orch._rule_fallback_plan(
+            _state(orch), self._cands(reg), "哪些老师评分高")
+        assert plan is not None
+        assert [step.capability_id for step in plan.steps] == [
+            "mcp.icourse_reviews"]
+
+    def test_course_recommendation_combines_ustc_sources_in_order(self):
+        orch, _plugin, reg = _make_orchestrator()
+        plan = orch._rule_fallback_plan(
+            _state(orch), self._cands(reg),
+            "USTC 推荐几门课 拿高分 人工智能")
+        assert plan is not None
+        assert [step.capability_id for step in plan.steps] == [
+            "mcp.icourse_reviews", "mcp.course_schedule"]
+        assert all("人工智能" in str(step.arguments) for step in plan.steps)
+
 
 class TestLLMPlanFallback:
     @pytest.mark.asyncio
@@ -247,6 +275,18 @@ class TestLLMPlanFallback:
 
     def _cands(self, reg):
         return reg.filter_candidates(permissions=(), max_count=24)
+
+    def test_duplicate_llm_steps_are_deduplicated(self):
+        orch, _plugin, reg = _make_orchestrator()
+        candidates = self._cands(reg)
+        plan = orch._parse_llm_plan({"steps": [
+            {"capability_id": "mcp.icourse_reviews",
+             "arguments": {"action": "search", "q": "人工智能"}},
+            {"capability_id": "mcp.icourse_reviews",
+             "arguments": {"q": "人工智能", "action": "search"}},
+        ]}, candidates, 4)
+        assert plan is not None
+        assert len(plan.steps) == 1
 
 
 class TestWeatherCityGuard:

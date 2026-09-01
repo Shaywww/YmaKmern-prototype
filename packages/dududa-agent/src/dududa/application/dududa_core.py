@@ -36,6 +36,9 @@ from dududa.application.dududa_utils import (
     _has_media_in_raw, _IGNORE_PATTERNS, _is_greeting_text,
     _is_textual_greeting,
 )
+from dududa.application.ustc_routing import (
+    is_ustc_course_query, is_ustc_review_query, ustc_tool_capabilities,
+)
 
 from dududa.application.dududa_log import get_logger as _get_logger
 from dududa.application.user_experience import make_support_id
@@ -354,7 +357,8 @@ class DududaCore:
             or getattr(obj, "group", None))
         if not is_group:
             clean_0 = re.sub(r"@\S+", "", combined).strip()
-            if any(kw in clean_0 for kw in self._TOOL_KW):
+            if (any(kw in clean_0 for kw in self._TOOL_KW)
+                    or is_ustc_course_query(clean_0)):
                 return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
             return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
         # 群策略（文档 2.5.2/2.5.4）：mode / reply_rate / meme_rate 落地到回复策略
@@ -380,7 +384,8 @@ class DududaCore:
             return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()
         # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）
-        if any(kw in clean for kw in self._TOOL_KW):
+        if (any(kw in clean for kw in self._TOOL_KW)
+                or is_ustc_course_query(clean)):
             return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
         # 明确的文字问候要用文字回应；颜文字只能点缀，不能代替回答。
         # 只有单表情/非文字轻互动才走 REACT（同会话 10s 冷却）。
@@ -417,7 +422,9 @@ class DududaCore:
         acts = []
         if any(combined.endswith(q) for q in ("?", "？", "吗", "呢", "嘛", "么")):
             acts.append(SpeechAct(act_type="question", confidence=0.8))
-        if combined.startswith("/") or any(kw in combined for kw in self._TOOL_KW):
+        if (combined.startswith("/")
+                or any(kw in combined for kw in self._TOOL_KW)
+                or is_ustc_course_query(combined)):
             acts.append(SpeechAct(act_type="command", confidence=0.7))
         if not acts:
             if _is_greeting_text(combined):
@@ -458,14 +465,10 @@ class DududaCore:
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
-        review_markers = (
-            "评课", "课程评价", "值得选", "推荐吗", "推荐老师",
-            "给分怎么样", "作业多吗", "难不难", "好不好", "怎么样",
-        )
-        if ("评课" in combined
-                or (("老师" in combined or "课程" in combined or "课" in combined)
-                    and any(marker in combined for marker in review_markers))):
+        if is_ustc_review_query(combined):
             topics.append("course_review")
+        if is_ustc_course_query(combined) and "course" not in topics:
+            topics.append("course")
         intents = list(topics) if topics else ["chitchat"]
         # 工具意图门：命令词（_TOOL_KW）命中即触发工具链，与 _social_decision 对齐，
         # 避免「帮我查一下/查查XX」被判为纯闲聊；工具话题命中同样触发。
@@ -480,6 +483,7 @@ class DududaCore:
             entities=tuple(entities),
             candidate_intents=tuple(intents),
             needs_tools=needs_tools,
+            suggested_capabilities=ustc_tool_capabilities(combined),
             is_explicit_command=has_command,
             confidence=0.6,
         )
