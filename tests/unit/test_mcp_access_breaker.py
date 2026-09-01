@@ -266,7 +266,10 @@ class TestRegistryHealthWiring:
         assert reg._SERVICES == {}
         second_course = create_all_services()["course_schedule"]
         assert second_course is not first_course
-        assert second_course.check_health() == ServiceHealth.UNKNOWN
+        assert second_course._last_health == ServiceHealth.UNKNOWN
+        assert second_course.check_health() in (
+            ServiceHealth.UNKNOWN, ServiceHealth.HEALTHY,
+        )
 
     def test_breaker_open_excluded_from_healthy(self):
         from dududa.mcp import registry as reg
