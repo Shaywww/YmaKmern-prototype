@@ -28,7 +28,11 @@ cmd_health() {
     local active banner mcp errs backup_latest backup_age
     active="false"
     systemctl is-active "$SERVICE" >/dev/null 2>&1 && active="true"
-    banner=$(journalctl -u "$SERVICE" --no-pager -n 200 2>/dev/null | grep "Dududa 2.0" | tail -1 | sed 's/.*\(Dududa 2.0.*\)/\1/' || true)
+    banner=$(journalctl -u "$SERVICE" --no-pager -n 200 2>/dev/null \
+        | grep -E "YmaKmern \| renderer=OK|Dududa 2\.0" \
+        | tail -1 \
+        | sed -E 's/^.*(YmaKmern \| renderer=OK.*|Dududa 2\.0.*)$/\1/' \
+        || true)
     mcp=$(journalctl -u "$SERVICE" --no-pager -n 200 2>/dev/null | grep -c "MCP capabilities registered" || true)
     errs=$(journalctl -u "$SERVICE" --no-pager -n 300 2>/dev/null | grep -cE "Traceback|\[ERRO\]" || true)
     backup_latest=$(ls -t /root/backups/dududa20/dududa20_*.tar.gz 2>/dev/null | head -1 || true)

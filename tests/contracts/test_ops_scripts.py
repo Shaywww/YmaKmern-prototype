@@ -30,6 +30,11 @@ def test_syntax():
     assert r.returncode == 0, r.stderr
 
 
+def test_health_accepts_current_ymakmern_startup_banner():
+    source = OPS.read_text(encoding="utf-8")
+    assert "YmaKmern \\| renderer=OK" in source
+
+
 def test_manifest_generates_v2(tmp_path):
     r = _run("manifest", out_dir=tmp_path)
     assert r.returncode == 0, r.stderr
