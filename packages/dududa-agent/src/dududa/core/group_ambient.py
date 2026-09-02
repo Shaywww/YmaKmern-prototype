@@ -56,7 +56,7 @@ class GroupAmbientTracker:
                  min_messages: int = 15, min_unique_senders: int = 3,
                  cooldown_seconds: float = 1800.0, daily_limit: int = 2,
                  late_night_silence_seconds: float = 1800.0,
-                 topic_reply_rate: float = 0.35,
+                 topic_reply_rate: float | None = None,
                  topic_min_messages: int = 4,
                  topic_min_unique_senders: int = 2,
                  random_source=None,
@@ -68,6 +68,12 @@ class GroupAmbientTracker:
         self.daily_limit = max(1, int(daily_limit))
         self.late_night_silence_seconds = max(
             300.0, float(late_night_silence_seconds))
+        if topic_reply_rate is None:
+            try:
+                topic_reply_rate = float(os.environ.get(
+                    "DUDUDA_AMBIENT_TOPIC_REPLY_RATE", "0.35"))
+            except (TypeError, ValueError):
+                topic_reply_rate = 0.35
         self.topic_reply_rate = min(1.0, max(0.0, float(topic_reply_rate)))
         self.topic_min_messages = max(2, int(topic_min_messages))
         self.topic_min_unique_senders = max(

@@ -181,6 +181,22 @@ def test_topic_keyword_can_be_sampled_out():
     assert decision.reason == "topic_sampled_out"
 
 
+def test_topic_reply_rate_can_be_configured_from_env(monkeypatch):
+    monkeypatch.setenv("DUDUDA_AMBIENT_TOPIC_REPLY_RATE", "0.45")
+
+    tracker = GroupAmbientTracker()
+
+    assert tracker.topic_reply_rate == 0.45
+
+
+def test_invalid_topic_reply_rate_env_falls_back(monkeypatch):
+    monkeypatch.setenv("DUDUDA_AMBIENT_TOPIC_REPLY_RATE", "not-a-number")
+
+    tracker = GroupAmbientTracker()
+
+    assert tracker.topic_reply_rate == 0.35
+
+
 def test_topic_categories_are_narrow_and_explicit():
     assert GroupAmbientTracker.topic_category("想点个外卖") == "takeout"
     assert GroupAmbientTracker.topic_category("终于下班") == "off_work"
