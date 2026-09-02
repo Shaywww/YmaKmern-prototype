@@ -29,7 +29,10 @@ from dududa.core.persona.prompt_policy import (
     PERSONA_KERNEL_VERSION, build_user_visible_system_prompt,
 )
 from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
-from dududa.core.memory import MemoryCandidate, MemoryRecord, SensitivityLevel
+from dududa.core.memory import (
+    MemoryCandidate, MemoryRecord, MemoryType, ScopeSelector,
+    SensitivityLevel,
+)
 from dududa.core.profile import extract_location
 from dududa.runtime.orchestrator import RuntimeOrchestrator
 from dududa.core.perception_store import record_state_perception
@@ -1039,7 +1042,52 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             emotion = "延续对方近几轮的低落或烦躁：先接住情绪，别突然开玩笑或灌鸡汤。"
         elif turns and tone == "positive":
             emotion = "延续对方近几轮的开心：自然一起高兴，但别夸张复读。"
-        return tuple(line for line in (familiarity, energy, emotion) if line)
+        rhythm = self._rhythm_persona_lines(state)
+        return tuple(
+            line for line in (familiarity, energy, emotion, *rhythm) if line)
+
+    def _recent_bot_utterances(self, state, limit: int = 3) -> tuple[str, ...]:
+        """Return aggregate-source material from this conversation only.
+
+        The caller derives repetition flags and never injects these raw bot
+        utterances into the system prompt.  Actor is intentionally unbound so
+        group rhythm reflects what everyone has just seen, while the exact
+        conversation id prevents private/group crossover.
+        """
+        event = self._pending_event
+        plugin = self._plugin
+        if event is None or plugin is None:
+            return ()
+        try:
+            scope = plugin._make_scope(event, msg_type="bot")
+            selector = ScopeSelector(
+                memory_type=MemoryType.BOT_UTTERANCE,
+                platform=scope.platform,
+                bot_id=scope.bot_id,
+                conversation_id=scope.conversation_id,
+                actor_id=None,
+                persona_id=scope.persona_id,
+            )
+            records = plugin.memory.query_selector(
+                selector, limit=max(1, min(int(limit), 8)))
+            return tuple(
+                str(record.content or "").strip()
+                for record in records if str(record.content or "").strip())
+        except Exception:
+            return ()
+
+    def _rhythm_persona_lines(self, state) -> tuple[str, ...]:
+        """Derive bounded conversation-rhythm guidance from recent outputs."""
+        recent = self._recent_bot_utterances(state, limit=3)
+        lines: list[str] = []
+        opener_re = re.compile(
+            r"^\s*(?:哈{1,4}|哈哈哈*|嘿嘿|哎哟|哎呀|哎呦|诶|欸|唔|嗯)[，,、~～!！ ]*")
+        if len(recent) >= 2 and all(opener_re.search(text) for text in recent[:2]):
+            lines.append("最近两次都用了笑声或叹词开头；这轮直接说话，不再用这类开头。")
+        if len(recent) >= 3 and sum(
+                1 for text in recent[:3] if "AI" in text.upper()) >= 3:
+            lines.append("最近三次都自称 AI；这轮不要再提 AI、机器人或给自己贴同类标签。")
+        return tuple(lines)
 
     @staticmethod
     def _temporal_context(now: float | None = None) -> str:
@@ -1231,6 +1279,30 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             cleaned = clean_response_style(draft_text, style_policy)
             style_violations = style_contract_violations(
                 cleaned, style_policy)
+            if "too_long" in style_violations and style_policy.max_chars > 0:
+                before_chars = len("".join(cleaned.split()))
+                compressed = await self._compress_low_effort_reply(
+                    state, cleaned, style_policy.max_chars)
+                compressed = clean_response_style(compressed, style_policy)
+                compressed_violations = style_contract_violations(
+                    compressed, style_policy)
+                accepted = bool(
+                    compressed
+                    and "too_long" not in compressed_violations
+                    and "pure_kaomoji" not in compressed_violations)
+                trace_recorder.record(
+                    event="response_policy_style_retry",
+                    run_id=state.run_id,
+                    trace_id=state.trace_id,
+                    retry_reason="too_long",
+                    max_chars=style_policy.max_chars,
+                    before_chars=before_chars,
+                    after_chars=len("".join(compressed.split())),
+                    accepted=accepted,
+                )
+                if accepted:
+                    cleaned = compressed
+                    style_violations = compressed_violations
             if not cleaned or "pure_kaomoji" in style_violations:
                 cleaned = self._semantic_style_fallback(state)
                 style_violations = style_contract_violations(
@@ -1245,6 +1317,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 scene=live_policy.style_signals.scene.value,
                 response_origin=(
                     live_policy.style_signals.response_origin.value),
+                max_chars=style_policy.max_chars,
                 violations=list(style_violations),
             )
         kind = self._response_kind(state)
@@ -1305,6 +1378,53 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if re.search(r"(?:你好|嗨|哈喽|hello)", text, re.I):
             return "你好，我在。"
         return "我在，刚才那句没说完整。"
+
+    async def _compress_low_effort_reply(
+        self, state, text: str, max_chars: int,
+    ) -> str:
+        """Make one bounded compression attempt for verified banter only."""
+        source = " ".join(str(text or "").split()).strip()
+        if not source or max_chars <= 0:
+            return source
+        plugin = self._plugin
+        if plugin is not None:
+            system = (
+                f"把下面这句群聊斗嘴回复压到不超过 {max_chars} 个可见字符。"
+                "删掉铺垫、重复解释和完整段子结构，只留一短句。"
+                "不得添加新事实，不提 AI 或机器人，不以笑声或叹词开头，"
+                "不用问题收尾，最多保留一个纯文本颜文字。只输出压缩结果。"
+            )
+            try:
+                candidate = await plugin._call_llm(
+                    system,
+                    source,
+                    max_tokens=96,
+                    temperature=0.2,
+                    run_id=state.run_id,
+                    trace_id=state.trace_id,
+                    skip_render=True,
+                )
+                candidate = " ".join(str(candidate or "").split()).strip()
+                if candidate:
+                    source = candidate
+            except Exception:
+                pass
+        return self._clip_to_char_budget(source, max_chars)
+
+    @staticmethod
+    def _clip_to_char_budget(text: str, max_chars: int) -> str:
+        """Deterministic final bound after the single compression attempt."""
+        value = " ".join(str(text or "").split()).strip()
+        if max_chars <= 0 or len("".join(value.split())) <= max_chars:
+            return value
+        for match in re.finditer(r"[。！？!?]", value):
+            candidate = value[:match.end()].strip()
+            if len("".join(candidate.split())) <= max_chars:
+                return candidate
+            break
+        clipped = value[:max(1, max_chars - 1)].rstrip(
+            "，,；;：:、。！？!?~～ ")
+        return clipped + "…"
 
     def _contract_fallback(self, state, contract) -> str:
         grading = next((
@@ -1544,6 +1664,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 scene=prompt_policy.style_signals.scene,
                 operational_rules=self._build_compose_operational_rules(
                     operational_extra),
+                dynamic_style_rules=dynamic_lines,
             )
             trace_recorder.record(
                 event="response_policy_live_prompt",
@@ -1557,6 +1678,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     prompt_policy.style_signals.response_origin.value),
                 humor_level=prompt_policy.policy.style.humor_level,
                 max_kaomoji=prompt_policy.policy.style.max_kaomoji,
+                max_chars=prompt_policy.policy.style.max_chars,
                 followup_mode=(
                     prompt_policy.policy.interaction.followup_mode.value),
             )

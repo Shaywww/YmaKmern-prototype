@@ -8,7 +8,7 @@ from dududa.core.response_policy import (
 )
 
 
-PERSONA_KERNEL_VERSION = "ymakmern-persona-kernel/2.1"
+PERSONA_KERNEL_VERSION = "ymakmern-persona-kernel/2.2"
 PERSONA_KERNEL = """你是 YmaKmern，一个住在 QQ 里的 AI 群友。
 你的性格温和、机灵、略带直率，偶尔有一点克制的傲娇和嘴欠。
 先把用户的事接住，再考虑幽默；严肃、低落和高风险场景不调侃。
@@ -33,6 +33,8 @@ def build_scene_policy(scene: Scene,
         lines.append("可以有一句轻微幽默，但先完成回应。")
     else:
         lines.append("允许自然接梗，但不要抢话题。")
+    if style.max_chars > 0:
+        lines.append(f"本轮回复不超过 {style.max_chars} 个可见字符。")
     lines.append(
         "不用颜文字。" if style.max_kaomoji == 0
         else "最多使用一个纯文本颜文字，且不能单独成句。")
@@ -50,6 +52,10 @@ def build_scene_policy(scene: Scene,
         lines.append(
             "用户先表达了惊讶或夸奖，可以用一句克制的得意接住；"
             "不要自吹履历，也不要把话题抢走。")
+    elif scene == Scene.PLAYFUL_BANTER:
+        lines.append(
+            "这是连续斗嘴或接梗：优先只回一短句，直接还梗；"
+            "删掉铺垫、自我解释和完整段子结构，不欠任何人一段完整表演。")
     return "\n".join(lines)
 
 
@@ -58,8 +64,14 @@ def build_user_visible_system_prompt(
     *,
     scene: Scene,
     operational_rules: str = "",
+    dynamic_style_rules: tuple[str, ...] = (),
 ) -> str:
     parts = [PERSONA_KERNEL, build_scene_policy(scene, policy)]
+    dynamic = tuple(
+        str(rule or "").strip() for rule in dynamic_style_rules
+        if str(rule or "").strip())
+    if dynamic:
+        parts.append("本轮动态节奏：\n" + "\n".join(dynamic))
     if operational_rules.strip():
         parts.append(operational_rules.strip())
     parts.append(

@@ -109,6 +109,30 @@ def test_user_praise_enables_only_one_level_of_pride():
     assert result.policy.style.max_kaomoji == 0
 
 
+def test_playful_banter_beats_generic_question_shape_and_gets_tight_budget():
+    messages = (
+        "明天星期四，V我50",
+        "你怎么恩将仇报啊，我给你请客",
+        "吃白食的来了",
+        "卧槽，你还敢道德绑架我",
+        "你看你在内涵我",
+        "还在内涵",
+        "V我50原谅你",
+    )
+    results = [_resolve(text) for text in messages]
+    assert {item.style_signals.scene for item in results} == {
+        Scene.PLAYFUL_BANTER}
+    assert {item.policy.style.max_chars for item in results} == {48}
+    assert {item.policy.style.humor_level for item in results} == {1}
+
+
+def test_real_negative_feeling_overrides_banter_terms():
+    result = _resolve("被人道德绑架以后我真的很难受")
+    assert result.style_signals.scene == Scene.EMOTIONAL_SUPPORT
+    assert result.policy.style.humor_level == 0
+    assert result.policy.style.max_chars == 0
+
+
 def test_praise_does_not_override_a_real_question_or_tool_intent():
     result = _resolve("你真厉害，今天天气怎么样？")
     assert result.style_signals.scene == Scene.INFORMATION

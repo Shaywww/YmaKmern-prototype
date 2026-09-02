@@ -59,6 +59,11 @@ _PRAISE_RE = re.compile(
     r"(?:你真(?:厉害|会|聪明)|有点东西|太强了|牛啊|卧槽.{0,6}(?:会|强)|"
     r"居然真让你说中了|这都能答)"
 )
+_PLAYFUL_BANTER_RE = re.compile(
+    r"(?:[vV]\s*我\s*50|疯狂星期四|疯四|恩将仇报|吃白食|"
+    r"道德绑架|(?:还|又)?在内涵|内涵我|赎罪券|你还敢|"
+    r"扣帽子|嘴硬|急了|破防|就这)"
+)
 
 _EXTRA_ORIGIN = "dududa_response_origin"
 _EXTRA_FALLBACK = "dududa_fallback_reason"
@@ -369,6 +374,15 @@ def _scene(state, text: str, origin: ResponseOrigin,
         scene, rule = Scene.IDENTITY_PROBE, "scene.identity_probe.v1"
     elif emotion == Emotion.NEGATIVE:
         scene, rule = Scene.EMOTIONAL_SUPPORT, "scene.negative_emotion.v1"
+    elif _PLAYFUL_BANTER_RE.search(text):
+        # Check playful language before the generic question rule.  Teasing
+        # such as "你怎么恩将仇报" contains a question word syntactically,
+        # but treating it as an information request produces essay-like
+        # answers and breaks the rhythm of a live group conversation.
+        scene, rule = (
+            Scene.PLAYFUL_BANTER,
+            "scene.playful_banter_terms.v1",
+        )
     else:
         perception = getattr(state, "perception", None)
         action = getattr(state, "social_decision", None)
@@ -584,6 +598,7 @@ def trace_response_policy_shadow(
             tone=style.tone.value,
             humor_level=style.humor_level,
             max_kaomoji=style.max_kaomoji,
+            max_chars=style.max_chars,
             followup_mode=interaction.followup_mode.value,
             contract_violations=list(result.violations),
             fallback_reason=(

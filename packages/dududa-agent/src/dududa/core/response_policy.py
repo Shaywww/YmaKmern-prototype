@@ -17,12 +17,13 @@ from typing import Optional
 from .quality_eval import persona_contract_violations
 
 
-POLICY_VERSION = "response-policy/1.1"
+POLICY_VERSION = "response-policy/1.2"
 
 
 class Scene(str, Enum):
     UNKNOWN = "unknown"
     CASUAL_CHAT = "casual_chat"
+    PLAYFUL_BANTER = "playful_banter"
     EMOTIONAL_SUPPORT = "emotional_support"
     INFORMATION = "information"
     TASK = "task"
@@ -206,6 +207,10 @@ class OutputStylePolicy:
     humor_level: int
     max_kaomoji: int
     max_colored_emoji: int = 0
+    # Zero means no deterministic length budget.  A tight budget is reserved
+    # for verified low-effort banter; ordinary chat and factual answers must
+    # not be truncated merely because they are user-visible.
+    max_chars: int = 0
     policy_version: str = POLICY_VERSION
     reason_codes: tuple[str, ...] = ()
 
@@ -231,6 +236,7 @@ class ResolvedResponsePolicy:
                 "humor_level": self.style.humor_level,
                 "max_kaomoji": self.style.max_kaomoji,
                 "max_colored_emoji": self.style.max_colored_emoji,
+                "max_chars": self.style.max_chars,
                 "reason_codes": list(self.style.reason_codes),
                 "policy_version": self.style.policy_version,
             },
@@ -292,6 +298,7 @@ class OutputStylePolicyResolver:
 
     _SCENE_HUMOR_CAP = {
         Scene.CASUAL_CHAT: 2,
+        Scene.PLAYFUL_BANTER: 2,
         Scene.EMOTIONAL_SUPPORT: 0,
         Scene.INFORMATION: 0,
         Scene.TASK: 0,
@@ -306,6 +313,12 @@ class OutputStylePolicyResolver:
         RiskLevel.HIGH: 0,
         RiskLevel.CRITICAL: 0,
     }
+    _SCENE_MAX_CHARS = {
+        # Human banter is usually a low-effort acknowledgement or comeback,
+        # not a complete miniature essay.  Other scenes intentionally remain
+        # unbounded here and are governed by their own content requirements.
+        Scene.PLAYFUL_BANTER: 48,
+    }
 
     @classmethod
     def neutral(cls, reason: str) -> OutputStylePolicy:
@@ -313,6 +326,7 @@ class OutputStylePolicyResolver:
             tone=Tone.CALM,
             humor_level=0,
             max_kaomoji=0,
+            max_chars=0,
             reason_codes=(reason,),
         )
 
@@ -361,7 +375,7 @@ class OutputStylePolicyResolver:
         kaomoji_allowed = bool(
             persona.allows_kaomoji
             and user_allows
-            and signals.scene == Scene.CASUAL_CHAT
+            and signals.scene in (Scene.CASUAL_CHAT, Scene.PLAYFUL_BANTER)
             and signals.risk_level == RiskLevel.LOW
             and not (signals.emotion == Emotion.NEGATIVE
                      and signals.emotion_intensity
@@ -377,6 +391,7 @@ class OutputStylePolicyResolver:
             tone=tone,
             humor_level=humor,
             max_kaomoji=1 if kaomoji_allowed else 0,
+            max_chars=cls._SCENE_MAX_CHARS.get(signals.scene, 0),
             reason_codes=reasons,
         )
 
@@ -441,6 +456,9 @@ def style_contract_violations(
         violations.append("unicode_emoji")
     if re.search(r"(?:!{4,}|！{4,}|[~～]{4,})", value):
         violations.append("repeated_punctuation")
+    visible_chars = len("".join(value.split()))
+    if policy.max_chars > 0 and visible_chars > policy.max_chars:
+        violations.append("too_long")
     return tuple(dict.fromkeys(violations))
 
 

@@ -1,5 +1,7 @@
 from dududa.core.message_catalog import MessageCatalog, MessageKey
-from dududa.core.persona.prompt_policy import build_untrusted_data_block
+from dududa.core.persona.prompt_policy import (
+    build_scene_policy, build_untrusted_data_block,
+)
 from dududa.core.response_policy import (
     ContinuationValue, Emotion, EmotionIntensity, Familiarity,
     FollowupMode, InteractionPolicyResolver, InteractionSignals,
@@ -131,6 +133,22 @@ def test_kaomoji_contract_counts_text_faces_and_rejects_face_only():
     assert "pure_kaomoji" in style_contract_violations("(。・ω・。)", policy)
     assert "too_many_kaomoji" in style_contract_violations(
         "好呀 (。・ω・。) (≧▽≦)", policy)
+
+
+def test_banter_budget_is_a_soft_style_violation_and_prompt_is_low_effort():
+    from dududa.core.response_policy import ResolvedResponsePolicy
+    style = OutputStylePolicyResolver.resolve(
+        _signals(scene=Scene.PLAYFUL_BANTER))
+    interaction = InteractionPolicyResolver.resolve(
+        InteractionSignals(continuation_value=ContinuationValue.NONE),
+        SafetyDecision(risk_level=RiskLevel.LOW))
+    policy = ResolvedResponsePolicy(interaction, style)
+    assert style.max_chars == 48
+    assert "too_long" in style_contract_violations("这" * 49, style)
+    assert "too_long" not in style_contract_violations("这" * 48, style)
+    scene_prompt = build_scene_policy(Scene.PLAYFUL_BANTER, policy)
+    assert "不超过 48" in scene_prompt
+    assert "优先只回一短句" in scene_prompt
 
 
 def test_deterministic_style_cleaner_is_idempotent():
