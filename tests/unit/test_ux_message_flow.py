@@ -99,7 +99,8 @@ async def test_message_flow_rejects_parallel_and_cancel_stops_active(tmp_path, m
     first = asyncio.create_task(dududa_handlers.run_message_flow(p, Event("m1")))
     await entered.wait()
     duplicate = await dududa_handlers.run_message_flow(p, Event("m2"))
-    assert "上一条消息还在处理" in duplicate
+    assert "还在处理上一条" in duplicate
+    assert "perception" not in duplicate
     key = p.ux_store.session_key(Event("cancel"))
     assert p.ux_tasks.cancel(key)
     assert "已取消" in await first

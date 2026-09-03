@@ -2982,9 +2982,7 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
     task_registered = False
     if ux_tasks is not None and task is not None and not silent_background:
         if not ux_tasks.register(task_key, task):
-            active = ux_tasks.running(task_key)
-            phase = active.phase if active is not None else "处理中"
-            return f"上一条消息还在处理（{phase}）。需要停止可发送 /ymakmern_cancel。"
+            return "我还在处理上一条，等我一下。想停的话发 /ymakmern_cancel。"
         task_registered = True
     memory_token = None
     if ux_store is not None:

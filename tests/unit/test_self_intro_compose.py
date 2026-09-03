@@ -148,6 +148,45 @@ class TestComposeSystemKnowledge:
 
 class TestComposeProdBehavior:
     @pytest.mark.asyncio
+    async def test_friend_request_does_not_demand_an_introduction(self, plugin):
+        plugin.runtime._pending_event = _FakeEvent("请求添加你为好友", group="")
+
+        async def unexpected_llm(*args, **kwargs):
+            raise AssertionError("friend request should use reviewed wording")
+
+        plugin._call_llm = unexpected_llm
+        reply = await plugin.runtime._compose_prod_text(
+            _state("请求添加你为好友"))
+        assert "QQ 那边处理" in reply
+        assert "自报家门" not in reply
+
+    @pytest.mark.asyncio
+    async def test_capability_overview_is_short_and_not_a_menu(self, plugin):
+        plugin.runtime._pending_event = _FakeEvent("你都能做什么？", group="")
+
+        async def unexpected_llm(*args, **kwargs):
+            raise AssertionError("capability overview should be deterministic")
+
+        plugin._call_llm = unexpected_llm
+        reply = await plugin.runtime._compose_prod_text(
+            _state("你都能做什么？"))
+        assert "看图和常见文件" in reply
+        assert "/ymakmern_help" in reply
+        assert "\n-" not in reply
+        assert "医疗" not in reply
+
+    @pytest.mark.asyncio
+    async def test_human_correction_acknowledges_previous_bad_question(
+            self, plugin):
+        plugin.runtime._pending_event = _FakeEvent("我说了我是人", group="")
+        plugin.runtime._recent_bot_utterances = lambda state, limit=2: (
+            "那你先说说你是谁，我好写备注。",
+        )
+        reply = await plugin.runtime._compose_prod_text(
+            _state("我说了我是人"))
+        assert reply == "知道啦，是我刚才问得有点傻。"
+
+    @pytest.mark.asyncio
     async def test_how_built_question(self, plugin):
         plugin.runtime._pending_event = _FakeEvent("@bot 你是怎么搭出来的")
         cap = _Capture()

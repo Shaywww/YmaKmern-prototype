@@ -17,17 +17,19 @@ from typing import Optional
 from .quality_eval import persona_contract_violations
 
 
-POLICY_VERSION = "response-policy/1.2"
+POLICY_VERSION = "response-policy/1.3"
 
 
 class Scene(str, Enum):
     UNKNOWN = "unknown"
+    SOCIAL_OPENING = "social_opening"
     CASUAL_CHAT = "casual_chat"
     PLAYFUL_BANTER = "playful_banter"
     EMOTIONAL_SUPPORT = "emotional_support"
     INFORMATION = "information"
     TASK = "task"
     TOOL_RESULT = "tool_result"
+    CAPABILITY_OVERVIEW = "capability_overview"
     IDENTITY_PROBE = "identity_probe"
     PRIDE_ACKNOWLEDGED = "pride_acknowledged"
     HIGH_RISK = "high_risk"
@@ -297,12 +299,14 @@ class OutputStylePolicyResolver:
     """Resolve immutable style caps; invalid signals fail to calm-neutral."""
 
     _SCENE_HUMOR_CAP = {
+        Scene.SOCIAL_OPENING: 1,
         Scene.CASUAL_CHAT: 2,
         Scene.PLAYFUL_BANTER: 2,
         Scene.EMOTIONAL_SUPPORT: 0,
         Scene.INFORMATION: 0,
         Scene.TASK: 0,
         Scene.TOOL_RESULT: 0,
+        Scene.CAPABILITY_OVERVIEW: 0,
         Scene.IDENTITY_PROBE: 1,
         Scene.PRIDE_ACKNOWLEDGED: 1,
         Scene.HIGH_RISK: 0,
@@ -375,7 +379,11 @@ class OutputStylePolicyResolver:
         kaomoji_allowed = bool(
             persona.allows_kaomoji
             and user_allows
-            and signals.scene in (Scene.CASUAL_CHAT, Scene.PLAYFUL_BANTER)
+            and signals.scene in (
+                Scene.SOCIAL_OPENING,
+                Scene.CASUAL_CHAT,
+                Scene.PLAYFUL_BANTER,
+            )
             and signals.risk_level == RiskLevel.LOW
             and not (signals.emotion == Emotion.NEGATIVE
                      and signals.emotion_intensity
@@ -403,8 +411,12 @@ class OutputStylePolicyResolver:
                 and signals.emotion_intensity in (
                     EmotionIntensity.MODERATE, EmotionIntensity.STRONG)):
             return Tone.WARM
-        if signals.scene in (Scene.INFORMATION, Scene.TASK, Scene.TOOL_RESULT):
+        if signals.scene in (
+                Scene.INFORMATION, Scene.TASK, Scene.TOOL_RESULT,
+                Scene.CAPABILITY_OVERVIEW):
             return Tone.PRECISE
+        if signals.scene == Scene.SOCIAL_OPENING:
+            return Tone.WARM
         if signals.scene == Scene.EMOTIONAL_SUPPORT:
             return Tone.WARM
         if signals.scene == Scene.IDENTITY_PROBE:

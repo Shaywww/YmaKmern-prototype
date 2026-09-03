@@ -64,6 +64,18 @@ _PLAYFUL_BANTER_RE = re.compile(
     r"道德绑架|(?:还|又)?在内涵|内涵我|赎罪券|你还敢|"
     r"扣帽子|嘴硬|急了|破防|就这)"
 )
+_SOCIAL_OPENING_RE = re.compile(
+    r"^\s*(?:你?好(?:呀|啊|哇)?|嗨|哈[喽啰]|hello|hi|"
+    r"请(?:求)?添加你为好友|好友申请|我是(?:个)?人|我是真人|"
+    r"我说了我是(?:个)?人)\s*[。！!？?~～]*\s*$",
+    re.I,
+)
+_CAPABILITY_OVERVIEW_RE = re.compile(
+    r"(?:你(?:都|还)?(?:会|能)(?:做)?(?:些)?什么|"
+    r"你能干嘛|你有(?:哪些|什么|啥)功能|"
+    r"你可以做什么|介绍(?:一下)?(?:你的)?功能)",
+    re.I,
+)
 
 _EXTRA_ORIGIN = "dududa_response_origin"
 _EXTRA_FALLBACK = "dududa_fallback_reason"
@@ -370,6 +382,13 @@ def _scene(state, text: str, origin: ResponseOrigin,
             ResponseOrigin.SUBSCRIPTION, ResponseOrigin.USER_CANCELLED,
             ResponseOrigin.SYSTEM_ERROR):
         scene, rule = Scene.TASK, "scene.control_plane_origin.v1"
+    elif _CAPABILITY_OVERVIEW_RE.search(text):
+        scene, rule = (
+            Scene.CAPABILITY_OVERVIEW,
+            "scene.capability_overview.v1",
+        )
+    elif _SOCIAL_OPENING_RE.search(text):
+        scene, rule = Scene.SOCIAL_OPENING, "scene.social_opening.v1"
     elif _IDENTITY_PROBE_RE.search(text):
         scene, rule = Scene.IDENTITY_PROBE, "scene.identity_probe.v1"
     elif emotion == Emotion.NEGATIVE:
