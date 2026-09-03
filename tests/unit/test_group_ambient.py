@@ -197,6 +197,20 @@ def test_invalid_topic_reply_rate_env_falls_back(monkeypatch):
     assert tracker.topic_reply_rate == 0.35
 
 
+def test_ambient_limits_can_be_configured_from_env(monkeypatch):
+    monkeypatch.setenv("DUDUDA_AMBIENT_COOLDOWN_SECONDS", "900")
+    monkeypatch.setenv("DUDUDA_AMBIENT_DAILY_LIMIT", "10")
+    monkeypatch.setenv("DUDUDA_AMBIENT_MIN_UNIQUE_SENDERS", "2")
+    monkeypatch.setenv("DUDUDA_AMBIENT_TOPIC_MIN_UNIQUE_SENDERS", "2")
+
+    tracker = GroupAmbientTracker()
+
+    assert tracker.cooldown_seconds == 900
+    assert tracker.daily_limit == 10
+    assert tracker.min_unique_senders == 2
+    assert tracker.topic_min_unique_senders == 2
+
+
 def test_topic_categories_are_narrow_and_explicit():
     assert GroupAmbientTracker.topic_category("想点个外卖") == "takeout"
     assert GroupAmbientTracker.topic_category("终于下班") == "off_work"

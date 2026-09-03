@@ -53,14 +53,28 @@ class GroupAmbientTracker:
     """Track a short traffic window and atomically reserve reply slots."""
 
     def __init__(self, *, window_seconds: float = 240.0,
-                 min_messages: int = 15, min_unique_senders: int = 3,
-                 cooldown_seconds: float = 1800.0, daily_limit: int = 2,
+                 min_messages: int = 15,
+                 min_unique_senders: int | None = None,
+                 cooldown_seconds: float | None = None,
+                 daily_limit: int | None = None,
                  late_night_silence_seconds: float = 1800.0,
                  topic_reply_rate: float | None = None,
                  topic_min_messages: int = 4,
-                 topic_min_unique_senders: int = 2,
+                 topic_min_unique_senders: int | None = None,
                  random_source=None,
                  state_path: str | None = None):
+        if min_unique_senders is None:
+            min_unique_senders = self._env_int(
+                "DUDUDA_AMBIENT_MIN_UNIQUE_SENDERS", 3)
+        if cooldown_seconds is None:
+            cooldown_seconds = self._env_float(
+                "DUDUDA_AMBIENT_COOLDOWN_SECONDS", 1800.0)
+        if daily_limit is None:
+            daily_limit = self._env_int(
+                "DUDUDA_AMBIENT_DAILY_LIMIT", 2)
+        if topic_min_unique_senders is None:
+            topic_min_unique_senders = self._env_int(
+                "DUDUDA_AMBIENT_TOPIC_MIN_UNIQUE_SENDERS", 2)
         self.window_seconds = max(30.0, float(window_seconds))
         self.min_messages = max(2, int(min_messages))
         self.min_unique_senders = max(2, int(min_unique_senders))
@@ -86,6 +100,20 @@ class GroupAmbientTracker:
         self._state_path = str(state_path or "")
         self._lock = threading.RLock()
         self._load_state()
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return int(default)
 
     def _load_state(self) -> None:
         if not self._state_path:
