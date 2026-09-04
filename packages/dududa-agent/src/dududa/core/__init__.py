@@ -48,6 +48,11 @@ from .delivery import (
     DeliveryStatus, RuntimeResult, DeliveryReceipt, CompletionReceipt,
     OutputAdapter, NoOpOutputAdapter, DeliveryManager,
 )
+from .experiments import (
+    AMBIENT_EXPERIMENT_ID, ExperimentStage, ExperimentReason,
+    HumanApproval, ExperimentSpec, ExperimentDecision, ExperimentRegistry,
+    default_experiment_specs,
+)
 from .persona.templates import (
     FormalityLevel, PlayfulnessLevel, EmojiStyle,
     PersonaTraits, ToneConfig, PersonaTemplate, PRESETS,
@@ -94,6 +99,10 @@ __all__ = [
     # delivery
     "DeliveryStatus", "RuntimeResult", "DeliveryReceipt", "CompletionReceipt",
     "OutputAdapter", "NoOpOutputAdapter", "DeliveryManager",
+    # experiments
+    "AMBIENT_EXPERIMENT_ID", "ExperimentStage", "ExperimentReason",
+    "HumanApproval", "ExperimentSpec", "ExperimentDecision",
+    "ExperimentRegistry", "default_experiment_specs",
     # persona
     "FormalityLevel", "PlayfulnessLevel", "EmojiStyle",
     "PersonaTraits", "ToneConfig", "PersonaTemplate", "PRESETS",

@@ -24,6 +24,9 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..safeguards.security import PermissionEngine, Redactor
+from ..safeguards.constitution import (
+    ConstitutionDecision, ConstitutionRequest,
+)
 
 logger = logging.getLogger("dududa20.control_plane.security")
 
@@ -74,9 +77,54 @@ def get_operator(request: Request) -> Operator:
     return op
 
 
-def require_write(request: Request, app) -> Operator:
-    """写操作：操作者必须通过 PermissionEngine manage_config（owner）。"""
+def require_write(
+    request: Request,
+    app,
+    *,
+    action: str = "manage_config",
+    confirmed: bool = False,
+    resource_owner_id: str = "",
+    source_scope: str = "",
+    target_scope: str = "",
+    sensitivity: str = "internal",
+    data_class: str = "public",
+) -> Operator:
+    """写操作先过宪法，再过 PermissionEngine（owner 也不豁免）。"""
     op = get_operator(request)
+    constitution = getattr(app.state, "constitution", None)
+    if constitution is not None:
+        result = constitution.evaluate(ConstitutionRequest(
+            actor_id=op.actor_id,
+            actor_role=op.role,
+            action=action,
+            resource=str(request.url.path),
+            resource_owner_id=resource_owner_id,
+            source_scope=source_scope,
+            target_scope=target_scope,
+            sensitivity=sensitivity,
+            data_class=data_class,
+            confirmed=bool(confirmed),
+        ))
+        if result.decision != ConstitutionDecision.ALLOW:
+            try:
+                app.state.audit_logger.log({
+                    "event": "constitution_block",
+                    "actor": op.actor_id,
+                    "role": op.role,
+                    "action": action,
+                    "path": request.url.path,
+                    "decision": result.decision.value,
+                    "rule_id": result.rule_id,
+                    "reason": result.reason.value,
+                    "constitution_version": result.constitution_version,
+                    "constitution_digest": result.constitution_digest,
+                })
+            except Exception:
+                logger.warning("constitution audit failed", exc_info=True)
+            status = (409 if result.decision
+                      == ConstitutionDecision.REQUIRE_CONFIRMATION else 403)
+            raise HTTPException(
+                status, f"constitution: {result.reason.value}")
     result = app.state.permission_engine.authorize(
         op, "manage_config", scope_key="cp:control_plane",
         resource=str(request.url.path))

@@ -42,6 +42,7 @@ from dududa.core.quality_eval import strip_self_degrading_abuse
 from dududa.core.group_ambient import GroupAmbientTracker
 from dududa.core.group_context import GroupConversationTracker
 from dududa.core.meme_library import MemeLibrary
+from dududa.core.experiments import AMBIENT_EXPERIMENT_ID
 logger = _get_logger("dududa20")
 
 _REACT_EMOJIS = ["(\u30b7\u00b0\u3002\u00b0)\uff83", "(\u3002>\u3002<\u3002)",
@@ -1630,6 +1631,46 @@ def _group_policy_for_event(plugin, event, group_id: str):
     return None
 
 
+def _ambient_feature_enabled(plugin, event, policy, group_id: str) -> bool:
+    """Resolve manual ambient policy plus the versioned experiment envelope.
+
+    SHADOW only records assignment and never enables a disabled group.  A live
+    CANARY/PROMOTED treatment may add ambient participation.  A global or
+    per-group kill always removes ambient participation, including a manual
+    opt-in, without touching explicit @/reply/command handling.
+    """
+    manual_enabled = bool(getattr(policy, "ambient_enabled", False))
+    registry = getattr(plugin, "experiment_registry", None)
+    decide = getattr(registry, "decide", None)
+    if not callable(decide):
+        return manual_enabled
+
+    cached = getattr(event, "_dududa_ambient_experiment_decision", None)
+    try:
+        decision = cached or decide(AMBIENT_EXPERIMENT_ID, str(group_id))
+        if cached is None:
+            setattr(event, "_dududa_ambient_experiment_decision", decision)
+            metadata = decision.to_trace()
+            trace_recorder.record(
+                event="experiment_decision",
+                run_id=str(getattr(event, "_dududa_policy_run_id", "") or ""),
+                trace_id=str(getattr(event, "_dududa_policy_trace_id", "") or ""),
+                manual_enabled=manual_enabled,
+                effective_enabled=bool(
+                    (manual_enabled or decision.live_enabled)
+                    and not decision.killed),
+                **metadata,
+            )
+        if decision.killed:
+            return False
+        return bool(manual_enabled or decision.live_enabled)
+    except Exception:
+        # Experiment control is an authority boundary.  Its failure may silence
+        # ambient chat, but must never suppress explicit user-directed replies.
+        logger.warning("Ambient experiment resolution failed closed", exc_info=True)
+        return False
+
+
 def _mark_ambient_wake(
         event, reason_code: str = DecisionReason.AMBIENT_WAKE.value) -> None:
     try:
@@ -2862,12 +2903,13 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
     policy = _group_policy_for_event(plugin, event, group_id)
     if str(getattr(policy, "mode", "normal")) == "off":
         return False
+    ambient_enabled = _ambient_feature_enabled(
+        plugin, event, policy, group_id)
 
     # Only groups that explicitly opted into natural participation keep a
     # short-lived semantic queue.  The guard has already filtered configured
     # robot senders; raw ids are replaced by ephemeral aliases in the tracker.
-    if (policy is not None
-            and bool(getattr(policy, "ambient_enabled", False))):
+    if ambient_enabled:
         _record_group_context(plugin, event, msgs, group_id, sender_id)
 
     if at_targets and not exact_at:
@@ -2883,8 +2925,7 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
         # same group queue. Explicit OCR/description requests stay on the full
         # vision-answer path so detail is not lost to a short summary.
         if (exact_at and has_media and _group_has_visual_media(event)
-                and policy is not None
-                and bool(getattr(policy, "ambient_enabled", False))
+                and ambient_enabled
                 and not _explicit_image_request(
                     getattr(event, "message_str", ""))):
             _mark_semantic_media_candidate(event, "directed_media")
@@ -2911,9 +2952,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
         # Native scenes are opt-in with ambient participation.  A recognised
         # but disabled/rate-limited card is consumed rather than sent to the
         # LLM as an empty or opaque message.
-        if not (policy is not None
-                and str(getattr(policy, "mode", "normal")) == "normal"
-                and bool(getattr(policy, "ambient_enabled", False))):
+        if not (str(getattr(policy, "mode", "normal")) == "normal"
+                and ambient_enabled):
             return False
         tracker = getattr(plugin, "group_ambient", None)
         reserve = getattr(tracker, "reserve_scene", None)
@@ -2938,9 +2978,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
 
     if has_media:
         _note_group_ambient_activity(plugin, group_id)
-        if (policy is not None
-                and str(getattr(policy, "mode", "normal")) == "normal"
-                and bool(getattr(policy, "ambient_enabled", False))):
+        if (str(getattr(policy, "mode", "normal")) == "normal"
+                and ambient_enabled):
             try:
                 context_tracker = _group_context_tracker(plugin)
                 media_kind = _detect_media_kind(event)
@@ -3000,9 +3039,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
                         group_id)
         return False
 
-    if (policy is not None
-            and str(getattr(policy, "mode", "normal")) == "normal"
-            and bool(getattr(policy, "ambient_enabled", False))
+    if (str(getattr(policy, "mode", "normal")) == "normal"
+            and ambient_enabled
             and _nickname_wake(
                 str(getattr(event, "message_str", "") or ""))):
         _note_group_ambient_activity(plugin, group_id)
@@ -3017,9 +3055,8 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
     # current clear question can be promoted, after an explicit per-group
     # opt-in. The guard above has already rejected configured bot senders;
     # framework commands and unaddressed media never reach this branch.
-    if (policy is not None
-            and str(getattr(policy, "mode", "normal")) == "normal"
-            and bool(getattr(policy, "ambient_enabled", False))):
+    if (str(getattr(policy, "mode", "normal")) == "normal"
+            and ambient_enabled):
         tracker = getattr(plugin, "group_ambient", None)
         observe = getattr(tracker, "observe", None)
         if callable(observe):

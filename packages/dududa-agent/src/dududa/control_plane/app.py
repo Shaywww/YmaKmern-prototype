@@ -19,7 +19,14 @@ from ..mcp import access as mcp_access
 from ..core.memory import (
     JSONMemoryRepository, ScopeSelector, SensitivityLevel, MemoryType,
 )
+from ..core.experiments import (
+    ExperimentRegistry, ExperimentSpec, ExperimentStage, HumanApproval,
+    default_experiment_specs,
+)
 from ..evolution import ShadowEvolution
+from ..safeguards.constitution import (
+    ConstitutionDecision, ConstitutionRequest, default_constitution,
+)
 from .security import (
     AuditLogger, cp_auth_middleware, get_operator, redact_value,
     require_write, scope_filter_events,
@@ -128,6 +135,37 @@ class EvolutionDecision(BaseModel):
     note: str = ""
 
 
+class ExperimentCreate(BaseModel):
+    experiment_id: str
+    flag: str
+    strategy_version: str
+    rollout: int = 0
+    owner: str = ""
+    review_date: str = ""
+    reason: str
+
+
+class ExperimentTransition(BaseModel):
+    target_stage: str
+    reason: str
+
+
+class ExperimentRollout(BaseModel):
+    rollout: int
+    reason: str
+
+
+class ExperimentKill(BaseModel):
+    reason: str
+    subject_id: str = ""
+    ttl_seconds: float | None = None
+
+
+class ExperimentKillRelease(BaseModel):
+    reason: str
+    subject_id: str
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -145,6 +183,13 @@ def create_app() -> FastAPI:
     app.state.permission_engine = PermissionEngine()
     app.state.redactor = Redactor()
     app.state.audit_logger = AuditLogger()
+    app.state.constitution = default_constitution()
+    app.state.experiment_registry = ExperimentRegistry(
+        path=os.environ.get("DUDUDA_EXPERIMENT_FILE") or str(
+            Path(__file__).resolve().parents[2] / "data" / "experiments.json"),
+        bucket_salt=os.environ.get("DUDUDA_EXPERIMENT_BUCKET_SALT", ""),
+        defaults=default_experiment_specs(),
+    )
     cap_registry = CapabilityRegistry()
     register_all_mcp_services(cap_registry)
     app.state.cap_registry = cap_registry
@@ -458,6 +503,33 @@ def _register_routes(app: FastAPI):
         """与 query_visible 语义一致：RESTRICTED 永不召回；PRIVATE 仅本人可见。"""
         out = []
         for r in records:
+            constitutional = app.state.constitution.evaluate(
+                ConstitutionRequest(
+                    actor_id=op.actor_id,
+                    actor_role=op.role,
+                    action='read_memory',
+                    resource='memory_record',
+                    resource_owner_id=r.scope.actor_id,
+                    sensitivity=r.sensitivity.value,
+                    data_class=r.sensitivity.value,
+                ))
+            if constitutional.decision != ConstitutionDecision.ALLOW:
+                try:
+                    app.state.audit_logger.log({
+                        'event': 'constitution_block',
+                        'actor': op.actor_id,
+                        'role': op.role,
+                        'action': 'read_memory',
+                        'path': '/memory',
+                        'decision': constitutional.decision.value,
+                        'rule_id': constitutional.rule_id,
+                        'reason': constitutional.reason.value,
+                        'constitution_version': constitutional.constitution_version,
+                        'constitution_digest': constitutional.constitution_digest,
+                    })
+                except OSError:
+                    pass
+                continue
             if r.sensitivity == SensitivityLevel.RESTRICTED:
                 continue
             if (r.sensitivity == SensitivityLevel.PRIVATE
@@ -756,9 +828,174 @@ def _register_routes(app: FastAPI):
         return {'logs': [redact_value(app.state.redactor, r) for r in rows],
                 'count': len(rows), 'source': source}
 
+    # ---------- Governance: deterministic experiments + constitution ----------
+    def _experiment_audit(op, event: str, experiment_id: str, **fields):
+        app.state.audit_logger.log({
+            'event': event,
+            'actor': op.actor_id,
+            'role': op.role,
+            'path': f'/experiments/{experiment_id}',
+            'experiment_id': experiment_id,
+            **fields,
+        })
+
+    @app.get('/governance/constitution')
+    async def constitution_manifest():
+        return app.state.constitution.manifest()
+
+    @app.get('/experiments')
+    async def experiments_list():
+        items = [spec.to_dict()
+                 for spec in app.state.experiment_registry.list()]
+        return {
+            'experiments': items,
+            'count': len(items),
+            'bucket_salt_configured':
+                app.state.experiment_registry.has_bucket_salt,
+        }
+
+    @app.get('/experiments/{experiment_id}')
+    async def experiment_get(experiment_id: str):
+        spec = app.state.experiment_registry.get(experiment_id)
+        if spec is None:
+            raise HTTPException(404, 'experiment not found')
+        return spec.to_dict()
+
+    @app.post('/experiments')
+    async def experiment_create(body: ExperimentCreate, request: Request):
+        op = require_write(request, app, action='create_experiment')
+        if body.owner and body.owner != op.actor_id:
+            raise HTTPException(400, 'owner must be the approving operator')
+        try:
+            spec = app.state.experiment_registry.create(
+                ExperimentSpec(
+                    experiment_id=body.experiment_id,
+                    flag=body.flag,
+                    strategy_version=body.strategy_version,
+                    rollout=body.rollout,
+                    stage=ExperimentStage.DRAFT,
+                    owner=op.actor_id,
+                    review_date=body.review_date,
+                ),
+                HumanApproval(op.actor_id, body.reason),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        _experiment_audit(
+            op, 'experiment_created', spec.experiment_id,
+            stage=spec.stage.value, rollout=spec.rollout,
+            strategy_version=spec.strategy_version)
+        return spec.to_dict()
+
+    @app.post('/experiments/{experiment_id}/transition')
+    async def experiment_transition(
+            experiment_id: str, body: ExperimentTransition,
+            request: Request):
+        try:
+            target = ExperimentStage(body.target_stage)
+        except ValueError:
+            raise HTTPException(400, 'invalid experiment stage')
+        action = ('pause_experiment' if target == ExperimentStage.PAUSED
+                  else 'promote_experiment')
+        op = require_write(
+            request, app, action=action,
+            confirmed=bool(str(body.reason or '').strip()))
+        try:
+            spec = app.state.experiment_registry.transition(
+                experiment_id, target,
+                HumanApproval(op.actor_id, body.reason))
+        except KeyError:
+            raise HTTPException(404, 'experiment not found')
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        _experiment_audit(
+            op, 'experiment_transition', experiment_id,
+            stage=spec.stage.value, rollout=spec.rollout,
+            strategy_version=spec.strategy_version)
+        return spec.to_dict()
+
+    @app.post('/experiments/{experiment_id}/rollout')
+    async def experiment_rollout(
+            experiment_id: str, body: ExperimentRollout,
+            request: Request):
+        current = app.state.experiment_registry.get(experiment_id)
+        if current is None:
+            raise HTTPException(404, 'experiment not found')
+        expanding = int(body.rollout) > current.rollout
+        op = require_write(
+            request, app,
+            action=('expand_experiment_rollout' if expanding
+                    else 'reduce_experiment_rollout'),
+            confirmed=bool(str(body.reason or '').strip()))
+        try:
+            spec = app.state.experiment_registry.set_rollout(
+                experiment_id, body.rollout,
+                HumanApproval(op.actor_id, body.reason))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        _experiment_audit(
+            op, 'experiment_rollout_changed', experiment_id,
+            previous_rollout=current.rollout, rollout=spec.rollout,
+            direction=('expand' if expanding else 'reduce'))
+        return spec.to_dict()
+
+    @app.post('/experiments/{experiment_id}/kill')
+    async def experiment_kill(
+            experiment_id: str, body: ExperimentKill, request: Request):
+        # Lowering authority is deliberately not confirmation-gated.
+        op = require_write(request, app, action='kill_experiment')
+        try:
+            spec = app.state.experiment_registry.kill(
+                experiment_id, HumanApproval(op.actor_id, body.reason),
+                subject_id=body.subject_id,
+                ttl_seconds=body.ttl_seconds)
+            decision = (app.state.experiment_registry.decide(
+                experiment_id, body.subject_id) if body.subject_id else None)
+        except KeyError:
+            raise HTTPException(404, 'experiment not found')
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        _experiment_audit(
+            op, 'experiment_killed', experiment_id,
+            kill_scope=('subject' if body.subject_id else 'global'),
+            subject_hash=(decision.subject_hash if decision else ''),
+            ttl_seconds=body.ttl_seconds)
+        return {
+            'experiment': spec.to_dict(),
+            'kill_scope': ('subject' if body.subject_id else 'global'),
+            'subject_hash': decision.subject_hash if decision else '',
+        }
+
+    @app.post('/experiments/{experiment_id}/release-kill')
+    async def experiment_release_kill(
+            experiment_id: str, body: ExperimentKillRelease,
+            request: Request):
+        op = require_write(
+            request, app, action='resume_experiment',
+            confirmed=bool(str(body.reason or '').strip()))
+        try:
+            before = app.state.experiment_registry.decide(
+                experiment_id, body.subject_id)
+            removed = app.state.experiment_registry.release_subject_kill(
+                experiment_id, body.subject_id,
+                HumanApproval(op.actor_id, body.reason))
+        except KeyError:
+            raise HTTPException(404, 'experiment not found')
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        _experiment_audit(
+            op, 'experiment_kill_released', experiment_id,
+            kill_scope='subject', subject_hash=before.subject_hash,
+            removed=removed)
+        return {
+            'released': removed,
+            'subject_hash': before.subject_hash,
+            'experiment_id': experiment_id,
+        }
+
     @app.get('/runtime/state')
     async def runtime_state():
-        return {'active_persona':app.state.registry.active_id,'persona_count':len(app.state.registry.list_all()),'group_overrides':len(app.state.registry._group_overrides),'user_overrides':len(app.state.registry._user_overrides),'mcp_services':len(app.state.services),'trace_events':len(app.state.trace_sink.events),'evolution':app.state.evolution.status()}
+        return {'active_persona':app.state.registry.active_id,'persona_count':len(app.state.registry.list_all()),'group_overrides':len(app.state.registry._group_overrides),'user_overrides':len(app.state.registry._user_overrides),'mcp_services':len(app.state.services),'trace_events':len(app.state.trace_sink.events),'evolution':app.state.evolution.status(),'constitution':{'version':app.state.constitution.version,'digest':app.state.constitution.digest},'experiments':len(app.state.experiment_registry.list())}
 
     # ---------- 影子进化：收集 / 聚类 / 审批，刻意没有激活和部署端点 ----------
     @app.get('/evolution/status')

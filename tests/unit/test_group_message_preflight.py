@@ -19,6 +19,10 @@ from dududa.application.dududa_core import DududaCore
 from dududa.core import group_ambient as group_ambient_module
 from dududa.core.group_policy import GroupPolicyStore
 from dududa.core.group_ambient import GroupAmbientTracker
+from dududa.core.experiments import (
+    AMBIENT_EXPERIMENT_ID, ExperimentRegistry, ExperimentSpec,
+    ExperimentStage, HumanApproval,
+)
 from dududa.core.idempotency import MessageIdempotencyRegistry
 from dududa.core.perception import PerceptionResult
 from dududa.core.state import SocialAction
@@ -1631,3 +1635,83 @@ def test_split_at_window_does_not_cross_senders_in_same_group():
     h._mark_at_only_ts(first)
 
     assert h._recent_at_only(other_user) is False
+
+
+def _experiment_registry(tmp_path, *, stage, rollout=100):
+    return ExperimentRegistry(
+        str(tmp_path / "experiments.json"),
+        bucket_salt="group-preflight-test-salt",
+        defaults=(ExperimentSpec(
+            experiment_id=AMBIENT_EXPERIMENT_ID,
+            flag="ambient_participation",
+            strategy_version="ambient-policy/test",
+            rollout=rollout,
+            stage=stage,
+        ),),
+    )
+
+
+def test_shadow_experiment_never_enables_an_unconfigured_group(
+        tmp_path, monkeypatch):
+    plugin = FlowPlugin(tmp_path)
+    plugin.experiment_registry = _experiment_registry(
+        tmp_path, stage=ExperimentStage.SHADOW)
+    event = GroupEvent(
+        "大家继续聊", message_id="experiment-shadow", at=False)
+    trace = _TraceSpy()
+    monkeypatch.setattr(h, "trace_recorder", trace)
+
+    assert h._preflight_group_message(
+        plugin, event, event.get_messages()) is False
+    decision = event._dududa_ambient_experiment_decision
+    assert decision.shadow_enabled is True
+    assert decision.live_enabled is False
+    assert h._group_context_tracker(plugin).stats(
+        GROUP_ID)["message_count"] == 0
+    assert trace.events[0]["event"] == "experiment_decision"
+    assert trace.events[0]["effective_enabled"] is False
+
+
+def test_live_canary_may_enable_ambient_without_changing_direct_path(
+        tmp_path, monkeypatch):
+    plugin = FlowPlugin(tmp_path)
+    plugin.experiment_registry = _experiment_registry(
+        tmp_path, stage=ExperimentStage.CANARY)
+    event = GroupEvent(
+        "大家继续聊", message_id="experiment-canary", at=False)
+    monkeypatch.setattr(h, "trace_recorder", _TraceSpy())
+
+    assert h._preflight_group_message(
+        plugin, event, event.get_messages()) is False
+    assert event._dududa_ambient_experiment_decision.live_enabled is True
+    assert h._group_context_tracker(plugin).stats(
+        GROUP_ID)["message_count"] == 1
+
+
+def test_subject_kill_suppresses_manual_ambient_but_not_explicit_at(
+        tmp_path, monkeypatch):
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_policy.set(GROUP_ID, ambient_enabled=True)
+    plugin.experiment_registry = _experiment_registry(
+        tmp_path, stage=ExperimentStage.SHADOW)
+    plugin.experiment_registry.kill(
+        AMBIENT_EXPERIMENT_ID,
+        HumanApproval("human-owner", "member asked to stop"),
+        subject_id=GROUP_ID,
+    )
+    monkeypatch.setattr(h, "trace_recorder", _TraceSpy())
+
+    ambient = GroupEvent(
+        "大家继续聊", message_id="experiment-killed", at=False)
+    assert h._preflight_group_message(
+        plugin, ambient, ambient.get_messages()) is False
+    assert ambient._dududa_ambient_experiment_decision.killed is True
+    assert h._group_context_tracker(plugin).stats(
+        GROUP_ID)["message_count"] == 0
+
+    directed = GroupEvent(
+        f"[At:{BOT_ID}] 还在吗", message_id="experiment-directed", at=True,
+        components=[_At(BOT_ID), _Plain("还在吗")])
+    assert h._preflight_group_message(
+        plugin, directed, directed.get_messages()) is True
+    assert plugin.group_ambient.status(GROUP_ID)["daily_used"] == 0

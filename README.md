@@ -150,6 +150,9 @@ tests/                # 分层测试：unit / contracts / integration / evals / 
 ### 控制台与运维
 
 - Control Plane（ADR-0001）：安全基线（认证/审计/脱敏/作用域/MCP 门控）、只读面板（记忆/评估报告）、高级面板（Playground/成本/告警/日志检索）
+- 激进实验底座（ADR-0002）：`DRAFT → SHADOW → CANARY → PROMOTED` 只能由已认证的人类操作者逐级推进；稳定 HMAC 分桶不受策略版本变化影响，缺少 `DUDUDA_EXPERIMENT_BUCKET_SALT` 时 fail-closed
+- 主动参与实验默认停在 `SHADOW + rollout=0`，部署代码不会自动放量；全局/单群 kill 在消息决策热路径同步刷新，只关闭主动参与，不占用或关闭 @、命令、回复链
+- 确定性宪法位于 RBAC 与模型之上：跨用户私密记忆、跨 Scope 敏感记忆及凭据导出属于 `HARD` 拒绝，owner 与运行时 break-glass 均不豁免；实验扩量和恢复属于需人类确认的操作规则
 - Trace 可视化面板：工具使用率/失败率（按工具、按天聚合）+ 成本周报（按 ISO 周估算，最新在前）
 - 运维脚本：健康检查、供应链 manifest、冒烟、退出评估门禁（45 项）
 - 两阶段投递协议：框架发送后真实回执、幂等确认、无输出不伪造回执（文档 2.3.15-2.3.16）
