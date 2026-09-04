@@ -850,6 +850,141 @@ async def test_deepseek_is_final_small_chat_judge_and_uses_shared_quota(
         rejected, event, "small_group_context_thread") == ""
 
 
+@pytest.mark.asyncio
+async def test_semantic_silence_records_granular_reject_reason(
+        tmp_path, monkeypatch):
+    """语义复核拒绝时，落盘 scene/置信度/具体拒绝条件（不再只有 defer）。"""
+    from dududa.core.trace_recorder import TraceRecorder
+    rec = TraceRecorder(tmp_path / "traces")
+    monkeypatch.setattr(h, "trace_recorder", rec)
+
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    for i, (sender, text) in enumerate((
+        ("10001", "晚上吃什么"), ("10002", "飞机"), ("10003", "不错"),
+    )):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id=sender, content=text,
+            message_id=f"sil-{i}")
+
+    cases = [
+        ("r-nc", '{"scene":"serious_discussion","should_reply":false,'
+                  '"confidence":0.9,"reply":""}', "not_casual_meme"),
+        ("r-sr", '{"scene":"casual_meme","should_reply":false,'
+                  '"confidence":0.9,"reply":""}', "should_reply_false"),
+        ("r-cf", '{"scene":"casual_meme","should_reply":true,'
+                  '"confidence":0.5,"reply":""}', "confidence_below_threshold"),
+        ("r-bj", "not-json", "bad_json"),
+    ]
+    event = GroupEvent("不错", message_id="sil-final", sender_id="10003")
+    for run_id, raw, expected in cases:
+        async def _reply(system, user, _raw=raw, **kwargs):
+            return _raw
+
+        plugin._call_llm = _reply
+        assert await h._semantic_chat_reply(
+            plugin, event, "small_group_context_thread",
+            run_id=run_id, trace_id="t") == ""
+
+    by_run = {l["run_id"]: l for l in rec.lines_for()
+              if l["event"] == "semantic_silence"}
+    assert by_run["r-nc"]["reject_reason"] == "not_casual_meme"
+    assert by_run["r-nc"]["scene"] == "serious_discussion"
+    assert by_run["r-sr"]["reject_reason"] == "should_reply_false"
+    assert by_run["r-cf"]["reject_reason"] == "confidence_below_threshold"
+    assert by_run["r-cf"]["confidence"] == 0.5
+    assert by_run["r-bj"]["reject_reason"] == "bad_json"
+
+
+@pytest.mark.asyncio
+async def test_small_chat_reply_rate_is_independent_and_configurable(
+        tmp_path, monkeypatch):
+    """普通聊天参与率是独立、清晰、可配置的策略（不再是硬门槛）。"""
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    for i, (sender, text) in enumerate((
+        ("10001", "a"), ("10002", "b"), ("10001", "c"),
+    )):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id=sender, content=text,
+            message_id=f"scr-{i}")
+    monkeypatch.setattr(h, "_context_has_question", lambda *a, **k: True)
+
+    text = "确实"
+    # rate=0 完全不提名
+    monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_REPLY_RATE", "0.0")
+    assert h._small_chat_text_candidate(plugin, GROUP_ID, text) is False
+
+    # rate=0.5 且随机数 >= rate → 抽样淘汰
+    monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_REPLY_RATE", "0.5")
+    monkeypatch.setattr(h, "_small_chat_sample", lambda: 0.99)
+    assert h._small_chat_text_candidate(plugin, GROUP_ID, text) is False
+
+    # rate=0.5 且随机数 < rate → 提名
+    monkeypatch.setattr(h, "_small_chat_sample", lambda: 0.0)
+    assert h._small_chat_text_candidate(plugin, GROUP_ID, text) is True
+
+
+@pytest.mark.asyncio
+async def test_small_chat_min_confidence_is_configurable(tmp_path, monkeypatch):
+    """普通聊天语义复核的 0.82 置信度门槛可配置（独立于提名率）。"""
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    for i, (sender, text) in enumerate((
+        ("10001", "晚上吃什么"), ("10002", "飞机"), ("10003", "不错"),
+    )):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id=sender, content=text,
+            message_id=f"mcc-{i}")
+
+    async def low_conf(system, user, **kwargs):
+        return ('{"scene":"casual_meme","should_reply":true,'
+                '"confidence":0.6,"reply":"飞机～"}')
+
+    plugin._call_llm = low_conf
+    event = GroupEvent("不错", message_id="mcc-final", sender_id="10003")
+
+    monkeypatch.delenv("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", raising=False)
+    assert await h._semantic_chat_reply(
+        plugin, event, "small_group_context_thread") == ""
+
+    monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", "0.5")
+    reply = await h._semantic_chat_reply(
+        plugin, event, "small_group_context_thread")
+    assert reply == "飞机～"
+
+
+@pytest.mark.asyncio
+async def test_small_chat_rejects_non_finite_model_confidence(
+        tmp_path, monkeypatch):
+    """NaN/Infinity 不能利用浮点比较语义绕过最低置信度。"""
+    plugin = FlowPlugin(tmp_path)
+    plugin.group_context = h.GroupConversationTracker()
+    for i, (sender, text) in enumerate((
+        ("10001", "晚上吃什么"), ("10002", "飞机"), ("10003", "不错"),
+    )):
+        plugin.group_context.add(
+            group_id=GROUP_ID, sender_id=sender, content=text,
+            message_id=f"nan-{i}")
+
+    async def non_finite(system, user, **kwargs):
+        return ('{"scene":"casual_meme","should_reply":true,'
+                '"confidence":NaN,"reply":"飞机～"}')
+
+    plugin._call_llm = non_finite
+    event = GroupEvent("不错", message_id="nan-final", sender_id="10003")
+    assert await h._semantic_chat_reply(
+        plugin, event, "small_group_context_thread",
+        run_id="nan-run", trace_id="nan-trace") == ""
+
+
+def test_small_chat_probability_env_rejects_non_finite(monkeypatch):
+    monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_REPLY_RATE", "NaN")
+    monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", "Infinity")
+    assert h._small_chat_reply_rate() == 1.0
+    assert h._small_chat_min_confidence() == 0.82
+
+
 def test_local_meme_match_only_opens_semantic_review_after_real_context(
     tmp_path,
 ):

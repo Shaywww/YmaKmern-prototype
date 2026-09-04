@@ -5,8 +5,11 @@
 Main 只做事件适配与结果发送。
 """
 import asyncio
+import hashlib
 import json
 import logging
+import math
+import os
 import random
 import re
 import threading
@@ -2366,10 +2369,48 @@ def _strict_json_object(value: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-async def _semantic_meme_reply(plugin, event, candidate: dict) -> str:
+def _record_semantic_silence(channel, run_id, trace_id, reject_reason,
+                             scene="", should_reply=False, confidence=0.0):
+    """记录语义复核「沉默」的明细：场景 / 置信度 / 具体拒绝条件。
+
+    旧实现只在调用前记 social_decision(semantic_recheck/defer)，无法区分
+    「不是玩梗 / should_reply=false / 置信度不足 / JSON 异常 / 冷却额度」。
+    这里补一条 semantic_silence 事件，把模型判定与最终拒绝原因分开落盘。
+    """
+    allowed_scenes = {
+        "serious_discussion", "casual_meme", "neutral_complaint", "unknown",
+    }
+    safe_scene = scene if scene in allowed_scenes else "invalid"
+    try:
+        safe_confidence = float(confidence or 0.0)
+        if not math.isfinite(safe_confidence):
+            safe_confidence = 0.0
+        trace_recorder.record(
+            event="semantic_silence", run_id=run_id, trace_id=trace_id,
+            channel=channel, reject_reason=reject_reason, scene=safe_scene,
+            should_reply=(should_reply is True),
+            confidence=round(safe_confidence, 3))
+    except Exception:
+        pass
+
+
+def _semantic_confidence(value):
+    """Return a finite 0..1 model confidence, otherwise ``None``."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        return None
+    return parsed
+
+
+async def _semantic_meme_reply(plugin, event, candidate: dict,
+                               run_id: str = "", trace_id: str = "") -> str:
     """Let DeepSeek make the final, fail-closed meme/scene decision."""
     context = _group_context_text(plugin, event)
     if not context:
+        _record_semantic_silence("meme", run_id, trace_id, "no_context")
         return ""
     system = (
         "你是群聊语境判定器，只输出严格 JSON，不要 Markdown。"
@@ -2398,30 +2439,58 @@ async def _semantic_meme_reply(plugin, event, candidate: dict) -> str:
         signal = _strict_json_object(raw)
         if set(signal) != {
                 "scene", "is_meme", "should_reply", "confidence", "reply"}:
+            _record_semantic_silence("meme", run_id, trace_id, "bad_json")
             return ""
         scene = str(signal.get("scene", ""))
-        confidence = float(signal.get("confidence", 0.0))
-        if (scene != "casual_meme"
-                or signal.get("is_meme") is not True
-                or signal.get("should_reply") is not True
-                or confidence < 0.78):
+        confidence = _semantic_confidence(signal.get("confidence"))
+        if confidence is None:
+            _record_semantic_silence("meme", run_id, trace_id,
+                                     "invalid_confidence", scene=scene)
+            return ""
+        if scene != "casual_meme":
+            _record_semantic_silence("meme", run_id, trace_id, "not_casual_meme",
+                                     scene=scene, confidence=confidence)
+            return ""
+        if signal.get("is_meme") is not True:
+            _record_semantic_silence("meme", run_id, trace_id, "not_meme",
+                                     scene=scene, confidence=confidence)
+            return ""
+        if signal.get("should_reply") is not True:
+            _record_semantic_silence("meme", run_id, trace_id,
+                                     "should_reply_false",
+                                     scene=scene, confidence=confidence)
+            return ""
+        if confidence < 0.78:
+            _record_semantic_silence("meme", run_id, trace_id,
+                                     "confidence_below_threshold",
+                                     scene=scene, confidence=confidence)
             return ""
         reply = " ".join(str(signal.get("reply", "") or "").split()).strip()
         if (not reply or len(reply) > 100 or "@" in reply
                 or "http://" in reply or "https://" in reply
                 or re.search(r"(?:^|\s)[#*>`]|\n", reply)):
+            _record_semantic_silence("meme", run_id, trace_id, "bad_reply",
+                                     scene=scene, confidence=confidence)
             return ""
         group_id = _event_group_id(event)
         reserve = getattr(getattr(plugin, "group_ambient", None),
                           "reserve_scene", None)
         if not callable(reserve):
+            _record_semantic_silence("meme", run_id, trace_id,
+                                     "reserve_unavailable",
+                                     scene=scene, confidence=confidence)
             return ""
         decision = reserve(group_id=group_id, reason="semantic_meme")
         if not bool(getattr(decision, "should_reply", False)):
+            _record_semantic_silence(
+                "meme", run_id, trace_id,
+                f"reserve_rejected:{getattr(decision, 'reason', 'unknown')}",
+                scene=scene, confidence=confidence)
             return ""
         return _normalize_reply_style(reply)
     except Exception:
         logger.warning("Semantic meme review failed closed", exc_info=True)
+        _record_semantic_silence("meme", run_id, trace_id, "exception")
         return ""
 
 
@@ -2473,6 +2542,42 @@ def _context_has_reply_or_media(plugin, group_id: str,
         return False
 
 
+def _env_probability(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(value):
+        return float(default)
+    return min(1.0, max(0.0, value))
+
+
+def _small_chat_reply_rate() -> float:
+    """普通聊天语义参与率（0..1），独立于 reply_rate 与话题抽样率。
+
+    三套机制不要混淆：
+    - reply_rate：群策略「未被 @ 时被动参与」的概率（@/命令/回复链仍必回）；
+    - DUDUDA_AMBIENT_TOPIC_REPLY_RATE：关键词话题（外卖/摸鱼等）的抽样率；
+    - 本值：小群普通对话「通过硬门槛后，是否提名给 DeepSeek 复核」的概率。
+    默认 1.0（保持现状），调低可减少普通聊天参与。
+    对应环境变量 DUDUDA_AMBIENT_CHAT_REPLY_RATE。
+    """
+    return _env_probability("DUDUDA_AMBIENT_CHAT_REPLY_RATE", 1.0)
+
+
+def _small_chat_min_confidence() -> float:
+    """普通聊天语义复核的最低置信度（0..1，默认 0.82）。
+
+    调低会更容易接话（更活跃），调高更保守。与 DUDUDA_AMBIENT_CHAT_REPLY_RATE
+    相互独立：rate 决定「是否提名」，confidence 决定「提名后模型是否放行」。
+    """
+    return _env_probability("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", 0.82)
+
+
+# 可注入随机源（测试用），与 group_ambient 的 random_source 同语义。
+_small_chat_sample = random.random
+
+
 def _small_chat_text_candidate(plugin, group_id: str, text: str) -> bool:
     """Nominate a compact two-person thread for semantic review only.
 
@@ -2488,23 +2593,26 @@ def _small_chat_text_candidate(plugin, group_id: str, text: str) -> bool:
     try:
         tracker = _group_context_tracker(plugin)
         stats = tracker.stats(group_id)
-        return bool(
-            stats.get("message_count", 0) >= 3
-            and stats.get("unique_senders", 0) >= 2
-            and (
-                _context_has_question(plugin, group_id, before_last=True)
-                or _context_has_reply_or_media(
-                    plugin, group_id, before_last=True)
-            )
-        )
+        if not (stats.get("message_count", 0) >= 3
+                and stats.get("unique_senders", 0) >= 2
+                and (_context_has_question(plugin, group_id, before_last=True)
+                     or _context_has_reply_or_media(
+                         plugin, group_id, before_last=True))):
+            return False
+        rate = _small_chat_reply_rate()
+        if rate <= 0.0 or _small_chat_sample() >= rate:
+            return False
+        return True
     except Exception:
         return False
 
 
-async def _semantic_chat_reply(plugin, event, source: str) -> str:
+async def _semantic_chat_reply(plugin, event, source: str,
+                               run_id: str = "", trace_id: str = "") -> str:
     """Let DeepSeek decide whether a small-group exchange merits one line."""
     context = _group_context_text(plugin, event)
     if not context:
+        _record_semantic_silence("chat", run_id, trace_id, "no_context")
         return ""
     system = (
         "你是群聊自然接话判定器，只输出严格 JSON，不要 Markdown。"
@@ -2526,33 +2634,70 @@ async def _semantic_chat_reply(plugin, event, source: str) -> str:
             max_tokens=220, temperature=0.1, skip_render=True)
         signal = _strict_json_object(raw)
         if set(signal) != {"scene", "should_reply", "confidence", "reply"}:
+            _record_semantic_silence("chat", run_id, trace_id, "bad_json")
             return ""
-        if (signal.get("scene") != "casual_meme"
-                or signal.get("should_reply") is not True
-                or float(signal.get("confidence", 0.0)) < 0.82):
+        scene = str(signal.get("scene", ""))
+        should_reply = signal.get("should_reply")
+        confidence = _semantic_confidence(signal.get("confidence"))
+        if confidence is None:
+            _record_semantic_silence("chat", run_id, trace_id,
+                                     "invalid_confidence", scene=scene,
+                                     should_reply=should_reply)
+            return ""
+        if scene != "casual_meme":
+            _record_semantic_silence("chat", run_id, trace_id, "not_casual_meme",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
+            return ""
+        if should_reply is not True:
+            _record_semantic_silence("chat", run_id, trace_id,
+                                     "should_reply_false",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
+            return ""
+        if confidence < _small_chat_min_confidence():
+            _record_semantic_silence("chat", run_id, trace_id,
+                                     "confidence_below_threshold",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
             return ""
         reply = " ".join(str(signal.get("reply", "") or "").split()).strip()
         if (not reply or len(reply) > 100 or "@" in reply
                 or "http://" in reply or "https://" in reply
                 or re.search(r"(?:^|\s)[#*>`]|\n", reply)):
+            _record_semantic_silence("chat", run_id, trace_id, "bad_reply",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
             return ""
         group_id = _event_group_id(event)
         reserve = getattr(getattr(plugin, "group_ambient", None),
                           "reserve_scene", None)
         if not callable(reserve):
+            _record_semantic_silence("chat", run_id, trace_id,
+                                     "reserve_unavailable",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
             return ""
         decision = reserve(group_id=group_id, reason="semantic_small_chat")
         if not bool(getattr(decision, "should_reply", False)):
+            _record_semantic_silence(
+                "chat", run_id, trace_id,
+                f"reserve_rejected:{getattr(decision, 'reason', 'unknown')}",
+                scene=scene, should_reply=should_reply,
+                confidence=confidence)
             return ""
         return _normalize_reply_style(reply)
     except Exception:
         logger.warning("Semantic small-chat review failed closed", exc_info=True)
+        _record_semantic_silence("chat", run_id, trace_id, "exception")
         return ""
 
 
-async def _semantic_media_reply(plugin, event, source: str) -> str:
+async def _semantic_media_reply(plugin, event, source: str,
+                                run_id: str = "", trace_id: str = "") -> str:
     context = _group_context_text(plugin, event)
     if not context:
+        _record_semantic_silence("media", run_id, trace_id, "no_context")
         return ""
     system = (
         "你是群聊多模态接话判定器，只输出严格 JSON，不要 Markdown。"
@@ -2572,31 +2717,66 @@ async def _semantic_media_reply(plugin, event, source: str) -> str:
             max_tokens=220, temperature=0.1, skip_render=True)
         signal = _strict_json_object(raw)
         if set(signal) != {"scene", "should_reply", "confidence", "reply"}:
+            _record_semantic_silence("media", run_id, trace_id, "bad_json")
+            return ""
+        scene = str(signal.get("scene", ""))
+        should_reply = signal.get("should_reply")
+        confidence = _semantic_confidence(signal.get("confidence"))
+        if confidence is None:
+            _record_semantic_silence("media", run_id, trace_id,
+                                     "invalid_confidence", scene=scene,
+                                     should_reply=should_reply)
             return ""
         threshold = (0.85 if source in (
             "reply_chain_media", "small_chat_video", "small_chat_gif",
             "photo_batch")
             else (0.82 if source == "small_chat_image" else 0.78))
-        if (signal.get("scene") != "casual_meme"
-                or signal.get("should_reply") is not True
-                or float(signal.get("confidence", 0.0)) < threshold):
+        if scene != "casual_meme":
+            _record_semantic_silence("media", run_id, trace_id, "not_casual_meme",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
+            return ""
+        if should_reply is not True:
+            _record_semantic_silence("media", run_id, trace_id,
+                                     "should_reply_false",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
+            return ""
+        if confidence < threshold:
+            _record_semantic_silence("media", run_id, trace_id,
+                                     "confidence_below_threshold",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
             return ""
         reply = " ".join(str(signal.get("reply", "") or "").split()).strip()
         if (not reply or len(reply) > 100 or "@" in reply
                 or "http://" in reply or "https://" in reply
                 or re.search(r"(?:^|\s)[#*>`]|\n", reply)):
+            _record_semantic_silence("media", run_id, trace_id, "bad_reply",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
             return ""
         group_id = _event_group_id(event)
         reserve = getattr(getattr(plugin, "group_ambient", None),
                           "reserve_scene", None)
         if not callable(reserve):
+            _record_semantic_silence("media", run_id, trace_id,
+                                     "reserve_unavailable",
+                                     scene=scene, should_reply=should_reply,
+                                     confidence=confidence)
             return ""
         decision = reserve(group_id=group_id, reason="semantic_media")
         if not bool(getattr(decision, "should_reply", False)):
+            _record_semantic_silence(
+                "media", run_id, trace_id,
+                f"reserve_rejected:{getattr(decision, 'reason', 'unknown')}",
+                scene=scene, should_reply=should_reply,
+                confidence=confidence)
             return ""
         return _normalize_reply_style(reply)
     except Exception:
         logger.warning("Semantic media review failed closed", exc_info=True)
+        _record_semantic_silence("media", run_id, trace_id, "exception")
         return ""
 
 
@@ -2996,16 +3176,22 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         await _prune_stale_deliveries(plugin)
     except Exception as _e:
         logger.warning("Prune stale deliveries failed: %s", _e)
-    _msg_snip = str(getattr(event, "message_str", "") or "")[:80]
-    logger.info("Flow start | run_id=%s trace_id=%s msg=%r",
-                run_id, trace_id, _msg_snip)
+    _msg_len = len(str(getattr(event, "message_str", "") or ""))
+    logger.info("Flow start | run_id=%s trace_id=%s msg_len=%d",
+                run_id, trace_id, _msg_len)
     _flow_ts = time.time()
     try:
         _session = str(event.get_session_id())
     except Exception:
         _session = ""
+    try:
+        _bot_id = str(event.get_self_id())
+    except Exception:
+        _bot_id = ""
+    _session_hash = hashlib.sha256(
+        f"{_bot_id}|{_session}".encode("utf-8")).hexdigest()[:16]
     trace_recorder.record(event="flow_start", run_id=run_id, trace_id=trace_id,
-                          msg=_msg_snip, session=_session)
+                          msg_len=_msg_len, session_hash=_session_hash)
     try:
         reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
@@ -3018,7 +3204,7 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
             _mark_pending_followup(event, followup_kind)
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
-                              reply=(reply or "")[:200])
+                              reply_len=len(reply or ""))
         return reply
     except asyncio.CancelledError:
         trace_recorder.record(event="flow_cancelled", run_id=run_id,
@@ -3237,7 +3423,8 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
         if media_source == "directed_media":
             return (await _direct_group_media_reply(plugin, event)) or None
         source = "photo_batch" if photo_batch else media_source
-        return (await _semantic_media_reply(plugin, event, source)) or None
+        return (await _semantic_media_reply(
+            plugin, event, source, run_id=run_id, trace_id=trace_id)) or None
     if candidate:
         # The local library only opened this review path. DeepSeek can still
         # reject it; malformed or uncertain output becomes silence.
@@ -3246,14 +3433,16 @@ async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):
             action=SocialAction.DEFER.value,
             reason_code=DecisionReason.SEMANTIC_RECHECK.value,
             decision_chain="ambient_semantic_meme")
-        return (await _semantic_meme_reply(plugin, event, candidate)) or None
+        return (await _semantic_meme_reply(
+            plugin, event, candidate, run_id=run_id, trace_id=trace_id)) or None
     if chat_source:
         trace_recorder.record(
             event="social_decision", run_id=run_id, trace_id=trace_id,
             action=SocialAction.DEFER.value,
             reason_code=DecisionReason.SEMANTIC_RECHECK.value,
             decision_chain="ambient_semantic_chat")
-        return (await _semantic_chat_reply(plugin, event, chat_source)) or None
+        return (await _semantic_chat_reply(
+            plugin, event, chat_source, run_id=run_id, trace_id=trace_id)) or None
     if (not getattr(event, "is_at_or_wake_command", False)
             and _stash_group_media(plugin, event, msgs)):
         return None
