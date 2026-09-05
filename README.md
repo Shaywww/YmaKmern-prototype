@@ -141,8 +141,8 @@ tests/                # 分层测试：unit / contracts / integration / evals / 
 - 小群自然接话：至少 2 名成员形成带问题、回复链或视觉内容的短对话时，只把当前消息交给 DeepSeek 终审；仅 `casual_meme` 且置信度不低于 0.82（回复链/动态媒体为 0.85）才回复，继续共用主动发言冷却和每日限额
 - 陌生短语只累计脱敏词频，不记录群号、QQ 号和上下文；管理员通过 `/ymakmern_meme candidates` 人工审核后，才能加入本群梗库
 - 可选“群聊自然参与”：默认关闭；开启后支持昵称唤醒、明确负面情绪轻量回应、忙碌群聊问题补位、新人欢迎、红包/群投票短回应、深夜冷场搭话，以及外卖/下班/奶茶/摸鱼/电影等少量人设话题的低概率插话；话题抽样率可由 `DUDUDA_AMBIENT_TOPIC_REPLY_RATE` 调整（默认 `0.35`），`DUDUDA_AMBIENT_COOLDOWN_SECONDS`、`DUDUDA_AMBIENT_DAILY_LIMIT`、`DUDUDA_AMBIENT_MIN_UNIQUE_SENDERS` 和 `DUDUDA_AMBIENT_TOPIC_MIN_UNIQUE_SENDERS` 可分别调整冷却、每日上限及两类参与人数门槛（默认 30 分钟、2 次、3 人和 2 人）
-- 普通聊天参与率独立于话题抽样率：`DUDUDA_AMBIENT_TOPIC_REPLY_RATE` 只影响“外卖/摸鱼”等关键词话题；小群普通对话的参与由 `DUDUDA_AMBIENT_CHAT_REPLY_RATE`（提名率，默认 `1.0`）与 `DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE`（模型放行阈值，默认 `0.78`）独立控制，三者互不影响，也不被群策略 `reply_rate` 覆盖
-- 普通语义复核允许 `casual_chat`（轻松日常交流）和 `casual_meme`，仍拒绝认真讨论、争执和信息不足。拒绝写入 `semantic_silence` 的 `reject_reason/scene/confidence/threshold`；放行写入 `semantic_review`。置信度标注为 `model_self_report`，不是校准后的正确率；事件不保存回复或群聊原文。环境变量显式配置优先于默认阈值。
+- 普通聊天参与率独立于话题抽样率：`DUDUDA_AMBIENT_TOPIC_REPLY_RATE` 只影响“外卖/摸鱼”等关键词话题；小群普通对话的参与由 `DUDUDA_AMBIENT_CHAT_REPLY_RATE`（提名率，默认 `1.0`）与 `DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE`（模型放行阈值，默认 `0.68`）独立控制，三者互不影响，也不被群策略 `reply_rate` 覆盖
+- 普通语义复核允许 `casual_chat`（轻松日常交流）、`casual_meme` 和低风险 `neutral_complaint`，仍拒绝认真讨论、争执和信息不足。拒绝写入 `semantic_silence` 的 `reject_reason/scene/confidence/threshold`；放行写入 `semantic_review`。置信度标注为 `model_self_report`，不是校准后的正确率；事件不保存回复或群聊原文。环境变量显式配置优先于默认阈值。
 - 群消息前置门：无关消息在 UX 任务、进度、Trace 和模型调用前结束；图片拆条保持轻量暂存
 - 群聊循环保护：静态发送者名单 + 重复/爆发/跨发送者回声熔断；只把精确 @YmaKmern 视为唤醒，@其他机器人保持静默
 - QQ 拆条 @ 窗口支持“先 @ 后文字”和“先文字后 @”，按平台/群/发送者/Bot 隔离并一次性消费

@@ -988,11 +988,11 @@ def test_small_chat_probability_env_rejects_non_finite(monkeypatch):
     monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_REPLY_RATE", "NaN")
     monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", "Infinity")
     assert h._small_chat_reply_rate() == 1.0
-    assert h._small_chat_min_confidence() == 0.78
+    assert h._small_chat_min_confidence() == 0.68
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("confidence,accepted", [(0.77, False), (0.78, True), (0.8, True)])
+@pytest.mark.parametrize("confidence,accepted", [(0.6, False), (0.68, True), (0.7, True)])
 async def test_ordinary_chat_gate_boundary_and_trace(tmp_path, monkeypatch, confidence, accepted):
     import json
     from dududa.core.trace_recorder import TraceRecorder
@@ -1014,9 +1014,27 @@ async def test_ordinary_chat_gate_boundary_and_trace(tmp_path, monkeypatch, conf
     record = rec.lines_for()[-1]
     assert record["scene"] == "casual_chat"
     assert record["confidence"] == confidence
-    assert record["threshold"] == 0.78
+    assert record["threshold"] == 0.68
     assert record["event"] == ("semantic_review" if accepted else "semantic_silence")
     assert "reply" not in record
+
+
+@pytest.mark.asyncio
+async def test_low_risk_neutral_complaint_can_join_chat(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        h, "_group_context_text",
+        lambda *_: "成员1：今天排队也太久了\n成员2：真的，腿都站酸了")
+    plugin = FlowPlugin(tmp_path)
+
+    async def reply(*args, **kwargs):
+        return ('{"scene":"neutral_complaint","should_reply":true,'
+                '"confidence":0.72,"reply":"这队排得像在等春运放票"}')
+
+    plugin._call_llm = reply
+    result = await h._semantic_chat_reply(
+        plugin, GroupEvent("腿都站酸了", message_id="complaint"),
+        "small_group_context_thread")
+    assert result == "这队排得像在等春运放票"
 
 
 def test_local_meme_match_only_opens_semantic_review_after_real_context(
