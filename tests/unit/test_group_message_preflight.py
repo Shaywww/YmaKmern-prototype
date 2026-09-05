@@ -873,7 +873,7 @@ async def test_semantic_silence_records_granular_reject_reason(
 
     cases = [
         ("r-nc", '{"scene":"serious_discussion","should_reply":false,'
-                  '"confidence":0.9,"reply":""}', "not_casual_meme"),
+                  '"confidence":0.9,"reply":""}', "scene_not_allowed"),
         ("r-sr", '{"scene":"casual_meme","should_reply":false,'
                   '"confidence":0.9,"reply":""}', "should_reply_false"),
         ("r-cf", '{"scene":"casual_meme","should_reply":true,'
@@ -892,11 +892,13 @@ async def test_semantic_silence_records_granular_reject_reason(
 
     by_run = {l["run_id"]: l for l in rec.lines_for()
               if l["event"] == "semantic_silence"}
-    assert by_run["r-nc"]["reject_reason"] == "not_casual_meme"
+    assert by_run["r-nc"]["reject_reason"] == "scene_not_allowed"
     assert by_run["r-nc"]["scene"] == "serious_discussion"
     assert by_run["r-sr"]["reject_reason"] == "should_reply_false"
     assert by_run["r-cf"]["reject_reason"] == "confidence_below_threshold"
     assert by_run["r-cf"]["confidence"] == 0.5
+    assert by_run["r-cf"]["threshold"] == h._small_chat_min_confidence()
+    assert by_run["r-cf"]["confidence_source"] == "model_self_report"
     assert by_run["r-bj"]["reject_reason"] == "bad_json"
 
 
@@ -931,7 +933,7 @@ async def test_small_chat_reply_rate_is_independent_and_configurable(
 
 @pytest.mark.asyncio
 async def test_small_chat_min_confidence_is_configurable(tmp_path, monkeypatch):
-    """普通聊天语义复核的 0.82 置信度门槛可配置（独立于提名率）。"""
+    """普通聊天语义复核的置信度门槛可配置（独立于提名率）。"""
     plugin = FlowPlugin(tmp_path)
     plugin.group_context = h.GroupConversationTracker()
     for i, (sender, text) in enumerate((
@@ -986,7 +988,35 @@ def test_small_chat_probability_env_rejects_non_finite(monkeypatch):
     monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_REPLY_RATE", "NaN")
     monkeypatch.setenv("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", "Infinity")
     assert h._small_chat_reply_rate() == 1.0
-    assert h._small_chat_min_confidence() == 0.82
+    assert h._small_chat_min_confidence() == 0.78
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confidence,accepted", [(0.77, False), (0.78, True), (0.8, True)])
+async def test_ordinary_chat_gate_boundary_and_trace(tmp_path, monkeypatch, confidence, accepted):
+    import json
+    from dududa.core.trace_recorder import TraceRecorder
+    rec = TraceRecorder(tmp_path / "traces")
+    monkeypatch.setattr(h, "trace_recorder", rec)
+    monkeypatch.delenv("DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE", raising=False)
+    monkeypatch.setattr(h, "_group_context_text", lambda *_: "成员1：晚上吃啥\n成员2：面条吧")
+    plugin = FlowPlugin(tmp_path)
+
+    async def reply(*args, **kwargs):
+        return json.dumps(dict(scene="casual_chat", should_reply=True,
+                               confidence=confidence, reply="面条加个蛋就齐了"))
+
+    plugin._call_llm = reply
+    result = await h._semantic_chat_reply(
+        plugin, GroupEvent("面条吧", message_id="boundary"),
+        "small_group_context_thread", run_id="boundary")
+    assert bool(result) is accepted
+    record = rec.lines_for()[-1]
+    assert record["scene"] == "casual_chat"
+    assert record["confidence"] == confidence
+    assert record["threshold"] == 0.78
+    assert record["event"] == ("semantic_review" if accepted else "semantic_silence")
+    assert "reply" not in record
 
 
 def test_local_meme_match_only_opens_semantic_review_after_real_context(
