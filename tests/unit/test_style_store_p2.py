@@ -111,6 +111,11 @@ class TestExtractSignals:
     def test_no_signals(self):
         sig = extract_style_signals("今天天气不错，帮我查一下课")
         assert sig.empty
+        assert extract_style_signals("这个表情好好笑").empty
+        assert extract_style_signals("这个回答很详细").empty
+        # 当前轮要求收起玩笑由 Interaction/Style Policy 处理，不应沉淀成
+        # 跨会话的长期语气偏好。
+        assert extract_style_signals("别搞笑了，认真点").empty
         assert extract_style_signals("").empty
 
 

@@ -41,6 +41,7 @@ from uuid import uuid4
 
 from dududa.application.dududa_utils import (
     _group_safe_observations, _redact_text, _contains_restricted,
+    _is_capability_overview_query,
 )
 from dududa.application.ustc_routing import (
     contextualize_ustc_course_intent, is_ustc_course_query,
@@ -1542,7 +1543,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
 
     async def _compose_prod_text(self, state) -> str:
         if state.social_decision == SocialAction.ASK:
-            return "能再说详细一点吗？"
+            return "我没看出你具体指哪件事，补一个对象或目标就行。"
         if state.social_decision == SocialAction.BLOCK:
             return "抱歉，我暂时不能回答这个问题。"
         event = self._pending_event
@@ -1584,11 +1585,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return (
                 "好友申请得在 QQ 那边处理，我不能在聊天里替自己点同意。"
             )
-        if re.search(
-                r"(?:你(?:都|还)?(?:会|能)(?:做)?(?:些)?什么|"
-                r"你能干嘛|你有(?:哪些|什么|啥)功能|"
-                r"你可以做什么|介绍(?:一下)?(?:你的)?功能)",
-                direct_text, re.I):
+        if _is_capability_overview_query(direct_text):
             return (
                 "能聊天、看图和常见文件，也能查天气、公开资料、"
                 "科大课程和评课。想看完整清单就发 /ymakmern_help。"
@@ -1610,7 +1607,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 setattr(
                     event, "_dududa_pending_followup_kind",
                     "weather_location")
-            return "你想查哪里的天气呀？告诉我城市或区县就好～(｡･ω･｡)"
+            return "查哪个城市或区县？"
         plan_steps = tuple(
             getattr(getattr(state, "tool_plan", None), "steps", ()) or ())
         usable_observations = [

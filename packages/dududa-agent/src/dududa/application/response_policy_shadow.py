@@ -18,6 +18,7 @@ from dududa.core.message_catalog import (
     SELECTOR_VERSION, MessageCatalog, MessageKey, MessageSelection,
 )
 from dududa.core.persona.prompt_policy import PERSONA_KERNEL_VERSION
+from dududa.core.profile import detect_emotional_tone
 from dududa.core.response_policy import (
     ConfidenceBand, ContinuationValue, Emotion, EmotionIntensity,
     Familiarity, InteractionPolicyResolver, InteractionSignals,
@@ -30,7 +31,10 @@ from dududa.core.response_policy import (
 from dududa.core.state import SocialAction
 from dududa.core.trace_recorder import trace_recorder
 
-from .dududa_utils import _contains_restricted, _detect_media_kind
+from .dududa_utils import (
+    _contains_restricted, _detect_media_kind,
+    _is_capability_overview_query,
+)
 
 
 _CRITICAL_RISK_RE = re.compile(
@@ -43,12 +47,6 @@ _HIGH_RISK_RE = re.compile(
 )
 _STRONG_NEGATIVE_RE = re.compile(
     r"(?:崩溃|绝望|受不了了|特别难受|非常痛苦|想死|不想活|很危险)"
-)
-_NEGATIVE_RE = re.compile(
-    r"(?:难受|伤心|烦死|好烦|焦虑|害怕|生气|委屈|失败|翻车|糟糕)"
-)
-_POSITIVE_RE = re.compile(
-    r"(?:成功了|过了|太好了|开心|高兴|爽|赢了|好耶|哈哈|厉害|真会)"
 )
 _QUESTION_RE = re.compile(r"(?:[？?]$|吗[？?]?$|呢[？?]?$|为什么|怎么|多少|哪[里个])")
 _IDENTITY_PROBE_RE = re.compile(
@@ -70,12 +68,9 @@ _SOCIAL_OPENING_RE = re.compile(
     r"我说了我是(?:个)?人)\s*[。！!？?~～]*\s*$",
     re.I,
 )
-_CAPABILITY_OVERVIEW_RE = re.compile(
-    r"(?:你(?:都|还)?(?:会|能)(?:做)?(?:些)?什么|"
-    r"你能干嘛|你有(?:哪些|什么|啥)功能|"
-    r"你可以做什么|介绍(?:一下)?(?:你的)?功能)",
-    re.I,
-)
+_NO_HUMOR_REQUEST_RE = re.compile(
+    r"(?:别|不要|不用|少).{0,5}(?:搞笑|开玩笑|嘴欠|调侃|整活)|"
+    r"(?:认真|正经)(?:点|一点)")
 
 _EXTRA_ORIGIN = "dududa_response_origin"
 _EXTRA_FALLBACK = "dududa_fallback_reason"
@@ -254,6 +249,7 @@ def _risk(state, text: str) -> tuple[
 
 def _emotion(text: str) -> tuple[Emotion, EmotionIntensity,
                                  tuple[SignalEvidence, ...]]:
+    detected_tone = detect_emotional_tone(text)
     if _IDENTITY_PROBE_RE.search(text):
         emotion, intensity, rule = (
             Emotion.NEUTRAL, EmotionIntensity.MILD,
@@ -262,14 +258,14 @@ def _emotion(text: str) -> tuple[Emotion, EmotionIntensity,
         emotion, intensity, rule = (
             Emotion.NEGATIVE, EmotionIntensity.STRONG,
             "emotion.strong_negative_terms.v1")
-    elif _NEGATIVE_RE.search(text):
+    elif detected_tone == "negative":
         emotion, intensity, rule = (
             Emotion.NEGATIVE, EmotionIntensity.MODERATE,
-            "emotion.negative_terms.v1")
-    elif _POSITIVE_RE.search(text):
+            "emotion.profile_classifier.v2")
+    elif detected_tone == "positive":
         emotion, intensity, rule = (
             Emotion.POSITIVE, EmotionIntensity.MODERATE,
-            "emotion.positive_terms.v1")
+            "emotion.profile_classifier.v2")
     else:
         emotion, intensity, rule = (
             Emotion.NEUTRAL, EmotionIntensity.MILD,
@@ -382,7 +378,7 @@ def _scene(state, text: str, origin: ResponseOrigin,
             ResponseOrigin.SUBSCRIPTION, ResponseOrigin.USER_CANCELLED,
             ResponseOrigin.SYSTEM_ERROR):
         scene, rule = Scene.TASK, "scene.control_plane_origin.v1"
-    elif _CAPABILITY_OVERVIEW_RE.search(text):
+    elif _is_capability_overview_query(text):
         scene, rule = (
             Scene.CAPABILITY_OVERVIEW,
             "scene.capability_overview.v1",
@@ -422,8 +418,8 @@ def _scene(state, text: str, origin: ResponseOrigin,
         rule, ConfidenceBand.MEDIUM),)
 
 
-def _user_preference(plugin, state) -> tuple[UserStylePreference,
-                                             tuple[SignalEvidence, ...]]:
+def _user_preference(plugin, state, text: str = "") -> tuple[
+        UserStylePreference, tuple[SignalEvidence, ...]]:
     try:
         envelope = state.envelope
         style = plugin.style_store.get(
@@ -438,11 +434,12 @@ def _user_preference(plugin, state) -> tuple[UserStylePreference,
             style = None
     except Exception:
         style = None
-    if style is None:
-        return UserStylePreference(), ()
-    humor = 2 if style.tone == "teasing" else 0 if style.tone in (
-        "formal", "gentle") else 1 if style.tone == "casual" else None
-    allow = False if style.emoji == "off" else True if style.emoji == "on" else None
+    humor = None
+    allow = None
+    if style is not None:
+        humor = 2 if style.tone == "teasing" else 0 if style.tone in (
+            "formal", "gentle") else 1 if style.tone == "casual" else None
+        allow = False if style.emoji == "off" else True if style.emoji == "on" else None
     evidence: list[SignalEvidence] = []
     if humor is not None:
         evidence.append(SignalEvidence(
@@ -454,6 +451,12 @@ def _user_preference(plugin, state) -> tuple[UserStylePreference,
             SignalName.USER_KAOMOJI_PREFERENCE,
             SignalSource.USER_PREFERENCE,
             "style_store.emoji.v1", ConfidenceBand.HIGH))
+    if _NO_HUMOR_REQUEST_RE.search(str(text or "")):
+        humor = 0
+        evidence.append(SignalEvidence(
+            SignalName.USER_HUMOR_PREFERENCE,
+            SignalSource.USER_PREFERENCE,
+            "current_turn.no_humor.v1", ConfidenceBand.HIGH))
     return UserStylePreference(humor, allow), tuple(evidence)
 
 
@@ -553,7 +556,7 @@ def resolve_response_policy_shadow(
             getattr(getattr(persona_obj, "tone", None),
                     "use_kaomoji", True)),
     )
-    user, user_evidence = _user_preference(plugin, state)
+    user, user_evidence = _user_preference(plugin, state, text)
     style = OutputStylePolicyResolver.resolve(
         style_signals, persona=persona, user=user)
     resolved = ResolvedResponsePolicy(

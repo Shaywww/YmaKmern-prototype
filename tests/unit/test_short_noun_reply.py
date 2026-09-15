@@ -130,6 +130,31 @@ class TestPerceptionNounQuery:
         assert "question" in acts
         assert "noun_query" not in acts
 
+    def test_short_colloquial_statements_are_not_noun_queries(
+            self, monkeypatch, tmp_path):
+        plugin = _plugin(monkeypatch, tmp_path)
+        for text in (
+                "今天上课好困",
+                "今天天气不错",
+                "昨晚赶作业到三点",
+                "吃白食的来了",
+                "还在内涵",
+        ):
+            pr = plugin._perceive(_FakeEvent(text, group="g1", user="u1"))
+            acts = [act.act_type for act in pr.speech_acts]
+            assert "noun_query" not in acts, text
+            # 天气等词可能仍由工具意图层识别；这里验证的边界是：普通
+            # 短句绝不能再被粗暴当作“请解释这个名词”。
+            if text != "今天天气不错":
+                assert "statement" in acts, text
+
+    def test_known_chinese_term_remains_a_noun_query(
+            self, monkeypatch, tmp_path):
+        plugin = _plugin(monkeypatch, tmp_path)
+        pr = plugin._perceive(_FakeEvent("数据结构", group="g1", user="u1"))
+        acts = [act.act_type for act in pr.speech_acts]
+        assert "noun_query" in acts
+
 
 class TestComposePrompt:
     def _orch(self, plugin):

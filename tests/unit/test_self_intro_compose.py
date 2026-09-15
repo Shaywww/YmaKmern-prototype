@@ -161,19 +161,30 @@ class TestComposeProdBehavior:
         assert "自报家门" not in reply
 
     @pytest.mark.asyncio
-    async def test_capability_overview_is_short_and_not_a_menu(self, plugin):
-        plugin.runtime._pending_event = _FakeEvent("你都能做什么？", group="")
+    @pytest.mark.parametrize("question", (
+        "你都能做什么？", "你会干嘛", "你会啥", "你能做啥",
+    ))
+    async def test_capability_overview_is_short_and_not_a_menu(
+            self, plugin, question):
+        plugin.runtime._pending_event = _FakeEvent(question, group="")
 
         async def unexpected_llm(*args, **kwargs):
             raise AssertionError("capability overview should be deterministic")
 
         plugin._call_llm = unexpected_llm
         reply = await plugin.runtime._compose_prod_text(
-            _state("你都能做什么？"))
+            _state(question))
         assert "看图和常见文件" in reply
         assert "/ymakmern_help" in reply
         assert "\n-" not in reply
         assert "医疗" not in reply
+
+    @pytest.mark.asyncio
+    async def test_generic_clarification_names_the_missing_shape(self, plugin):
+        plugin.runtime._pending_event = _FakeEvent("帮我弄一下", group="")
+        reply = await plugin.runtime._compose_prod_text(
+            _state("帮我弄一下", decision=SocialAction.ASK))
+        assert reply == "我没看出你具体指哪件事，补一个对象或目标就行。"
 
     @pytest.mark.asyncio
     async def test_human_correction_acknowledges_previous_bad_question(

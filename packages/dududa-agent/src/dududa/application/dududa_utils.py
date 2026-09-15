@@ -36,6 +36,13 @@ _TEXT_GREETING_RE = re.compile(
 _EMOJI_GREETING_RE = re.compile(
     r"^[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+$")
 
+_CAPABILITY_OVERVIEW_RE = re.compile(
+    r"(?:你(?:都|还)?(?:会|能)(?:做|干)?(?:些|点)?(?:什么|啥|嘛)|"
+    r"你可以(?:做|干)(?:些|点)?(?:什么|啥|嘛)|"
+    r"你有(?:哪些|什么|啥)功能|介绍(?:一下)?(?:你的)?功能)",
+    re.IGNORECASE,
+)
+
 
 def _is_textual_greeting(text: str) -> bool:
     """Return true only when the whole message is a textual greeting.
@@ -56,6 +63,12 @@ def _is_greeting_text(text: str) -> bool:
         return False
     return (_is_textual_greeting(t)
             or _EMOJI_GREETING_RE.fullmatch(t) is not None)
+
+
+def _is_capability_overview_query(text: str) -> bool:
+    """识别自然语言能力询问；各用户可见入口共用同一事实源。"""
+    value = " ".join(str(text or "").split()).strip()
+    return bool(value and _CAPABILITY_OVERVIEW_RE.search(value))
 
 # Restricted 数据（文档 2.5.9）：密码/Token/Cookie/私钥/QQ 登录态
 # 不进 Memory、不发模型或 Tool。

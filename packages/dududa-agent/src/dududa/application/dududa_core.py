@@ -84,6 +84,39 @@ def _is_group_sensitive_ask(text: str) -> bool:
     return any(p in t for p in _GROUP_SENSITIVE_ASKS)
 
 
+_BARE_NOUN_TERMS = {
+    "人工智能", "机器学习", "深度学习", "数据结构", "操作系统",
+    "线性代数", "微积分", "量子纠缠", "计算机网络", "数据库",
+}
+_BARE_NOUN_SUFFIX_RE = re.compile(
+    r"(?:课程|专业|算法|结构|模型|协议|框架|系统|定理|概念|语言|"
+    r"数据库|代数|微积分|纠缠)$")
+_CLAUSE_LIKE_RE = re.compile(
+    r"(?:今天|昨天|明天|刚才|现在|我|你|他|她|大家|好困|困死|"
+    r"好累|累死|好烦|烦死|不错|开心|难受|想要|觉得|感觉|正在|"
+    r"已经|还是|但是|不过|然后|又|太|很|真|了)$")
+
+
+def _looks_like_bare_noun_query(text: str) -> bool:
+    """Conservatively recognise a bare term, not an arbitrary short clause.
+
+    The previous ``len <= 16`` rule treated colloquial statements such as
+    ``今天上课好困`` as requests for a dictionary definition.  Bare Latin
+    identifiers and a small set of noun-shaped Chinese terms remain supported;
+    ambiguous short clauses now stay ordinary statements.
+    """
+    value = str(text or "").strip()
+    if not value or len(value) > 16 or re.search(r"[，。！？、\s：:；;]", value):
+        return False
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9+_.-]{0,15}", value):
+        return True
+    if not re.fullmatch(r"[\u4e00-\u9fff]{2,12}", value):
+        return False
+    if _CLAUSE_LIKE_RE.search(value):
+        return False
+    return value in _BARE_NOUN_TERMS or bool(_BARE_NOUN_SUFFIX_RE.search(value))
+
+
 class DududaCore:
     """应用用例层：身份、权限、决策、感知、记忆、渲染与模型调用。"""
 
@@ -431,9 +464,8 @@ class DududaCore:
                 acts.append(SpeechAct(act_type="greeting", confidence=0.5))
             else:
                 acts.append(SpeechAct(act_type="statement", confidence=0.5))
-                # 短名词/短语（无标点无空白）默认视为询问含义
-                if len(combined) <= 16 and not re.search(
-                        r"[，。！？、\s：:；;]", combined):
+                # 只把形态明确的术语/专名视为询问含义；普通短句仍是陈述。
+                if _looks_like_bare_noun_query(combined):
                     acts.append(SpeechAct(act_type="noun_query", confidence=0.6))
         entities = []
         for m in re.finditer(r"@([^\s@]+)", combined):

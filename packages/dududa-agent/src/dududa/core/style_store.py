@@ -41,21 +41,46 @@ _REQUIRED_ADDRESS_RE = re.compile(
 )
 
 _TONE_PATTERNS = {
-    "formal": ("正式", "官方", "严肃", "正经"),
-    "casual": ("随意", "轻松", "活泼", "皮一点", "俏皮", "搞笑"),
-    "gentle": ("温柔", "亲切", "暖心"),
-    "teasing": ("雌小鬼模式", "傲娇嘴欠", "嘴欠一点", "傲娇一点"),
+    "formal": re.compile(
+        r"(?:^|[，,；;])\s*(?:请|麻烦|以后|今后)?\s*"
+        r"(?:回复|回答|说话|语气|跟我聊天|和我聊天|对我).{0,8}"
+        r"(?:正式|官方|严肃|正经)(?:一点|点|些)?"),
+    "casual": re.compile(
+        r"(?:^|[，,；;])\s*(?:请|麻烦|以后|今后)?\s*"
+        r"(?:回复|回答|说话|语气|跟我聊天|和我聊天|对我).{0,8}"
+        r"(?:随意|轻松|活泼|皮一点|俏皮|搞笑)(?:一点|点|些)?"),
+    "gentle": re.compile(
+        r"(?:^|[，,；;])\s*(?:请|麻烦|以后|今后)?\s*"
+        r"(?:回复|回答|说话|语气|跟我聊天|和我聊天|对我).{0,8}"
+        r"(?:温柔|亲切|暖心)(?:一点|点|些)?"),
+    "teasing": re.compile(
+        r"(?:雌小鬼模式|傲娇嘴欠|嘴欠一点|傲娇一点)"),
 }
+_NEGATED_TONE_RE = re.compile(
+    r"(?:别|不要|不用|不必|别再|别太).{0,6}"
+    r"(?:正式|官方|严肃|正经|随意|轻松|活泼|俏皮|搞笑|温柔|亲切|"
+    r"暖心|嘴欠|傲娇)")
 
 _LENGTH_PATTERNS = {
-    "short": ("简短", "简洁", "短一点", "少说", "别啰嗦", "别废话", "说重点", "简单点", "别太长"),
-    "detailed": ("详细", "详细点", "多说点", "展开说", "长一点", "具体点", "仔细说说"),
+    "short": re.compile(
+        r"(?:^|[，,；;])\s*(?:请|麻烦|以后|今后)?\s*"
+        r"(?:回复|回答|说|讲|解释|写).{0,6}"
+        r"(?:简短|简洁|短一点|少一点|简单点|别太长)|"
+        r"(?:^|[，,；;])\s*(?:请|麻烦)?\s*"
+        r"(?:少说|别啰嗦|别废话|说重点)"),
+    "detailed": re.compile(
+        r"(?:^|[，,；;])\s*(?:请|麻烦|以后|今后)?\s*"
+        r"(?:回复|回答|说|讲|解释|写).{0,6}"
+        r"(?:详细|多一点|长一点|具体|仔细)|"
+        r"(?:^|[，,；;])\s*(?:请|麻烦)?\s*"
+        r"(?:详细点说|多说点|展开说|仔细说说)"),
 }
 
 # 表情：先查关闭词，避免「别用表情」命中通用「表情」
 _EMOJI_PATTERNS = {
     "off": ("别用表情", "不要表情", "少用表情", "别卖萌", "别用颜文字"),
-    "on": ("表情", "颜文字", "卖萌", "可爱点", "萌一点"),
+    "on": ("多用表情", "用点表情", "加点表情", "带点表情",
+           "可以用颜文字", "多用颜文字", "卖萌一点", "可爱点", "萌一点"),
 }
 
 
@@ -91,14 +116,15 @@ def extract_style_signals(text: str) -> StyleSignals:
             sig = StyleSignals(
                 address=name[:_FIELD_MAX_LEN],
                 address_required=sig.address_required)
-    for tone, kws in _TONE_PATTERNS.items():
-        if any(k in text for k in kws):
+    tone_negated = bool(_NEGATED_TONE_RE.search(text))
+    for tone, pattern in _TONE_PATTERNS.items():
+        if not tone_negated and pattern.search(text):
             sig = StyleSignals(
                 address=sig.address, address_required=sig.address_required,
                 tone=tone)
             break
-    for length, kws in _LENGTH_PATTERNS.items():
-        if any(k in text for k in kws):
+    for length, pattern in _LENGTH_PATTERNS.items():
+        if pattern.search(text):
             sig = StyleSignals(
                 address=sig.address, address_required=sig.address_required,
                 tone=sig.tone, length=length)

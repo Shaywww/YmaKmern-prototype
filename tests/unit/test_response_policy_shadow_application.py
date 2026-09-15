@@ -73,10 +73,23 @@ def test_social_opening_does_not_become_generic_information_scene():
 
 
 def test_capability_overview_has_its_own_non_playful_scene():
-    result = _resolve("你都能做什么？")
-    assert result.style_signals.scene == Scene.CAPABILITY_OVERVIEW
+    results = [_resolve(text) for text in (
+        "你都能做什么？", "你会干嘛", "你会啥", "你能做啥",
+    )]
+    assert {item.style_signals.scene for item in results} == {
+        Scene.CAPABILITY_OVERVIEW}
+    assert {item.policy.style.humor_level for item in results} == {0}
+    assert {item.policy.interaction.followup_mode for item in results} == {
+        FollowupMode.FORBIDDEN}
+
+
+def test_current_turn_no_humor_request_is_not_lost_to_persona_defaults():
+    result = _resolve("别搞笑了，认真点")
     assert result.policy.style.humor_level == 0
-    assert result.policy.interaction.followup_mode == FollowupMode.FORBIDDEN
+    assert any(
+        evidence.rule_id == "current_turn.no_humor.v1"
+        for evidence in result.evidence
+    )
 
 
 def test_embedded_policy_words_do_not_directly_control_policy():
@@ -147,6 +160,16 @@ def test_real_negative_feeling_overrides_banter_terms():
     assert result.style_signals.scene == Scene.EMOTIONAL_SUPPORT
     assert result.policy.style.humor_level == 0
     assert result.policy.style.max_chars == 0
+
+
+def test_laughter_context_and_real_setback_do_not_share_one_emotion():
+    meme = _resolve("这个视频绷不住了哈哈哈")
+    setback = _resolve("哈哈哈又挂科了")
+    assert meme.style_signals.emotion.name == "POSITIVE"
+    assert meme.style_signals.scene != Scene.EMOTIONAL_SUPPORT
+    assert setback.style_signals.emotion.name == "NEGATIVE"
+    assert setback.style_signals.scene == Scene.EMOTIONAL_SUPPORT
+    assert setback.policy.style.humor_level == 0
 
 
 def test_praise_does_not_override_a_real_question_or_tool_intent():

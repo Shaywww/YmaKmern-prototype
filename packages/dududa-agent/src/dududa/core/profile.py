@@ -61,10 +61,17 @@ _FACT_RE = re.compile(
 )
 _NEGATIVE_EMOTION_RE = re.compile(
     r"(?:好烦|烦死|累死|好累|崩溃|绷不住|难受|委屈|焦虑|压力大|"
-    r"想哭|受不了|撑不住|心态炸|emo|生气|糟心|郁闷)", re.I)
+    r"想哭|受不了|撑不住|心态炸|emo|生气|糟心|郁闷|挂科|"
+    r"没考过|没通过|考砸|翻车|失败)", re.I)
 _POSITIVE_EMOTION_RE = re.compile(
     r"(?:好开心|开心死|太好了|成功了|赢了|爽|哈哈哈|笑死|太棒|"
     r"牛啊|绝了|起飞|好耶)", re.I)
+_HARD_NEGATIVE_EMOTION_RE = re.compile(
+    r"(?:好烦|烦死|累死|好累|崩溃|难受|委屈|焦虑|压力大|想哭|"
+    r"受不了|撑不住|心态炸|emo|生气|糟心|郁闷|挂科|没考过|"
+    r"没通过|考砸|翻车|失败)", re.I)
+_LAUGHTER_CONTEXT_RE = re.compile(
+    r"(?:哈哈|hhh+|笑死|笑不活|好笑|视频|图片|表情包|梗)", re.I)
 
 
 def _strip_tail_particles(text: str) -> str:
@@ -135,9 +142,18 @@ def extract_profile_signals(text: str) -> tuple[str, tuple[str, ...], tuple[str,
 def detect_emotional_tone(text: str) -> str:
     """Conservative explicit emotion signal used for short continuity only."""
     value = str(text or "")
-    if _NEGATIVE_EMOTION_RE.search(value):
+    negative = bool(_NEGATIVE_EMOTION_RE.search(value))
+    positive = bool(_POSITIVE_EMOTION_RE.search(value))
+    if negative and positive:
+        # 笑着说一次明确受挫仍按负面接住；“视频绷不住哈哈”则是玩梗。
+        if _HARD_NEGATIVE_EMOTION_RE.search(value):
+            return "negative"
+        if _LAUGHTER_CONTEXT_RE.search(value):
+            return "positive"
+        return ""
+    if negative:
         return "negative"
-    if _POSITIVE_EMOTION_RE.search(value):
+    if positive:
         return "positive"
     return ""
 
