@@ -1660,6 +1660,21 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         elif perception and any(a.act_type == "noun_query"
                                 for a in perception.speech_acts):
             extra = "用户只发来一个词或短名词，视为在询问它的含义，请直接解释，不要当打招呼。"
+        if perception:
+            target = str(getattr(perception, "reply_target", "unknown")
+                         or "unknown")
+            if getattr(perception, "has_explicit_mention", False):
+                target = "bot"
+            related = str(getattr(perception, "related_turn", "unknown")
+                          or "unknown")
+            act = str(getattr(perception, "communicative_act", "unknown")
+                      or "unknown")
+            if any(value != "unknown" for value in (target, related, act)):
+                extra += (
+                    " 本轮会话关系信号："
+                    f"回复对象={target}，关联发言={related}，交际动作={act}。"
+                    "这些是辅助判断，平台确认的@与回复链优先；"
+                    "不要把字段名或分析过程说给用户。")
         operational_extra = extra
         live_group_context = self._live_group_context(state)
         if live_group_context:

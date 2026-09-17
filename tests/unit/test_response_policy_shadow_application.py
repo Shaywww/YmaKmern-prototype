@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from dududa.application import response_policy_shadow as shadow
 from dududa.core.capability import ToolObservation
 from dududa.core.message_catalog import MessageKey
+from dududa.core.perception import PerceptionResult
 from dududa.core.response_policy import (
     FollowupMode, ResponseOrigin, RiskLevel, Scene, SignalName, Tone,
 )
@@ -153,6 +154,26 @@ def test_playful_banter_beats_generic_question_shape_and_gets_tight_budget():
         Scene.PLAYFUL_BANTER}
     assert {item.policy.style.max_chars for item in results} == {48}
     assert {item.policy.style.humor_level for item in results} == {1}
+
+
+def test_perceived_rhetorical_question_selects_banter_without_keyword_match():
+    state = SimpleNamespace(
+        run_id="run-1", tool_observations=(), social_decision=None,
+        perception=PerceptionResult(
+            communicative_act="rhetorical_question", confidence=0.9),
+        envelope=None,
+    )
+    result = shadow.resolve_response_policy_shadow(
+        _plugin(state), _Event("我就回了一句啊？"), "不然呢。",
+        run_id="run-1")
+    assert result.style_signals.scene == Scene.PLAYFUL_BANTER
+
+
+def test_forbidden_followup_allows_stance_question_but_flags_info_request():
+    rhetorical = _resolve("你攻击性太强了", response="我这算攻击性强？")
+    information = _resolve("这个真好看", response="你在哪里买的？")
+    assert "unexpected_followup" not in rhetorical.violations
+    assert "unexpected_followup" in information.violations
 
 
 def test_real_negative_feeling_overrides_banter_terms():

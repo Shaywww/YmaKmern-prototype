@@ -438,6 +438,33 @@ _KAOMOJI_RE = re.compile(
     r")"
 )
 
+_RHETORICAL_QUESTION_RE = re.compile(
+    r"(?:不然呢|不是吗|难道|这算|也算|那我(?:算|是)|你也|我就|"
+    r"怎么就|怎么还在|凭什么|谁让|至于吗|有那么|还不|可不|这也叫)"
+)
+_INFORMATION_FOLLOWUP_RE = re.compile(
+    r"(?:请问|告诉我|说一下|补充一下|发我|给我|能否|可以说说|"
+    r"(?:什么|啥|谁|哪里|哪儿|哪个|哪种|何时|什么时候|多少|几|"
+    r"为什么|为何|怎么|如何).{0,18}[？?]$)"
+)
+
+
+def asks_for_information(text: str) -> bool:
+    """Return whether a generated question asks the user for new facts.
+
+    A question mark alone is not sufficient: banter frequently uses it to
+    express stance ("这算攻击性强？") rather than request information.
+    This conservative check is used only by the shadow interaction contract;
+    safety-required clarification remains governed by InteractionPolicy.
+    """
+    value = " ".join(str(text or "").split()).strip()
+    if not value or not re.search(r"[？?]", value):
+        return False
+    tail = re.split(r"[。！!\n]", value)[-1].strip()
+    if _RHETORICAL_QUESTION_RE.search(tail):
+        return False
+    return bool(_INFORMATION_FOLLOWUP_RE.search(tail))
+
 
 def kaomoji_spans(text: str) -> tuple[tuple[int, int], ...]:
     return tuple((match.start(), match.end())

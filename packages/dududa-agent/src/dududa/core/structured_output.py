@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 from .decision import DecisionReason, SocialDecision
@@ -21,7 +22,14 @@ from .state import SocialAction
 # 允许的言语行为集合（模型输出不在此集合 -> 整包无效）
 KNOWN_SPEECH_ACTS = frozenset({
     "question", "statement", "command", "greeting", "complaint",
-    "acknowledgment", "farewell", "noun_query",
+    "acknowledgment", "farewell", "noun_query", "rhetorical_question",
+})
+
+KNOWN_REPLY_TARGETS = frozenset({"bot", "group", "other", "unknown"})
+KNOWN_COMMUNICATIVE_ACTS = frozenset({
+    "information_question", "request", "teasing", "challenge",
+    "correction", "supplement", "acknowledgment", "rhetorical_question",
+    "closing", "statement", "unknown",
 })
 
 # 模型 action -> SocialAction 映射（含兼容别名）
@@ -50,10 +58,17 @@ PERCEPTION_SYSTEM_PROMPT = (
     "你是感知模块，只输出严格 JSON，不要任何其他文字。"
     "字段: confidence(0-1), speech_acts:[{act_type,confidence}], topics:[], "
     "entities:[{name,entity_type,confidence,evidence}], candidate_intents:[], "
+    "reply_target(bot/group/other/unknown), related_turn(T1..T7/none/unknown), "
+    "communicative_act(information_question/request/teasing/challenge/correction/"
+    "supplement/acknowledgment/rhetorical_question/closing/statement/unknown), "
     "suggested_capabilities:[], needs_tools:bool, ambiguities:[], "
     "tool_plan:{steps:[{capability_id,arguments}]}。"
     "act_type 只能是 question/statement/command/greeting/complaint/"
-    "acknowledgment/farewell/noun_query。"
+    "acknowledgment/farewell/noun_query/rhetorical_question。"
+    "先结合说话人、回复对象和最近相关发言判断当前消息是在提问、调侃、质疑、"
+    "补充、纠正还是收尾；问号不自动等于索取信息。related_turn 只能引用输入中"
+    "明确标注的 T1..T7，不能编造。修辞反问只标 rhetorical_question，不要同时"
+    "标 question。只输出字段，不输出分析过程。"
     "tool_plan 仅在需要查实时数据/执行操作时给出（不需要时给 {\"steps\":[]}）；"
     "开放式生活建议、吃什么、穿什么等普通闲聊不需要联网；"
     "不能仅因为消息里出现地名就调用天气工具，必须明确提到天气、气温或降水；"
@@ -180,6 +195,17 @@ class StructuredOutputValidator:
         needs_tools = raw.get("needs_tools", False)
         if not isinstance(needs_tools, bool):
             return None
+        reply_target = str(raw.get("reply_target", "unknown") or "unknown")
+        if reply_target not in KNOWN_REPLY_TARGETS:
+            return None
+        related_turn = str(raw.get("related_turn", "unknown") or "unknown")
+        if (related_turn not in {"none", "unknown"}
+                and not re.fullmatch(r"T[1-7]", related_turn)):
+            return None
+        communicative_act = str(
+            raw.get("communicative_act", "unknown") or "unknown")
+        if communicative_act not in KNOWN_COMMUNICATIVE_ACTS:
+            return None
         tool_plan = raw.get("tool_plan")
         if tool_plan is not None:
             tool_plan = _parse_tool_plan(tool_plan)
@@ -195,6 +221,9 @@ class StructuredOutputValidator:
             "ambiguities": ambiguities,
             "needs_tools": needs_tools,
             "tool_plan": tool_plan,
+            "reply_target": reply_target,
+            "related_turn": related_turn,
+            "communicative_act": communicative_act,
         }
 
     @staticmethod
@@ -289,6 +318,9 @@ class PerceptionMerger:
             candidate_intents=tuple(dict.fromkeys(
                 list(rule.candidate_intents)
                 + signal.get("candidate_intents", []))),
+            reply_target=signal.get("reply_target", "unknown"),
+            related_turn=signal.get("related_turn", "unknown"),
+            communicative_act=signal.get("communicative_act", "unknown"),
             needs_tools=rule.needs_tools or model_needs_tools,
             tool_plan=model_tool_plan or rule.tool_plan,
             suggested_capabilities=tuple(dict.fromkeys(

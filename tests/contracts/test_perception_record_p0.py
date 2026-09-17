@@ -36,6 +36,9 @@ def _perception():
                             confidence=0.8, evidence="msg"),),
         resolved_references={"text": "帮我查一下数据结构"},
         candidate_intents=("course_query",),
+        reply_target="bot",
+        related_turn="T2",
+        communicative_act="request",
         needs_tools=True,
         suggested_capabilities=("mcp.course_schedule",),
         confidence=0.9,
@@ -86,6 +89,9 @@ class TestPerceptionRecord:
         assert rec.schema_version == "1.0"
         assert rec.needs_tools is True
         assert rec.candidate_intents == ("course_query",)
+        assert rec.reply_target == "bot"
+        assert rec.related_turn == "T2"
+        assert rec.communicative_act == "request"
         assert rec.topics == ("course",)
         assert rec.speech_acts[0].act_type == "command"
         assert rec.entities[0].name == "数据结构"

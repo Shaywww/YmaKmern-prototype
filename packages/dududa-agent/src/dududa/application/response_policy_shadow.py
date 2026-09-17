@@ -26,7 +26,7 @@ from dududa.core.response_policy import (
     ResolvedResponsePolicy,
     ResponseOrigin, RiskLevel, SafetyDecision, Scene, SignalEvidence,
     SignalName, SignalSource, StyleSignals, UserStylePreference,
-    confidence_band, style_contract_violations,
+    asks_for_information, confidence_band, style_contract_violations,
 )
 from dududa.core.state import SocialAction
 from dududa.core.trace_recorder import trace_recorder
@@ -369,6 +369,9 @@ def _familiarity(plugin, state) -> tuple[Familiarity,
 def _scene(state, text: str, origin: ResponseOrigin,
            risk: RiskLevel, emotion: Emotion) -> tuple[Scene,
                                                        tuple[SignalEvidence, ...]]:
+    perception = getattr(state, "perception", None)
+    communicative_act = str(
+        getattr(perception, "communicative_act", "unknown") or "unknown")
     if risk in (RiskLevel.HIGH, RiskLevel.CRITICAL):
         scene, rule = Scene.HIGH_RISK, "scene.risk_override.v1"
     elif origin == ResponseOrigin.TOOL:
@@ -387,6 +390,12 @@ def _scene(state, text: str, origin: ResponseOrigin,
         scene, rule = Scene.SOCIAL_OPENING, "scene.social_opening.v1"
     elif _IDENTITY_PROBE_RE.search(text):
         scene, rule = Scene.IDENTITY_PROBE, "scene.identity_probe.v1"
+    elif communicative_act in {
+            "teasing", "challenge", "rhetorical_question"}:
+        scene, rule = (
+            Scene.PLAYFUL_BANTER,
+            "scene.perception_communicative_banter.v1",
+        )
     elif emotion == Emotion.NEGATIVE:
         scene, rule = Scene.EMOTIONAL_SUPPORT, "scene.negative_emotion.v1"
     elif _PLAYFUL_BANTER_RE.search(text):
@@ -399,10 +408,10 @@ def _scene(state, text: str, origin: ResponseOrigin,
             "scene.playful_banter_terms.v1",
         )
     else:
-        perception = getattr(state, "perception", None)
         action = getattr(state, "social_decision", None)
         if (action == SocialAction.USE_TOOLS
                 or getattr(perception, "needs_tools", False)
+                or communicative_act == "information_question"
                 or _QUESTION_RE.search(text.strip())):
             scene, rule = Scene.INFORMATION, "scene.question_or_lookup.v1"
         elif _PRAISE_RE.search(text):
@@ -563,7 +572,8 @@ def resolve_response_policy_shadow(
         interaction=interaction, style=style)
     violations = list(style_contract_violations(response, style))
     has_question = bool(re.search(r"[？?]", str(response or "")))
-    if (interaction.followup_mode.value == "forbidden" and has_question):
+    if (interaction.followup_mode.value == "forbidden"
+            and asks_for_information(response)):
         violations.append("unexpected_followup")
     if (interaction.followup_mode.value == "required" and not has_question):
         violations.append("missing_required_followup")

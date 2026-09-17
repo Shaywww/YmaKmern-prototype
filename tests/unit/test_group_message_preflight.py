@@ -154,6 +154,22 @@ class GroupEvent:
         self.call_llm_markers.append(value)
 
 
+def test_delivered_bot_reply_is_committed_to_hot_group_context():
+    plugin = SimpleNamespace(group_context=h.GroupConversationTracker())
+    event = GroupEvent("你攻击性太强了", message_id="m-banter")
+
+    h.stage_group_reply_context(plugin, event, "我就回了一句啊")
+    assert plugin.group_context.snapshot(GROUP_ID) == ()
+
+    h.commit_group_reply_context(plugin, event)
+    items = plugin.group_context.snapshot(GROUP_ID)
+    assert len(items) == 1
+    assert items[0].sender_alias == "YmaKmern"
+    assert items[0].content == "我就回了一句啊"
+    assert items[0].is_bot is True
+    assert plugin.group_context.stats(GROUP_ID)["unique_senders"] == 0
+
+
 class _UXStoreSpy:
     def __init__(self):
         self.session_key_calls = 0

@@ -7,7 +7,7 @@ from dududa.core.response_policy import (
     FollowupMode, InteractionPolicyResolver, InteractionSignals,
     OutputStylePolicyResolver, PersonaStyleDefaults, ResponseOrigin,
     RiskLevel, SafetyDecision, Scene, StyleSignals, Tone,
-    UserStylePreference, clean_response_style, count_kaomoji,
+    UserStylePreference, asks_for_information, clean_response_style, count_kaomoji,
     style_contract_violations,
 )
 
@@ -149,6 +149,14 @@ def test_banter_budget_is_a_soft_style_violation_and_prompt_is_low_effort():
     scene_prompt = build_scene_policy(Scene.PLAYFUL_BANTER, policy)
     assert "不超过 48" in scene_prompt
     assert "优先只回一短句" in scene_prompt
+    assert "修辞反问" in scene_prompt
+
+
+def test_rhetorical_question_is_not_treated_as_information_followup():
+    assert asks_for_information("昨晚几点睡的？") is True
+    assert asks_for_information("我这算攻击性强？") is False
+    assert asks_for_information("那我是什么，野生的吗？") is False
+    assert asks_for_information("你怎么还在？") is False
 
 
 def test_deterministic_style_cleaner_is_idempotent():

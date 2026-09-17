@@ -21,6 +21,7 @@ class GroupContextMessage:
     content: str
     message_type: str
     timestamp: float
+    is_bot: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ class GroupConversationTracker:
 
     def add(self, *, group_id: str, sender_id: str, content: str,
             message_type: str = "text", message_id: str = "",
+            is_bot: bool = False,
             now: float | None = None) -> GroupContextMessage | None:
         gid, uid = str(group_id or ""), str(sender_id or "")
         value = " ".join(str(content or "").split()).strip()[:500]
@@ -106,10 +108,12 @@ class GroupConversationTracker:
             self._expire_locked(gid, ts)
             item = GroupContextMessage(
                 message_id=str(message_id or ""),
-                sender_alias=self._alias_locked(gid, uid),
+                sender_alias=("YmaKmern" if is_bot
+                              else self._alias_locked(gid, uid)),
                 content=value,
                 message_type=kind,
                 timestamp=ts,
+                is_bot=bool(is_bot),
             )
             self._queues[gid].append(item)
             self._last_activity[gid] = ts
@@ -293,7 +297,8 @@ class GroupConversationTracker:
         items = self.snapshot(group_id, now=now)
         return {
             "message_count": len(items),
-            "unique_senders": len({item.sender_alias for item in items}),
+            "unique_senders": len({item.sender_alias for item in items
+                                   if not item.is_bot}),
             "media_count": sum(
                 item.message_type != "text" for item in items),
         }
@@ -322,9 +327,9 @@ class GroupConversationTracker:
             "meme": "梗图", "photo": "实拍照片", "screenshot": "截图",
             "gif": "GIF动图", "video": "视频", "other": "视觉内容",
         }
-        for item in items:
+        for index, item in enumerate(items, start=1):
             stamp = datetime.fromtimestamp(item.timestamp).strftime("%H:%M:%S")
             lines.append(
-                f"[{stamp}] {item.sender_alias}（{labels[item.message_type]}）："
+                f"T{index} [{stamp}] {item.sender_alias}（{labels[item.message_type]}）："
                 f"{item.content}")
         return "\n".join(lines)

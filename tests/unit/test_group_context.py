@@ -32,6 +32,19 @@ def test_group_context_expires_whole_topic_after_inactivity():
     assert items[0].sender_alias == "成员1"
 
 
+def test_bot_turn_is_rendered_but_not_counted_as_human_sender():
+    tracker = GroupConversationTracker(ttl_seconds=300)
+    tracker.add(group_id="g", sender_id="u1", content="你攻击性太强了",
+                now=1000)
+    tracker.add(group_id="g", sender_id="bot:1", content="我就回了一句啊",
+                is_bot=True, now=1001)
+    rendered = tracker.render("g", now=1001)
+    assert "成员1" in rendered
+    assert "YmaKmern" in rendered
+    assert "我就回了一句啊" in rendered
+    assert tracker.stats("g", now=1001)["unique_senders"] == 1
+
+
 def test_media_summary_can_replace_placeholder():
     tracker = GroupConversationTracker()
     tracker.add(
@@ -66,6 +79,7 @@ def test_visual_types_are_counted_and_rendered_distinctly():
     assert tracker.stats("g", now=1001)["media_count"] == 2
     rendered = tracker.render("g", now=1001)
     assert "实拍照片" in rendered and "视频" in rendered
+    assert "T1 [" in rendered and "T2 [" in rendered
 
 
 def test_quiet_capture_removes_raw_messages_before_summary():

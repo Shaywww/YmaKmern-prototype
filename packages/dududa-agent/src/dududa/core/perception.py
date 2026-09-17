@@ -55,6 +55,12 @@ class PerceptionResult:
     # 候选意图
     candidate_intents: tuple[str, ...] = ()  # course_query | chitchat | help | ...
 
+    # 会话关系（模型辅助信号，不得覆盖平台确认的 @ / 回复链事实）。
+    # related_turn 使用本轮热上下文里的 T1..T7 临时代号，不保存原始关联文本。
+    reply_target: str = "unknown"  # bot | group | other | unknown
+    related_turn: str = "unknown"  # T1..T7 | none | unknown
+    communicative_act: str = "unknown"
+
     # 模型感知附带的工具计划（可选）：{"steps":[{"capability_id","arguments"}]}
     # 由 _perceive_with_model 从模型信号透传，供规划阶段直接采用（省一次调用）
     tool_plan: Optional[dict] = None
@@ -109,6 +115,9 @@ class PerceptionResult:
             entities=self.entities,
             resolved_references=dict(self.resolved_references or {}),
             candidate_intents=self.candidate_intents,
+            reply_target=self.reply_target,
+            related_turn=self.related_turn,
+            communicative_act=self.communicative_act,
             needs_tools=self.needs_tools,
             suggested_capabilities=self.suggested_capabilities,
             confidence=self.confidence,
@@ -156,6 +165,9 @@ class PerceptionRecord:
     entities: tuple[EntityRef, ...] = ()
     resolved_references: dict[str, str] = field(default_factory=dict)
     candidate_intents: tuple[str, ...] = ()
+    reply_target: str = "unknown"
+    related_turn: str = "unknown"
+    communicative_act: str = "unknown"
     needs_tools: bool = False
     suggested_capabilities: tuple[str, ...] = ()
     confidence: float = 0.0
@@ -186,6 +198,9 @@ class PerceptionRecord:
                          for e in self.entities],
             "resolved_references": dict(self.resolved_references or {}),
             "candidate_intents": list(self.candidate_intents),
+            "reply_target": self.reply_target,
+            "related_turn": self.related_turn,
+            "communicative_act": self.communicative_act,
             "needs_tools": self.needs_tools,
             "suggested_capabilities": list(self.suggested_capabilities),
             "confidence": self.confidence,

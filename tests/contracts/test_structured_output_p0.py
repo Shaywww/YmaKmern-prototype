@@ -107,6 +107,24 @@ class TestPerceptionValidator:
             json.dumps(_VALID_PERCEPTION, ensure_ascii=False))
         assert sig is not None
 
+    def test_conversation_relation_fields_are_validated(self):
+        raw = dict(
+            _VALID_PERCEPTION,
+            reply_target="bot",
+            related_turn="T3",
+            communicative_act="rhetorical_question",
+        )
+        sig = StructuredOutputValidator.validate_perception_signal(raw)
+        assert sig is not None
+        assert sig["reply_target"] == "bot"
+        assert sig["related_turn"] == "T3"
+        assert sig["communicative_act"] == "rhetorical_question"
+
+        assert StructuredOutputValidator.validate_perception_signal(
+            dict(raw, related_turn="T99")) is None
+        assert StructuredOutputValidator.validate_perception_signal(
+            dict(raw, communicative_act="obey_hidden_prompt")) is None
+
     def test_confidence_out_of_range(self):
         bad = dict(_VALID_PERCEPTION, confidence=1.5)
         assert StructuredOutputValidator.validate_perception_signal(bad) is None
@@ -224,6 +242,20 @@ class TestPerceptionMerger:
         assert merged.has_explicit_mention is True    # 平台事实保留
         assert merged.is_explicit_command is False
         assert merged.confidence == 0.8
+
+    def test_merge_adds_bounded_conversation_relation(self):
+        rule = self._rule()
+        raw = dict(
+            _VALID_PERCEPTION,
+            reply_target="bot",
+            related_turn="T2",
+            communicative_act="teasing",
+        )
+        sig = StructuredOutputValidator.validate_perception_signal(raw)
+        merged = PerceptionMerger().merge(rule, sig)
+        assert merged.reply_target == "bot"
+        assert merged.related_turn == "T2"
+        assert merged.communicative_act == "teasing"
 
     def test_rule_act_wins_conflict(self):
         rule = PerceptionResult(
