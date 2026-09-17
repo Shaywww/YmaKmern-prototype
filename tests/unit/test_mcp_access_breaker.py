@@ -52,7 +52,7 @@ class TestICourseSet:
                     "academic_affairs"):
             assert is_icourse_capability(f"mcp.{svc}")
 
-    def test_public_catalog_not_restricted(self):
+    def test_retired_catalog_is_not_in_the_campus_access_scope(self):
         assert not is_icourse_capability("mcp.course_schedule")
 
     def test_clock_not_icourse(self):
@@ -79,6 +79,7 @@ class TestAccessPolicy:
         assert not p.is_allowed("mcp.exam_schedule", "g1", "u1")
         assert p.deny_reason("mcp.exam_schedule", "g1", "u1")[1] == "default_deny"
         assert p.is_allowed("mcp.course_schedule", "g1", "u1")
+        assert create_all_services().get("course_schedule") is None
         assert p.status()["configured"] is True
 
     def test_user_allow_overrides_group_deny(self, tmp_path):
@@ -254,20 +255,20 @@ class TestRegistryHealthWiring:
     def test_process_reset_drops_breaker_and_cached_service_health(self):
         from dududa.mcp import registry as reg
         first = create_all_services()
-        first_course = first["course_schedule"]
-        first_course._last_health = ServiceHealth.UNAVAILABLE
-        first_course._last_health_check = time.time()
+        first_exam = first["exam_schedule"]
+        first_exam._last_health = ServiceHealth.UNAVAILABLE
+        first_exam._last_health_check = time.time()
         for _ in range(3):
-            reg.breaker.record_failure("course_schedule")
+            reg.breaker.record_failure("exam_schedule")
 
         reg.reset_process_state()
 
         assert reg.breaker.status() == {}
         assert reg._SERVICES == {}
-        second_course = create_all_services()["course_schedule"]
-        assert second_course is not first_course
-        assert second_course._last_health == ServiceHealth.UNKNOWN
-        assert second_course.check_health() in (
+        second_exam = create_all_services()["exam_schedule"]
+        assert second_exam is not first_exam
+        assert second_exam._last_health == ServiceHealth.UNKNOWN
+        assert second_exam.check_health() in (
             ServiceHealth.UNKNOWN, ServiceHealth.HEALTHY,
         )
 
@@ -275,17 +276,17 @@ class TestRegistryHealthWiring:
         from dududa.mcp import registry as reg
         reg2 = CapabilityRegistry()
         n = register_all_mcp_services(reg2)
-        assert n == 13
+        assert n == 11
         try:
             for _ in range(3):
-                reg.breaker.record_failure("course_schedule")
+                reg.breaker.record_failure("exam_schedule")
             ids = {c.capability_id for c in reg2.list_healthy()}
-            assert "mcp.course_schedule" not in ids
+            assert "mcp.exam_schedule" not in ids
             assert "mcp.clock" in ids
             st = breaker_status()
-            assert st.get("course_schedule") == "open"
+            assert st.get("exam_schedule") == "open"
         finally:
-            reg.breaker.record_success("course_schedule")
+            reg.breaker.record_success("exam_schedule")
 
 
 class TestOrchestratorScopeGating:
@@ -328,7 +329,7 @@ class TestOrchestratorScopeGating:
         ids = {c.capability.capability_id
                for c in new_state.capability_candidates}
         assert "mcp.exam_schedule" not in ids
-        assert "mcp.course_schedule" in ids
+        assert "mcp.course_schedule" not in ids
         assert "mcp.clock" in ids
 
     def test_plan_pruned_for_denied_scope(self, tmp_path, monkeypatch):
@@ -373,9 +374,7 @@ class TestOrchestratorScopeGating:
             register_all_mcp_services(reg)
             reg.unregister("mcp.clock")
             reg.unregister("mcp.web_search")
-            reg.unregister("mcp.course_schedule")  # 公开数据，不属于本组门禁测试
-            for _g in ("mcp.weather", "mcp.news", "mcp.translate",
-                       "mcp.icourse_reviews"):
+            for _g in ("mcp.weather", "mcp.news", "mcp.translate"):
                 reg.unregister(_g)  # 只留受 access 策略约束的校园服务，便于断言
             monkeypatch.setattr(orch_mod, "mcp_access",
                                 MCPAccessPolicy(config_path=policy_path))

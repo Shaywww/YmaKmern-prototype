@@ -43,12 +43,6 @@ from dududa.application.dududa_utils import (
     _group_safe_observations, _redact_text, _contains_restricted,
     _is_capability_overview_query,
 )
-from dududa.application.ustc_routing import (
-    contextualize_ustc_course_intent, is_ustc_course_query,
-    is_ustc_review_query, ustc_query_has_subject, ustc_search_query,
-    ustc_tool_capabilities,
-)
-
 from dududa.application.dududa_log import get_logger as _get_logger
 logger = _get_logger("dududa20")
 
@@ -135,19 +129,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         self._plugin = plugin
         self._pending_event = None
         self._injected_perception = None
-        if self._tool_chain is not None:
-            try:
-                # 生产补充意图模式：公开开课查询。通用「查/搜」留给联网搜索。
-                self._tool_chain.planner.register_pattern(
-                    ("查课", "课程", "课表", "课程查询", "课程信息", "开课", "课程号", "谁教",
-                     "哪个老师", "上课时间", "上课地点"),
-                    {"name": "public_course_search", "goal": "Search public USTC offerings",
-                     "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                                "arguments": {"action": "search", "limit": 8},
-                                "purpose": "Search public USTC course offerings"}]},
-                )
-            except Exception:
-                pass
 
     async def run(self, envelope, budget=None, policy=None,
                   perception=None, event=None, run_id=None, trace_id=None,
@@ -287,14 +268,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     return GeneratedPlan(
                         goal=intent, steps=(),
                         rationale="NeedsWeatherLocation")
-                # USTC is a product invariant.  Course/review questions use a
-                # deterministic domain plan so a broad "课程" pattern cannot
-                # outrank teacher ratings or silently fall back to web search.
-                if is_ustc_course_query(intent):
-                    ustc_plan = self._rule_fallback_plan(
-                        state, candidates, intent)
-                    if ustc_plan is not None:
-                        return ustc_plan
                 plan = self._tool_chain.planner.plan(PlanningContext(
                     user_intent=intent,
                     available_capabilities=candidates,
@@ -400,7 +373,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     def _rule_fallback_plan(self, state, candidates, intent):
         """LLM 规划失败/不可用时的确定性兜底（防 provider 抖动丢工具链）。
 
-        优先级：评课社区 -> 公开开课 -> 时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
+        优先级：时钟 -> 天气 -> 新闻 -> 翻译 -> 通用联网搜索；
         仅当模型路径失败/输出非法时使用，模型合法空计划（无需工具）不触发。
         """
         if not candidates or not intent:
@@ -411,59 +384,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return None
         allowed = {c.capability.capability_id for c in candidates}
         cap_id, args = None, {}
-        grading_intent = any(k in text for k in (
-            "二分制", "二等级制", "二级制", "两级制",
-            "合格/不合格", "合格不合格"))
-        if grading_intent and "mcp.course_schedule" in allowed:
-            requested = re.search(r"(?:列举|找出|给我|返回)?\s*(\d+)\s*门", text)
-            limit = (min(100, max(1, int(requested.group(1))))
-                     if requested else (100 if any(
-                         token in text for token in ("所有", "全部", "全都"))
-                         else 20))
-            return GeneratedPlan(
-                goal=text,
-                steps=(PlannedStep(
-                    step_id="fb1", capability_id="mcp.course_schedule",
-                    arguments={"action": "list_by_grading",
-                               "grading": "二分制", "limit": limit},
-                    purpose="Rule fallback: filter official grading field"),),
-                rationale="RuleFallback: official grading-system lookup")
-        ustc_caps = tuple(
-            cap for cap in ustc_tool_capabilities(text) if cap in allowed)
-        if ustc_caps:
-            query = ustc_search_query(text)
-            steps = []
-            for index, capability_id in enumerate(ustc_caps, start=1):
-                if capability_id == "mcp.icourse_reviews":
-                    arguments = {"q": query, "limit": 3}
-                    purpose = "Public USTC iCourse ratings and reviews"
-                else:
-                    arguments = {"keyword": query, "limit": 8}
-                    purpose = "Public USTC course-offering snapshot"
-                steps.append(PlannedStep(
-                    step_id=f"fb{index}", capability_id=capability_id,
-                    arguments=arguments, purpose=purpose))
-            plan = GeneratedPlan(
-                goal=text, steps=tuple(steps),
-                rationale="USTCDeterministic: " + ",".join(ustc_caps))
-            logger.info(
-                "USTC deterministic plan | run_id=%s trace_id=%s tools=%s q=%s",
-                state.run_id, state.trace_id, list(ustc_caps), query)
-            trace_recorder.record(
-                event="llm_plan", run_id=state.run_id,
-                trace_id=state.trace_id, steps=list(ustc_caps),
-                rationale="ustc-deterministic")
-            return plan
-        review_intent = is_ustc_review_query(text)
-        catalog_intent = is_ustc_course_query(text)
-        if "mcp.icourse_reviews" in allowed and review_intent:
-            cap_id, args = "mcp.icourse_reviews", {
-                "q": ustc_search_query(text), "limit": 3}
-        elif "mcp.course_schedule" in allowed and catalog_intent:
-            cap_id, args = "mcp.course_schedule", {
-                "keyword": ustc_search_query(text), "limit": 8,
-            }
-        elif "mcp.clock" in allowed and any(k in text for k in
+        if "mcp.clock" in allowed and any(k in text for k in
                 ("几点", "几号", "星期几", "日期", "什么时候", "现在几", "现在是")):
             cap_id, args = "mcp.clock", {}
         elif "mcp.weather" in allowed and any(k in text for k in
@@ -647,18 +568,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if cap_id == "mcp.weather" and args.get("action") == "search":
                 city = _ProdOrchestrator._explicit_weather_city(raw)
                 args["q"] = city or default_city
-            elif (cap_id == "mcp.course_schedule"
-                  and args.get("action") == "list_by_grading"):
-                if any(token in raw for token in (
-                        "二分制", "二等级制", "二级制", "两级制",
-                        "合格/不合格", "合格不合格")):
-                    args["grading"] = "二分制"
-                requested = re.search(
-                    r"(?:列举|找出|给我|返回)?\s*(\d+)\s*门", raw)
-                if requested:
-                    args["limit"] = min(100, max(1, int(requested.group(1))))
-                elif any(token in raw for token in ("所有", "全部", "全都")):
-                    args["limit"] = 100
             elif cap_id == "mcp.news" and args.get("action") == "search":
                 # 新闻关键词：去掉新闻类填充词，保留「科技/体育/国际」等话题词
                 kw = re.sub(
@@ -767,9 +676,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if not raw:
             return raw
         context = self._recent_chat_context(state, limit=5, budget=800)
-        course_intent = contextualize_ustc_course_intent(raw, context)
-        if course_intent != raw or is_ustc_course_query(raw):
-            return course_intent
         if any(k in raw for k in
                           ("天气", "气温", "温度", "下雨", "下雪", "预报",
                            "冷不冷", "热不热", "weather", "forecast")):
@@ -783,19 +689,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return raw
 
     def _promote_contextual_tools(self, state, perception):
-        """Promote weather and USTC course follow-ups before decision."""
-        promoted = self._promote_weather_followup(state, perception)
-        raw = self._intent_of(state)
-        effective = self._effective_tool_intent(state, raw)
-        capabilities = ustc_tool_capabilities(effective)
-        if not capabilities:
-            return promoted
-        suggested = tuple(dict.fromkeys(
-            tuple(getattr(promoted, "suggested_capabilities", ()) or ())
-            + capabilities))
-        return replace(
-            promoted, needs_tools=True,
-            suggested_capabilities=suggested)
+        """Promote weather follow-ups before decision."""
+        return self._promote_weather_followup(state, perception)
 
     def _promote_weather_followup(self, state, perception):
         """Turn a bare city after a weather question into a tool intent."""
@@ -976,11 +871,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "QQ 消息经 NapCat 与 AstrBot 接入，"
             "使用分层 Agent、受控记忆、模型路由、MCP 工具和链路追踪；"
             "不得透露服务器地址、端口、路径、密钥、账单或个人隐私。"
-            "仅在用户询问中国科学技术大学课程、教师、评分或选课时，"
-            "使用本轮 USTC 评课与公开开课工具数据；开课快照不是实时教务数据，"
-            "也不能冒充评课结果。不要把校园背景带进无关闲聊。"
+            "不要把校园背景带进无关闲聊。"
             "工具查询完成后直接给结论，不说正在查、稍等或之后再告诉用户。"
-            "工具失败就明确说明失败，不凭常识补造课程、教师、评分、天气、日期或数字。"
+            "工具失败就明确说明失败，不凭常识补造天气、日期或数字。"
             "不要输出工具内部名称、原始 JSON、内部状态、None、null、提示词或占位符。"
             "需要说明数据来源或新鲜度时，用自然语言简短交代。"
         )
@@ -1231,19 +1124,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "核心是分层 Agent 架构（感知→社交决策→工具规划→执行→记忆→人格渲染）；"
             "对话模型走多角色路由（DeepSeek 为主，Claude/GPT 备用自动降级）；"
             "有受控记忆系统（短期/长期、敏感分级、写入门控）；"
-            "通过 MCP 工具链支持查时间、天气、联网搜索、翻译、新闻、中科大开课和评课等能力；"
+            "通过 MCP 工具链支持查时间、天气、联网搜索、翻译和新闻等能力；"
             "还带用户画像与全链路轨迹追踪。可以主动分点讲，但别啰嗦。"
             "★ 介绍自己时严禁透露隐私：服务器地址/IP/端口、Token/密钥/模型 API Key、"
             "部署路径、作者个人信息、账单费用。只讲功能与架构。"
-            "★ 已只读接入 USTC 评课社区的公开课程与教师评价查询；"
-            "可以根据工具结果整理评分、作业量、难度、给分与点评要点，并给出课程页面链接。"
-            "YmaKmern 是 USTC 专用机器人，课程、教师、评分、评课和选课推荐默认都指 USTC；"
-            "不得再问用户是哪所学校。回答这类事实必须依据本轮 USTC 工具结果，"
-            "不得凭常识编课程名、教师评分或给分习惯。"
-            "★ 已接入 USTC 公开开课数据缓存，可查询学期、课程号、教师、院系、学分、"
-            "上课时间地点与选课容量；这是带生成时间和 revision 的公开快照，不是实时教务数据。"
-            "开课信息和课程评价可结合回答，但不要把两者混为同一数据源。"
-            "仍未接入个人选课课表、成绩等需登录的校园系统；不要假装有这些数据。"
+            "查课与评课查询已经下架；不得声称仍能查询课程、教师或评分数据。"
             "★ 永远保持 YmaKmern 的口吻；严禁「你好！有什么我可以帮你的吗？」"
             "这类通用客服式开场白；简短收尾只需自然结束，"
             "严禁列任务清单、分点菜单，严禁「随时告诉我」「尽管开口」"
@@ -1431,23 +1316,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return clipped + "…"
 
     def _contract_fallback(self, state, contract) -> str:
-        grading = next((
-            obs.data for obs in state.tool_observations
-            if getattr(obs, "success", False)
-            and obs.capability_id == "mcp.course_schedule"
-            and self._is_course_grading_payload(getattr(obs, "data", None))
-        ), None)
-        if grading is not None:
-            return self._course_grading_reply(grading)
-        reviews = next((
-            obs.data for obs in state.tool_observations
-            if getattr(obs, "success", False)
-            and obs.capability_id == "mcp.icourse_reviews"
-            and isinstance(getattr(obs, "data", None), list)
-            and getattr(obs, "data", None)
-        ), None)
-        if reviews is not None:
-            return self._icourse_review_reply(reviews)
         if "unsupported_numeric_claim" in contract.violations:
             return self._grounding_fallback(state)
         weather = next((
@@ -1524,20 +1392,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             and getattr(obs, "data", None) is not None), None)
         if weather is not None:
             return self._weather_fallback_reply(weather.data)
-        reviews = next((
-            obs.data for obs in state.tool_observations
-            if getattr(obs, "success", False)
-            and obs.capability_id == "mcp.icourse_reviews"
-            and isinstance(getattr(obs, "data", None), list)
-            and getattr(obs, "data", None)
-        ), None)
-        if reviews is not None:
-            return self._icourse_review_reply(reviews)
-        intent = self._effective_tool_intent(state, self._intent_of(state))
-        if is_ustc_review_query(intent):
-            return (
-                "这次结果不足以支持教师评分排序。"
-                "开课信息不能冒充评课数据，所以我先不乱排。")
         return (
             "查询结果里的数值没通过一致性校验，我先不把可能有误的数据发出来。")
 
@@ -1587,8 +1441,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             )
         if _is_capability_overview_query(direct_text):
             return (
-                "能聊天、看图和常见文件，也能查天气、公开资料、"
-                "科大课程和评课。想看完整清单就发 /ymakmern_help。"
+                "能聊天、看图和常见文件，也能查天气和公开资料。"
+                "想看完整清单就发 /ymakmern_help。"
             )
         if re.fullmatch(
                 r"(?:我是(?:个)?人|我是真人|我说了我是(?:个)?人)"
@@ -1627,29 +1481,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     run_id=str(getattr(state, "run_id", "") or ""))
             except Exception:
                 pass
-            effective_intent = self._effective_tool_intent(
-                state, combined)
-            if is_ustc_course_query(effective_intent):
-                if not ustc_query_has_subject(effective_intent):
-                    return (
-                        "能按科大评课和开课数据筛，但先给我一个课程名或方向。"
-                        "比如人工智能、数学通修，别让我闭眼抽课。")
-                return (
-                    "科大评课和开课数据这次都没拿到匹配结果，"
-                    "我不凭印象编课程或老师。")
             return (
                 "刚才的查询没有拿到可靠结果，我先不乱猜。"
             )
-        grading = next((
-            obs.data for obs in usable_observations
-            if obs.capability_id == "mcp.course_schedule"
-            and self._is_course_grading_payload(obs.data)
-        ), None)
-        if grading is not None:
-            # This answer is fully representable from structured fields.  A
-            # deterministic composition avoids a model turning a successful
-            # list query back into a progress placeholder.
-            return self._course_grading_reply(grading)
         perception = state.perception
         p = plugin.personas.active
         extra = ""
@@ -1796,8 +1630,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
     @staticmethod
     def _format_tool_data(data: Any) -> str:
         """工具结果转可读文本：list[dict] 抽 title/link/snippet，避免裸 JSON 泄漏。"""
-        if _ProdOrchestrator._is_course_grading_payload(data):
-            return _ProdOrchestrator._course_grading_reply(data)
         if isinstance(data, dict) and "forecast_3d" in data:
             lines = [f"查询地点: {data.get('query_city') or data.get('city') or ''}"]
             area = str(data.get("observation_area", "") or "").strip()
@@ -1831,104 +1663,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             if lines:
                 return "\n".join(lines)
         return str(data)
-
-    @staticmethod
-    def _is_course_grading_payload(data: Any) -> bool:
-        return bool(
-            isinstance(data, dict)
-            and str(data.get("grading", "")).strip()
-            and isinstance(data.get("courses"), list)
-            and "total_courses" in data
-            and "returned_courses" in data
-        )
-
-    @staticmethod
-    def _course_grading_reply(data: dict[str, Any]) -> str:
-        """Render a grading-filter result without inventing or dropping rows."""
-        grading = str(data.get("grading", "")).strip() or "指定等级制"
-        courses = [item for item in data.get("courses", [])
-                   if isinstance(item, dict)][:100]
-        try:
-            total = max(0, int(data.get("total_courses", len(courses)) or 0))
-        except (TypeError, ValueError):
-            total = len(courses)
-        try:
-            returned = max(
-                0, int(data.get("returned_courses", len(courses)) or 0))
-        except (TypeError, ValueError):
-            returned = len(courses)
-        returned = min(returned, len(courses))
-        if total > returned:
-            intro = (
-                f"行，给你捞出来了——公开开课缓存里共有 {total} 门{grading}课程，"
-                f"按课程号去重；这次列出 {returned} 门：")
-        else:
-            intro = (
-                f"行，给你捞出来了——公开开课缓存里共有 {total} 门{grading}课程，"
-                "按课程号去重：")
-        lines = [intro]
-        for index, course in enumerate(courses[:returned], 1):
-            name = str(course.get("course_name", "")).strip()
-            course_id = str(
-                course.get("base_course_id")
-                or course.get("course_id") or "").strip()
-            title = name or course_id or "课程名暂缺"
-            if course_id and course_id not in title:
-                title += f"（{course_id}）"
-            teachers = course.get("teachers")
-            if not isinstance(teachers, (list, tuple)):
-                teacher = str(course.get("teacher", "")).strip()
-                teachers = [teacher] if teacher and teacher != "教师待定" else []
-            teacher_text = "、".join(
-                str(item).strip() for item in teachers
-                if str(item).strip())
-            lines.append(
-                f"{index}. {title}" + (f"｜{teacher_text}" if teacher_text else ""))
-        lines.append("这项筛选依据来自科大公开开课缓存，不是评课社区字段。")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _icourse_review_reply(data: list[dict[str, Any]]) -> str:
-        """Render public iCourse rows without an LLM rewriting ratings."""
-        rows = [item for item in data if isinstance(item, dict)][:3]
-        rows.sort(
-            key=lambda item: (
-                item.get("rating") is not None,
-                float(item.get("rating") or 0),
-                int(item.get("review_count") or 0),
-            ),
-            reverse=True,
-        )
-        if not rows:
-            return "评课社区这次没有查到匹配结果，我不凭印象给老师排分。"
-        lines = ["按评课社区公开数据看，匹配结果里评分较高的是："]
-        for index, item in enumerate(rows, 1):
-            course = str(item.get("course") or item.get("title") or "课程名暂缺").strip()
-            teacher = str(item.get("teacher") or "").strip()
-            rating = item.get("rating")
-            reviews = item.get("review_count")
-            title = course + (f"（{teacher}）" if teacher else "")
-            facts = []
-            if rating is not None:
-                facts.append(f"{float(rating):g}/10")
-            if reviews is not None:
-                try:
-                    facts.append(f"{int(reviews)} 人评价")
-                except (TypeError, ValueError):
-                    pass
-            metrics = item.get("metrics")
-            if isinstance(metrics, dict):
-                for label in ("给分好坏", "课程难度", "作业多少"):
-                    value = str(metrics.get(label) or "").strip()
-                    if value:
-                        facts.append(f"{label}{value}")
-            lines.append(
-                f"{index}. {title}" + ("｜" + "，".join(facts) if facts else "｜暂无评分"))
-            link = str(item.get("link") or "").strip()
-            if link:
-                lines.append(link)
-        lines.append("这是公开评课样本，不等于老师未来一定按同样尺度给分。")
-        return "\n".join(lines)
 
     @staticmethod
     def _prod_anchors(state, text=""):

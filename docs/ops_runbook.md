@@ -110,8 +110,9 @@ systemctl is-active astrbot                 # active
       "users":  {"allow": ["QQ号"], "deny": []}
     }
 
-- 约束范围：六个 iCourse 服务 course_schedule / exam_schedule / academic_calendar /
-  training_program / second_classroom / campus_notice；mcp.clock 等非 iCourse 能力恒允许。
+- 约束范围：六个校园服务 exam_schedule / academic_calendar / training_program /
+  second_classroom / campus_notice / academic_affairs；mcp.clock 等非校园能力恒允许。
+- 查课与评课能力（course_schedule / icourse_reviews）已经下架，不再注册、路由或启动对应外部查询链路。
 - 判定优先级：用户 deny → 用户 allow（个人放行优先于群）→ 群 deny → 群 allow → default_policy（默认 deny，fail closed）。
 - 群号兼容 group_123 与裸 123 两种写法。
 

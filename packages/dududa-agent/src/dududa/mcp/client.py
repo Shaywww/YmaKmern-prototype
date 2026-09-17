@@ -609,10 +609,6 @@ class ProviderFactory:
     def __call__(self, svc):
         from .registry import MCPProvider
         cap_id = f"mcp.{svc.name}"
-        # Public course offerings have their own revision-aware snapshot source.
-        # Do not route them through the separate iCourse review MCP server.
-        if cap_id == "mcp.course_schedule":
-            return MCPProvider(svc, server_id=svc.name)
         mapping = _CAP_TOOL_MAP.get(cap_id) or {}
         return UnifiedMCPProvider(
             self.registry, "icourse", cap_id, MCPProvider(svc), mapping)

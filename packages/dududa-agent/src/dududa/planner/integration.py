@@ -15,65 +15,11 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
 
     # Register common intent patterns
     planner.register_pattern(
-        ("二分制", "二等级制", "二级制", "两级制", "合格/不合格", "合格不合格"),
-        {"name": "course_grading_lookup",
-         "goal": "List public USTC offerings by grading system",
-         "steps": [
-             {"step_id": "s1", "capability_id": "mcp.course_schedule",
-              "arguments": {"action": "list_by_grading",
-                            "grading": "二分制", "limit": 20},
-              "purpose": "Filter official public offerings by grading field",
-              "expected_output": "Unique pass/fail courses and total count"},
-         ]},
-    )
-    planner.register_pattern(
-        ("开课情况和评价", "课程信息和评价", "开课老师评价", "开课和评课"),
-        {"name": "course_catalog_with_reviews",
-         "goal": "Find current public offerings and community reviews",
-         "steps": [
-             {"step_id": "s1", "capability_id": "mcp.course_schedule",
-              "arguments": {"action": "search", "limit": 6},
-              "purpose": "Search the public USTC course-offering snapshot"},
-             {"step_id": "s2", "capability_id": "mcp.icourse_reviews",
-              "arguments": {"action": "search", "q": "{query}", "limit": 3},
-              "purpose": "Search public USTC course and teacher reviews"},
-         ]},
-    )
-    planner.register_pattern(
-        ("评课社区", "评课", "课程评价", "老师怎么样", "老师好不好",
-         "课程怎么样", "课怎么样", "值得选", "推荐老师", "给分怎么样",
-         "评分", "高分", "好拿分", "拿高分", "口碑", "作业多",
-         "难不难", "哪些老师", "哪位老师", "水课", "推荐几门课",
-         "推荐课程", "选什么课", "选哪些课"),
-        {"name": "icourse_review_lookup",
-         "goal": "Find public USTC course and teacher reviews",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.icourse_reviews",
-                     "arguments": {"action": "search", "q": "{query}", "limit": 3},
-                     "purpose": "Search the USTC iCourse review community",
-                     "expected_output": "Course ratings and review summary with source link"}]},
-    )
-    planner.register_pattern(
-        ("查课", "课程", "课表", "课程查询", "课程信息", "什么课", "开课", "课程号",
-         "谁教", "哪个老师", "上课时间", "上课地点"),
-        {"name": "course_lookup", "goal": "Find public course offerings",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                     "arguments": {"action": "search", "limit": 8},
-                     "purpose": "Search the public USTC course snapshot",
-                     "expected_output": "Course details"}]},
-    )
-    planner.register_pattern(
         ("考试", "期末", "期中", "exam", "什么时候考"),
         {"name": "exam_lookup", "goal": "Find exam information",
          "steps": [{"step_id": "s1", "capability_id": "mcp.exam_schedule",
                      "arguments": {"action": "get_all_exams"}, "purpose": "Get exam schedule",
                      "expected_output": "Exam timetable"}]},
-    )
-    planner.register_pattern(
-        ("全校课表", "开课表", "课程安排", "schedule"),
-        {"name": "schedule_lookup", "goal": "Find public course schedules",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule",
-                     "arguments": {"action": "search", "limit": 8},
-                     "purpose": "Search public course schedules"}]},
     )
     planner.register_pattern(
         ("选课", "培养方案", "学分", "毕业要求"),
@@ -92,29 +38,6 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
         {"name": "notice_lookup", "goal": "Find campus notices",
          "steps": [{"step_id": "s1", "capability_id": "mcp.campus_notice",
                      "arguments": {"action": "search"}, "purpose": "Search notices"}]},
-    )
-
-    # Complex multi-step patterns
-    from .planner import COMPLEX_PATTERNS
-    planner.register_pattern(
-        ("对比", "比较", "哪个好", "选哪个", "区别", "vs"),
-        COMPLEX_PATTERNS["course_compare"],
-    )
-    planner.register_pattern(
-        ("综合查询", "全查", "都查", "各方面", "相关信息"),
-        COMPLEX_PATTERNS["multi_source_lookup"],
-    )
-    planner.register_pattern(
-        ("考试时间", "期末安排", "考试安排", "考表"),
-        COMPLEX_PATTERNS["course_with_exam"],
-    )
-    planner.register_pattern(
-        ("学期规划", "学期安排", "这学期", "下学期", "新学期"),
-        COMPLEX_PATTERNS["semester_planning"],
-    )
-    planner.register_pattern(
-        ("毕业", "学分够了", "还差多少", "培养方案完成", "毕业要求"),
-        COMPLEX_PATTERNS["program_check"],
     )
 
     planner.register_pattern(

@@ -100,14 +100,14 @@ class TestMCP:
         r = client.get("/mcp/services")
         assert r.status_code == 200
         data = r.json()
-        assert data["count"] == 13
+        assert data["count"] == 11
         assert "clock" in data["services"]
-        assert "course_schedule" in data["services"]
+        assert "course_schedule" not in data["services"]
+        assert "icourse_reviews" not in data["services"]
 
-    def test_service_health(self, client):
+    def test_retired_course_service_health_is_404(self, client):
         r = client.get("/mcp/services/course_schedule/health")
-        assert r.status_code == 200
-        assert r.json()["health"] in ("healthy", "degraded", "unavailable", "unknown")
+        assert r.status_code == 404
 
     def test_service_404(self, client):
         r = client.get("/mcp/services/nonexistent/health")
@@ -119,9 +119,9 @@ class TestMCP:
         data = r.json()
         assert data["success"] is True
 
-    def test_query_unknown_action(self, client):
+    def test_retired_course_service_query_is_404(self, client):
         r = client.post("/mcp/services/course_schedule/query", json={"action": "nonexistent"})
-        assert r.status_code == 400
+        assert r.status_code == 404
 
 class TestTraces:
     def test_list_traces(self, client):
@@ -147,7 +147,7 @@ class TestRuntime:
         data = r.json()
         assert "active_persona" in data
         assert data["persona_count"] >= 4
-        assert data["mcp_services"] == 13
+        assert data["mcp_services"] == 11
         assert data["evolution"]["mode"] == "shadow"
         assert data["evolution"]["auto_activate"] is False
 

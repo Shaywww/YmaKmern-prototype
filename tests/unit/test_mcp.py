@@ -14,10 +14,11 @@ from dududa.mcp.base import ServiceHealth
 class TestAllServices:
     def test_all_services_created(self):
         svcs = create_all_services()
-        assert len(svcs) == 13
+        assert len(svcs) == 11
         assert "clock" in svcs
         assert "web_search" in svcs
-        assert "course_schedule" in svcs
+        assert "course_schedule" not in svcs
+        assert "icourse_reviews" not in svcs
 
     def test_all_services_healthy(self):
         for name, svc in create_all_services().items():
@@ -268,9 +269,10 @@ class TestRegisterIntoCapabilityRegistry:
     def test_register_all(self):
         reg = CapabilityRegistry()
         count = register_all_mcp_services(reg)
-        assert count == 13
+        assert count == 11
         assert reg.get("mcp.clock") is not None
-        assert reg.get("mcp.course_schedule") is not None
+        assert reg.get("mcp.course_schedule") is None
+        assert reg.get("mcp.icourse_reviews") is None
         assert reg.get("mcp.exam_schedule") is not None
 
     def test_registered_capabilities_healthy(self):
@@ -283,9 +285,10 @@ class TestRegisterIntoCapabilityRegistry:
         reg = CapabilityRegistry()
         register_all_mcp_services(reg)
         summaries = reg.summaries()
-        assert any("course_schedule" in s for s in summaries)
+        assert not any("course_schedule" in s for s in summaries)
+        assert not any("icourse_reviews" in s for s in summaries)
         assert any("exam_schedule" in s for s in summaries)
-        assert len(summaries) == 13
+        assert len(summaries) == 11
         assert any("clock" in s for s in summaries)
         assert any("web_search" in s for s in summaries)
 

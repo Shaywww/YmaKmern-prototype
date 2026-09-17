@@ -55,54 +55,6 @@ class GeneratedPlan:
     rationale: str = ""
 
 
-# ===== Complex multi-step patterns =====
-COMPLEX_PATTERNS = {
-    "course_compare": {
-        "name": "course_compare",
-        "goal": "Compare two or more courses",
-        "steps": [
-            {"step_id": "s1", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Find first course"},
-            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Find second course", "depends_on": []},
-            {"step_id": "s3", "capability_id": "mcp.exam_schedule", "arguments": {"action": "get_all_exams"}, "purpose": "Get exam info", "depends_on": []},
-        ],
-    },
-    "multi_source_lookup": {
-        "name": "multi_source_lookup",
-        "goal": "Look up information from multiple sources",
-        "steps": [
-            {"step_id": "s1", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Search courses"},
-            {"step_id": "s2", "capability_id": "mcp.second_classroom", "arguments": {"action": "search"}, "purpose": "Search related activities", "depends_on": []},
-            {"step_id": "s3", "capability_id": "mcp.campus_notice", "arguments": {"action": "search"}, "purpose": "Check related notices", "depends_on": []},
-        ],
-    },
-    "course_with_exam": {
-        "name": "course_with_exam",
-        "goal": "Find course details and exam schedule",
-        "steps": [
-            {"step_id": "s1", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Get course info"},
-            {"step_id": "s2", "capability_id": "mcp.exam_schedule", "arguments": {"action": "get_all_exams"}, "purpose": "Get exam schedule", "depends_on": ["s1"]},
-        ],
-    },
-    "semester_planning": {
-        "name": "semester_planning",
-        "goal": "Plan semester: calendar + courses + activities",
-        "steps": [
-            {"step_id": "s1", "capability_id": "mcp.academic_calendar", "arguments": {"action": "get_semester"}, "purpose": "Get semester dates"},
-            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Search public semester offerings", "depends_on": []},
-            {"step_id": "s3", "capability_id": "mcp.second_classroom", "arguments": {"action": "get_upcoming"}, "purpose": "Get upcoming activities", "depends_on": []},
-            {"step_id": "s4", "capability_id": "mcp.academic_calendar", "arguments": {"action": "get_holidays"}, "purpose": "Get holidays", "depends_on": []},
-        ],
-    },
-    "program_check": {
-        "name": "program_check",
-        "goal": "Check degree progress against program requirements",
-        "steps": [
-            {"step_id": "s1", "capability_id": "mcp.training_program", "arguments": {"action": "get_program"}, "purpose": "Get degree requirements"},
-            {"step_id": "s2", "capability_id": "mcp.course_schedule", "arguments": {"action": "search"}, "purpose": "Search public course offerings", "depends_on": []},
-        ],
-    },
-}
-
 class ToolPlanner:
     """Generates multi-step ToolPlans from user intent and available capabilities."""
 

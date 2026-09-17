@@ -167,11 +167,11 @@ class TestMCPEntry:
         assert r.status_code == 200
         assert r.json()["success"] is True
 
-    def test_query_unknown_action_400(self, cp):
+    def test_retired_course_query_404(self, cp):
         app, client = cp
         r = client.post("/mcp/services/course_schedule/query",
                         json={"action": "nope"})
-        assert r.status_code == 400
+        assert r.status_code == 404
 
     def test_query_denied_by_access_policy(self, cp, tmp_path):
         cfg = tmp_path / "deny.json"

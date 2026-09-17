@@ -19,7 +19,6 @@ from unittest import mock
 import httpx
 import pytest
 from tests.path_config import AGENT_SRC, PLUGIN_DIR
-from dududa.mcp.course_schedule import CourseScheduleService
 from dududa.mcp.weather_service import WeatherService
 
 pytestmark = pytest.mark.net
@@ -105,23 +104,16 @@ def test_production_clock_capability():
     assert "星期" in text, f"Clock 结果异常: {text[:80]!r}"
 
 
-def test_production_course_capability_health():
-    """课程类能力注册/健康检查（不发起真实抓取，避免副作用）。"""
+def test_retired_course_capabilities_are_absent():
+    """查课/评课下架后不得出现在生产能力注册表。"""
     main_mod, p = _load_plugin()
     caps = {c.capability_id: c for c in p.cap_registry.list_enabled()}
-    for want in ("mcp.course_schedule", "mcp.exam_schedule",
-                 "mcp.academic_calendar", "mcp.academic_affairs"):
+    assert "mcp.course_schedule" not in caps
+    assert "mcp.icourse_reviews" not in caps
+    for want in ("mcp.exam_schedule", "mcp.academic_calendar",
+                 "mcp.academic_affairs"):
         assert want in caps, f"{want} 未注册"
         assert caps[want].is_healthy, f"{want} 不健康"
-
-
-def test_live_course_snapshot_query(tmp_path):
-    """公开课程快照真实联网查询；仅在显式 net smoke 中运行。"""
-    svc = CourseScheduleService(cache_dir=tmp_path)
-    result = asyncio.run(svc.search("数据结构"))
-    assert result.success, f"课程快照查询失败: {result.error}"
-    assert result.data, "课程快照返回为空"
-    assert any(item.get("course_name") == "数据结构" for item in result.data)
 
 
 def test_live_weather_query():

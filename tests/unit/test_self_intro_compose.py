@@ -2,7 +2,7 @@ from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 # -*- coding: utf-8 -*-
 """自述/未接科大/风格红线：compose 系统提示知识块（QQ 实测反馈收尾）。
 
-场景：对方问「你是怎么搭出来的」「评课社区」「还没接科大的东西」，
+场景：对方问「你是怎么搭出来的」「还没接科大的东西」，
 以及只回「好的」时出现客服腔 —— 这些都要由 system prompt 约束。
 """
 import sys, types
@@ -109,11 +109,11 @@ class TestComposeSystemKnowledge:
         assert "服务器地址" in sysp
         assert "Token" in sysp
 
-    def test_ustc_public_sources_and_private_boundary(self):
+    def test_retired_course_sources_are_not_advertised(self):
         sysp = _ProdOrchestrator._build_compose_system(_STUB_PERSONA, "")
-        assert "评课社区" in sysp
-        assert "USTC 公开开课数据缓存" in sysp
-        assert "未接入个人选课课表、成绩" in sysp
+        assert "评课社区" not in sysp
+        assert "USTC 公开开课数据缓存" not in sysp
+        assert "查课程" not in sysp
 
     def test_style_redline(self):
         sysp = _ProdOrchestrator._build_compose_system(_STUB_PERSONA, "")
@@ -215,7 +215,7 @@ class TestComposeProdBehavior:
         assert "你是怎么搭出来的" in cap.user
 
     @pytest.mark.asyncio
-    async def test_ustc_question(self, plugin):
+    async def test_ustc_question_does_not_advertise_retired_sources(self, plugin):
         plugin.runtime._pending_event = _FakeEvent("@bot 你还没接科大的东西啊")
         cap = _Capture()
 
@@ -226,8 +226,8 @@ class TestComposeProdBehavior:
         plugin._call_llm = fake_llm
         await plugin.runtime._compose_prod_text(
             _state("@bot 你还没接科大的东西啊"))
-        assert "USTC 公开开课数据缓存" in cap.system
-        assert "未接入个人选课课表、成绩" in cap.system
+        assert "USTC 公开开课数据缓存" not in cap.system
+        assert "评课社区" not in cap.system
 
     @pytest.mark.asyncio
     async def test_short_ack_not_support_staff(self, plugin):

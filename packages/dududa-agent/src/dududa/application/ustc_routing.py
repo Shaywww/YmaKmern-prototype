@@ -30,6 +30,10 @@ USTC_CATALOG_MARKERS = (
     "开课表", "二分制", "二等级制", "两级制",
 )
 
+COURSE_QUERY_RETIRED_MESSAGE = (
+    "查课和评课查询已经下架了，暂时不能帮你查课程、老师或评分。"
+)
+
 _USTC_OFFERING_DETAIL_MARKERS = (
     "查课", "课表", "开课", "课程号", "谁教", "上课时间", "上课地点",
     "全校课表", "开课表", "二分制", "二等级制", "两级制",
@@ -69,6 +73,11 @@ def is_ustc_course_query(text: str) -> bool:
         or is_ustc_recommendation_query(text)
         or is_ustc_catalog_query(text)
     )
+
+
+def retired_course_query_reply(text: str) -> str:
+    """Return the deterministic retirement notice for course/review queries."""
+    return COURSE_QUERY_RETIRED_MESSAGE if is_ustc_course_query(text) else ""
 
 
 def _recent_user_turns(context: str, limit: int = 5) -> tuple[str, ...]:
@@ -131,18 +140,8 @@ def contextualize_ustc_course_intent(text: str, context: str) -> str:
 
 
 def ustc_tool_capabilities(text: str) -> tuple[str, ...]:
-    """Return USTC tools in factual priority order for an effective intent."""
-    value = str(text or "")
-    review = is_ustc_review_query(value) or is_ustc_recommendation_query(value)
-    recommendation = is_ustc_recommendation_query(value)
-    catalog = is_ustc_catalog_query(value)
-    capabilities: list[str] = []
-    if review:
-        capabilities.append("mcp.icourse_reviews")
-    if (recommendation or (catalog and not review)
-            or any(marker in value for marker in _USTC_OFFERING_DETAIL_MARKERS)):
-        capabilities.append("mcp.course_schedule")
-    return tuple(capabilities)
+    """Course lookup is retired; never expose its former capabilities."""
+    return ()
 
 
 def _ustc_search_terms(text: str) -> str:

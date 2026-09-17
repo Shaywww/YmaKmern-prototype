@@ -35,7 +35,7 @@ from dududa.application.dududa_utils import (
 from dududa.application.dududa_log import get_logger as _get_logger
 from dududa.application.user_experience import make_support_id
 from dududa.application.ustc_routing import (
-    is_ustc_catalog_query, is_ustc_review_query,
+    retired_course_query_reply,
 )
 from dududa.core.memory import set_memory_access_mode, reset_memory_access_mode
 from dududa.core.quality_eval import strip_self_degrading_abuse
@@ -1098,13 +1098,6 @@ def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
             "几点", "时间", "几号", "星期几", "日期", "现在是", "现在几"),
         "mcp.news": ("新闻", "资讯", "热点", "热搜", "报道"),
         "mcp.translate": ("翻译", "译成", "translate"),
-        "mcp.course_schedule": (
-            "课程", "查课", "课表", "开课", "课程号", "谁教", "上课时间",
-            "上课地点", "二分制", "二等级制", "两级制", "选课", "推荐课"),
-        "mcp.icourse_reviews": (
-            "评课", "课程评价", "老师怎么样", "值得选", "给分", "作业多",
-            "难不难", "评分", "高分", "口碑", "哪些老师", "哪位老师",
-            "推荐老师", "好拿分", "拿高分", "水课"),
         "mcp.exam_schedule": ("考试", "期中", "期末", "考表"),
         "mcp.academic_calendar": ("校历", "放假", "节假日"),
         "mcp.training_program": ("培养方案", "毕业要求", "学分", "选课"),
@@ -1117,10 +1110,6 @@ def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
             not _is_casual_advice_without_lookup(value)
             and _EXPLICIT_LOOKUP_RE.search(value)
         )
-    if cid == "mcp.icourse_reviews" and is_ustc_review_query(value):
-        return True
-    if cid == "mcp.course_schedule" and is_ustc_catalog_query(value):
-        return True
     markers = evidence.get(cid)
     if markers is None:
         return False
@@ -3234,6 +3223,20 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
     if _dedupe_message(plugin, event, msg_id): return None
     if _cross_session_reply_dropped(plugin, event): return None
     if not _preflight_group_message(plugin, event, msgs): return None
+    retired_reply = retired_course_query_reply(
+        str(getattr(event, "message_str", "") or ""))
+    if retired_reply and (
+            not _event_group_id(event)
+            or getattr(event, "is_at_or_wake_command", False)):
+        from dududa.application.response_policy_shadow import mark_response_origin
+        from dududa.core.response_policy import ResponseOrigin
+        mark_response_origin(
+            event, ResponseOrigin.TEXT,
+            fallback_reason="course_query_retired")
+        trace_recorder.record(
+            event="course_query_retired", run_id=run_id,
+            trace_id=trace_id, action="reply")
+        return retired_reply
     scene_reply = _group_scene_reply(event)
     if scene_reply:
         from dududa.application.response_policy_shadow import (

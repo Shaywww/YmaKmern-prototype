@@ -370,6 +370,26 @@ async def test_unmentioned_plain_group_message_is_dropped_before_ux_progress_and
 
 
 @pytest.mark.asyncio
+async def test_direct_course_query_returns_retirement_notice_without_runtime(
+    tmp_path, monkeypatch
+):
+    plugin = FlowPlugin(tmp_path)
+    event = GroupEvent(
+        "帮我查一下数据结构课程", message_id="retired-course-1", at=True)
+    inner_calls = []
+
+    async def forbidden_inner(*args):
+        inner_calls.append(args)
+        return "不应该进入模型或工具链"
+
+    monkeypatch.setattr(h, "_run_flow_inner", forbidden_inner)
+    reply = await h.run_message_flow(plugin, event)
+
+    assert reply == "查课和评课查询已经下架了，暂时不能帮你查课程、老师或评分。"
+    assert inner_calls == []
+
+
+@pytest.mark.asyncio
 async def test_same_user_weather_clarification_reply_wakes_without_second_at(
     tmp_path, monkeypatch
 ):

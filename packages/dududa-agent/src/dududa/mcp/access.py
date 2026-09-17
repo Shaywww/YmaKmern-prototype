@@ -12,7 +12,7 @@
       "users":  {"allow": ["u1"], "deny": ["u2"]}
     }
 
-判定优先级（仅约束需授权的校园服务；公开开课缓存、clock 等恒允许）::
+判定优先级（仅约束需授权的校园服务；clock 等非校园能力恒允许）::
 
     1) 用户 deny 名单      -> 拒绝
     2) 用户 allow 名单      -> 允许（个人放行优先于群）
@@ -34,7 +34,7 @@ from typing import Any, Optional
 logger = logging.getLogger("dududa20.mcp.access")
 
 # 需授权/未正式公开的校园服务集合（受按群/按人策略约束）。
-# course_schedule 读取的是公开、只读、无个人数据的课程快照，不在此门禁中。
+# 查课/评课能力已下架，不再出现在能力注册表或本门禁中。
 ICOURSE_SERVICE_IDS = frozenset({
     "exam_schedule",
     "academic_calendar",
@@ -60,7 +60,7 @@ _FILE_DEFAULT: dict[str, Any] = {
 
 
 def is_icourse_capability(capability_id: str) -> bool:
-    """capability_id 形如 mcp.course_schedule；兼容裸服务名。"""
+    """capability_id 形如 mcp.exam_schedule；兼容裸服务名。"""
     svc = str(capability_id).split(".", 1)[-1]
     return svc in ICOURSE_SERVICE_IDS
 

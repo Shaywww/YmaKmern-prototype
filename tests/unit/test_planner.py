@@ -19,7 +19,7 @@ class StubProvider(CapProvider):
 
 def _make_registry():
     reg = CapabilityRegistry()
-    for cid in ["mcp.course_schedule", "mcp.exam_schedule", "mcp.academic_calendar", "mcp.second_classroom", "mcp.campus_notice"]:
+    for cid in ["mcp.exam_schedule", "mcp.academic_calendar", "mcp.second_classroom", "mcp.campus_notice"]:
         cap = Capability(capability_id=cid, name=cid, description=f"Mock {cid}", provider=ProviderType.MCP)
         reg.register(cap, StubProvider())
     return reg
@@ -61,13 +61,13 @@ class TestWebSearchPattern:
         assert plan.steps[0].capability_id == "mcp.web_search"
         assert plan.steps[0].arguments.get("q") == "数据结构"
 
-    def test_chacha_not_hijack_course_query(self):
+    def test_generic_query_cannot_use_retired_course_capability(self):
         plan = self._plan("帮我查一下数据结构")
-        assert plan.steps[0].capability_id == "mcp.course_schedule"
+        assert all(step.capability_id != "mcp.course_schedule" for step in plan.steps)
 
-    def test_course_pattern_still_priority(self):
+    def test_course_pattern_is_not_registered(self):
         plan = self._plan("帮我查一下课表")
-        assert plan.steps[0].capability_id == "mcp.course_schedule"
+        assert all(step.capability_id != "mcp.course_schedule" for step in plan.steps)
 
     def test_exam_pattern_still_priority(self):
         plan = self._plan("帮我搜一下考试安排")
@@ -140,10 +140,10 @@ class TestToolPlanner:
 
     def test_pattern_matching(self):
         p = ToolPlanner()
-        p.register_pattern(("查课",), {"name": "test", "goal": "test_pattern", "steps": [{"step_id": "s1", "capability_id": "mcp.course_schedule", "arguments": {}, "purpose": "test"}]})
+        p.register_pattern(("查考试",), {"name": "test", "goal": "test_pattern", "steps": [{"step_id": "s1", "capability_id": "mcp.exam_schedule", "arguments": {}, "purpose": "test"}]})
         reg = _make_registry()
         candidates = reg.filter_candidates(permissions=())
-        ctx = PlanningContext(user_intent="帮我查课", available_capabilities=candidates)
+        ctx = PlanningContext(user_intent="帮我查考试", available_capabilities=candidates)
         plan = p.plan(ctx)
         assert plan.rationale == "Pattern: test"
 
@@ -162,7 +162,7 @@ class TestToolExecutor:
         from dududa.planner.planner import PlannedStep, GeneratedPlan
         reg = _make_registry()
         executor = ToolExecutor(reg)
-        step = PlannedStep("s1", "mcp.course_schedule", {}, "test")
+        step = PlannedStep("s1", "mcp.exam_schedule", {}, "test")
         plan = GeneratedPlan(goal="test", steps=(step,))
         results = await executor.execute_plan(plan)
         assert len(results) == 1
@@ -282,21 +282,23 @@ class TestNewSkillPatterns:
         plan = self._plan("USTC今年招生怎么样", ("mcp.web_search",))
         assert plan.steps[0].capability_id == "mcp.web_search"
 
-    def test_course_pattern_still_priority_over_definition(self):
+    def test_course_pattern_is_retired(self):
         plan = self._plan("开课表是什么", ("mcp.course_schedule",))
-        assert plan.steps[0].capability_id == "mcp.course_schedule"
+        assert plan is None or all(
+            step.capability_id not in {
+                "mcp.course_schedule", "mcp.icourse_reviews"}
+            for step in plan.steps)
 
     def test_time_pattern_still_priority_over_definition(self):
         plan = self._plan("现在是什么时间", ("mcp.clock",))
         assert plan.steps[0].capability_id == "mcp.clock"
 
-    def test_binary_grading_uses_official_catalog_not_review_search(self):
+    def test_binary_grading_has_no_retired_course_plan(self):
         plan = self._plan(
             "在评课社区里找出所有的二等级制课程",
             ("mcp.course_schedule", "mcp.icourse_reviews"),
         )
-        assert plan is not None and plan.steps
-        step = plan.steps[0]
-        assert step.capability_id == "mcp.course_schedule"
-        assert step.arguments.get("action") == "list_by_grading"
-        assert step.arguments.get("grading") == "二分制"
+        assert plan is None or all(
+            step.capability_id not in {
+                "mcp.course_schedule", "mcp.icourse_reviews"}
+            for step in plan.steps)

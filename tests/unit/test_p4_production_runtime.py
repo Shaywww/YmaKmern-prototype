@@ -35,7 +35,6 @@ from dududa.core.capability import (
 )
 from dududa.core.context import ContextBuilder
 from dududa.core.persona.registry import PersonaRegistry
-from dududa.mcp.course_schedule import CourseScheduleService
 from dududa.mcp.registry import create_all_services, register_all_mcp_services
 from dududa.mcp.weather_service import WeatherService
 from dududa.planner.integration import integrate_with_orchestrator
@@ -120,19 +119,6 @@ class _FakePlugin:
 
 def _fixture_json(name):
     return json.loads((MCP_FIXTURES / name).read_text(encoding="utf-8"))
-
-
-def _offline_catalog_service(tmp_path):
-    svc = CourseScheduleService(cache_dir=tmp_path)
-    svc._write_json(
-        svc._manifest_cache_path,
-        _fixture_json("catalog_manifest.json"),
-    )
-    svc._write_json(
-        svc._semester_cache_path("2026-fall"),
-        _fixture_json("catalog_2026-fall.json"),
-    )
-    return svc
 
 
 def _offline_weather_service():
@@ -275,97 +261,7 @@ class TestProdCapProvider:
         assert provider.health() is True
 
 
-class TestEnrichPlanArgs:
-    def test_strips_verbs_and_suffixes(self):
-        from dududa.planner.planner import GeneratedPlan, PlannedStep
-        plan = GeneratedPlan(goal="g", steps=(PlannedStep(
-            step_id="s1", capability_id="mcp.course_schedule",
-            arguments={"action": "search"}, purpose="p"),))
-        out = main._ProdOrchestrator._enrich_plan_args(plan, "帮我查一下数据结构课程")
-        assert out.steps[0].arguments["keyword"] == "数据结构"
-
-    def test_keeps_existing_keyword(self):
-        from dududa.planner.planner import GeneratedPlan, PlannedStep
-        plan = GeneratedPlan(goal="g", steps=(PlannedStep(
-            step_id="s1", capability_id="mcp.course_schedule",
-            arguments={"action": "search", "keyword": "操作系统"}, purpose="p"),))
-        out = main._ProdOrchestrator._enrich_plan_args(plan, "帮我查一下课程")
-        assert out.steps[0].arguments["keyword"] == "操作系统"
-
-    def test_binary_grading_alias_and_requested_limit(self):
-        from dududa.planner.planner import GeneratedPlan, PlannedStep
-        plan = GeneratedPlan(goal="g", steps=(PlannedStep(
-            step_id="s1", capability_id="mcp.course_schedule",
-            arguments={"action": "list_by_grading", "limit": 20},
-            purpose="p"),))
-        out = main._ProdOrchestrator._enrich_plan_args(
-            plan, "在评课社区里列举10门二等级制课程")
-        args = out.steps[0].arguments
-        assert args["grading"] == "二分制"
-        assert args["limit"] == 10
-
-    def test_all_binary_courses_raises_bounded_limit(self):
-        from dududa.planner.planner import GeneratedPlan, PlannedStep
-        plan = GeneratedPlan(goal="g", steps=(PlannedStep(
-            step_id="s1", capability_id="mcp.course_schedule",
-            arguments={"action": "list_by_grading", "limit": 20},
-            purpose="p"),))
-        out = main._ProdOrchestrator._enrich_plan_args(
-            plan, "找出所有的二等级制课程")
-        assert out.steps[0].arguments["limit"] == 100
-
-    def test_grading_payload_has_deterministic_user_facing_fallback(self):
-        data = {
-            "grading": "二分制", "total_courses": 60,
-            "returned_courses": 2,
-            "courses": [
-                {"course_name": "数据结构", "base_course_id": "011127",
-                 "teachers": ["王老师", "李老师"]},
-                {"course_name": "常微分方程", "base_course_id": "001101",
-                 "teachers": ["章老师"]},
-            ],
-        }
-        reply = main._ProdOrchestrator._course_grading_reply(data)
-        assert "共有 60 门二分制课程" in reply
-        assert "这次列出 2 门" in reply
-        assert "1. 数据结构（011127）｜王老师、李老师" in reply
-        assert "2. 常微分方程（001101）｜章老师" in reply
-        assert "不是评课社区字段" in reply
-        assert "一致性" not in reply and "再问" not in reply
-        assert "{'grading'" not in main._ProdOrchestrator._format_tool_data(data)
-
-
 class TestProdOrchestrator:
-    @pytest.mark.asyncio
-    async def test_grading_result_bypasses_model_placeholder_and_requery_loop(self):
-        orch, plugin, _, _ = _make_orchestrator()
-        event = _FakeEvent("列举2门二等级制课程")
-        orch._pending_event = event
-        data = {
-            "grading": "二分制", "total_courses": 60,
-            "returned_courses": 2,
-            "courses": [
-                {"course_name": "数据结构", "base_course_id": "011127",
-                 "teachers": ["王老师"]},
-                {"course_name": "常微分方程", "base_course_id": "001101",
-                 "teachers": ["章老师"]},
-            ],
-        }
-        state = RuntimeState(
-            envelope=_make_envelope("列举2门二等级制课程"),
-            perception=PerceptionResult(needs_tools=True),
-            tool_observations=(ToolObservation(
-                step_id="s1", capability_id="mcp.course_schedule",
-                success=True, data=data, source="ustc_catalog_snapshot"),),
-        )
-
-        reply = await orch._compose_prod_text(state)
-
-        assert "共有 60 门二分制课程" in reply
-        assert "数据结构" in reply and "常微分方程" in reply
-        assert "一致性" not in reply and "再问" not in reply
-        assert plugin.last_user_msg == "", "structured list should not call the LLM"
-
     @pytest.mark.asyncio
     async def test_plain_chat_no_tools_composes_via_llm(self):
         orch, plugin, memory, reg = _make_orchestrator()
@@ -480,27 +376,10 @@ class TestProdOrchestrator:
         assert "19:00" in context
         assert "晚饭时段" in context
 
-    @pytest.mark.asyncio
-    async def test_tool_query_runs_mcp_and_injects_data(self, tmp_path):
-        orch, plugin, memory, reg = _make_orchestrator(service_overrides={
-            "course_schedule": _offline_catalog_service(tmp_path),
-        })
-        event = _FakeEvent("帮我查一下数据结构课程")
-        result = await orch.run(
-            _make_envelope("帮我查一下数据结构课程"),
-            budget=RuntimeBudget(max_tool_steps=4, deadline_seconds=20),
-            perception=PerceptionResult(
-                needs_tools=True, topics=("course",),
-                candidate_intents=("course_query",),
-                speech_acts=(main.SpeechAct("command", 0.9),)),
-            event=event,
-        )
-        assert result.final_response and result.final_response.text == plugin.llm_reply
-        assert "[工具 mcp.course_schedule]" in plugin.last_user_msg
-        assert "数据结构" in plugin.last_user_msg
-        assert len(orch._last_state.tool_observations) >= 1
-        obs = orch._last_state.tool_observations[0]
-        assert obs.success and obs.data
+    def test_retired_course_capabilities_are_not_registered(self):
+        _orch, _plugin, _memory, reg = _make_orchestrator()
+        assert reg.get("mcp.course_schedule") is None
+        assert reg.get("mcp.icourse_reviews") is None
 
     @pytest.mark.asyncio
     async def test_weather_query_runs_weather_tool(self):
@@ -574,15 +453,15 @@ class TestProdOrchestrator:
         assert not any("[YmaKmern]" in r.content for r in records)
 
     @pytest.mark.asyncio
-    async def test_tool_memory_episodic_and_bot_scoped(self, tmp_path):
+    async def test_tool_memory_episodic_and_bot_scoped(self):
         orch, plugin, memory, reg = _make_orchestrator(service_overrides={
-            "course_schedule": _offline_catalog_service(tmp_path),
+            "weather": _offline_weather_service(),
         })
-        event = _FakeEvent("帮我查一下数据结构课程")
+        event = _FakeEvent("临泽县今天天气怎么样")
         result = await orch.run(
-            _make_envelope("帮我查一下数据结构课程"),
+            _make_envelope("临泽县今天天气怎么样"),
             budget=RuntimeBudget(max_tool_steps=4, deadline_seconds=20),
-            perception=PerceptionResult(needs_tools=True, topics=("course",)),
+            perception=PerceptionResult(needs_tools=True, topics=("weather",)),
             event=event,
         )
         receipt = DeliveryReceipt(run_id=result.run_id,

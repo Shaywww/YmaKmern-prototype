@@ -103,12 +103,11 @@ async def test_service_caches_identical_queries(monkeypatch):
     assert len(calls) == 1 and calls[0]["limit"] == 3
 
 
-def test_registry_and_planner_route_review_queries():
+def test_registry_and_planner_do_not_route_retired_review_queries():
     registry = CapabilityRegistry()
-    assert register_all_mcp_services(registry) == 13
+    assert register_all_mcp_services(registry) == 11
     capability = registry.get("mcp.icourse_reviews")
-    assert capability is not None
-    assert capability.schema.input_schema["properties"]["limit"]["maximum"] == 3
+    assert capability is None
 
     integration = integrate_with_orchestrator(None, registry)
     candidates = registry.filter_candidates(permissions=(), max_count=30)
@@ -116,6 +115,7 @@ def test_registry_and_planner_route_review_queries():
         user_intent="评课社区查一下微积分I 张瑞怎么样",
         available_capabilities=candidates,
     ))
-    assert plan.steps
-    assert plan.steps[0].capability_id == "mcp.icourse_reviews"
-    assert plan.steps[0].arguments["limit"] == 3
+    assert plan is None or all(
+        step.capability_id not in {
+            "mcp.course_schedule", "mcp.icourse_reviews"}
+        for step in plan.steps)
