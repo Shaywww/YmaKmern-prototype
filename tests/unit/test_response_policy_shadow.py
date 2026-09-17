@@ -1,6 +1,6 @@
 from dududa.core.message_catalog import MessageCatalog, MessageKey
 from dududa.core.persona.prompt_policy import (
-    build_scene_policy, build_untrusted_data_block,
+    PERSONA_KERNEL_VERSION, build_scene_policy, build_untrusted_data_block,
 )
 from dududa.core.response_policy import (
     ContinuationValue, Emotion, EmotionIntensity, Familiarity,
@@ -150,6 +150,22 @@ def test_banter_budget_is_a_soft_style_violation_and_prompt_is_low_effort():
     assert "不超过 48" in scene_prompt
     assert "优先只回一短句" in scene_prompt
     assert "修辞反问" in scene_prompt
+
+
+def test_persona_kernel_26_uses_concrete_conversation_actions():
+    from dududa.core.response_policy import ResolvedResponsePolicy
+    style = OutputStylePolicyResolver.resolve(
+        _signals(scene=Scene.CASUAL_CHAT))
+    interaction = InteractionPolicyResolver.resolve(
+        InteractionSignals(continuation_value=ContinuationValue.NONE),
+        SafetyDecision(risk_level=RiskLevel.LOW))
+    prompt = build_scene_policy(
+        Scene.CASUAL_CHAT, ResolvedResponsePolicy(interaction, style))
+    assert PERSONA_KERNEL_VERSION.endswith("/2.6")
+    assert "提问、调侃、质疑、补充、附和、纠正" in prompt
+    assert "选择一个最贴切的回应动作" in prompt
+    assert "短句、省略句、表达态度的反问都可以" in prompt
+    assert "要求停止时停止发言" in prompt
 
 
 def test_rhetorical_question_is_not_treated_as_information_followup():

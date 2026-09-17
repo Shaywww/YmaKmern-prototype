@@ -1533,6 +1533,18 @@ def _set_reply_context(event, value: str) -> None:
         setattr(event, "_dududa_reply_context", value)
 
 
+def _set_structured_reply_context(event, *, author: str, content: str) -> None:
+    """Keep bounded quote attribution for the current event only."""
+    payload = {
+        "author": str(author or "群成员")[:40],
+        "content": " ".join(str(content or "").split()).strip()[:400],
+    }
+    try:
+        event.set_extra("dududa_reply_context_structured", payload)
+    except Exception:
+        setattr(event, "_dududa_reply_context_structured", payload)
+
+
 def _render_reply_payload(payload) -> str:
     """Render quoted OneBot content without retaining ids or remote URLs."""
     if isinstance(payload, str):
@@ -1616,8 +1628,13 @@ async def _resolve_reply_context(plugin, event, msgs=()) -> str:
         except Exception:
             bot_id = ""
         label = "YmaKmern" if sender_id and sender_id == bot_id else "群成员"
+        if current_group and sender_id and label != "YmaKmern":
+            label = _group_context_tracker(plugin).sender_alias(
+                current_group, sender_id)
         context = f"{label}：{content}"[:500]
         _set_reply_context(event, context)
+        _set_structured_reply_context(
+            event, author=label, content=content)
         if current_group:
             current = " ".join(
                 str(getattr(event, "message_str", "") or "").split()).strip()

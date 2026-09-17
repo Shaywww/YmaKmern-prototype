@@ -748,16 +748,93 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         except Exception:
             return ""
 
-    def _live_group_context(self, state) -> str:
-        """Five-minute in-memory group queue; never read from durable memory."""
+    def _live_group_context(self, state, *, current_text: str = "",
+                            fallback_reply_context: str = "") -> str:
+        """Render a bounded current-interaction scene from the hot queue."""
         tracker = getattr(self._plugin, "group_context", None)
         if tracker is None:
             return ""
         try:
             group_id = self._conversation_id(state)
+            if not group_id:
+                return ""
+            event = getattr(self, "_pending_event", None)
+            message_id = ""
+            if event is not None:
+                message_id = str(
+                    getattr(event, "message_id", "")
+                    or getattr(getattr(event, "message_obj", None),
+                               "message_id", "")
+                    or "")
+            sender_id = ""
+            if event is not None:
+                try:
+                    sender_id = str(event.get_sender_id() or "")
+                except Exception:
+                    sender_id = str(getattr(
+                        getattr(event, "sender", None), "user_id", "") or "")
+            envelope = getattr(state, "envelope", None)
+            sender = getattr(envelope, "sender", None)
+            if not sender_id and sender is not None:
+                sender_id = str(getattr(sender, "actor_id", "") or "")
+
+            quote_payload = None
+            if event is not None:
+                try:
+                    quote_payload = event.get_extra(
+                        "dududa_reply_context_structured")
+                except Exception:
+                    quote_payload = getattr(
+                        event, "_dududa_reply_context_structured", None)
+            quoted_author = ""
+            quoted_text = ""
+            if isinstance(quote_payload, dict):
+                quoted_author = str(
+                    quote_payload.get("author", "") or "")[:40]
+                quoted_text = str(
+                    quote_payload.get("content", "") or "")[:400]
+            elif fallback_reply_context:
+                author, separator, content = str(
+                    fallback_reply_context).partition("：")
+                quoted_author = author[:40] if separator else "群成员"
+                quoted_text = (content if separator
+                               else fallback_reply_context)[:400]
+
+            perception = getattr(state, "perception", None)
+            reply_target = str(
+                getattr(perception, "reply_target", "unknown")
+                or "unknown")
+            if getattr(perception, "has_explicit_mention", False):
+                reply_target = "bot"
+            related_turn = str(
+                getattr(perception, "related_turn", "unknown")
+                or "unknown")
+            followup_kind = ""
+            if event is not None:
+                try:
+                    followup_kind = str(event.get_extra(
+                        "dududa_direct_followup_kind") or "")
+                except Exception:
+                    followup_kind = str(getattr(
+                        event, "_dududa_direct_followup_kind", "") or "")
+            awaited_input = {
+                "weather_location": "天气查询所需的城市或区县",
+            }.get(followup_kind, (
+                "上一轮明确要求补充的信息" if followup_kind else ""))
             warm = tracker.active_topic_context(group_id)
-            hot = tracker.render(group_id)
-            return "\n\n".join(part for part in (warm, hot) if part)
+            hot = tracker.render_interaction_scene(
+                group_id,
+                current_message_id=message_id,
+                current_sender_id=sender_id,
+                current_text=current_text,
+                reply_target=reply_target,
+                quoted_author=quoted_author,
+                quoted_text=quoted_text,
+                related_turn=related_turn,
+                awaited_input=awaited_input,
+                budget=1600,
+            )
+            return "\n\n".join(part for part in (hot, warm) if part)
         except Exception:
             return ""
 
@@ -1509,14 +1586,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     f"回复对象={target}，关联发言={related}，交际动作={act}。"
                     "这些是辅助判断，平台确认的@与回复链优先；"
                     "不要把字段名或分析过程说给用户。")
-        operational_extra = extra
-        live_group_context = self._live_group_context(state)
+        live_group_context = self._live_group_context(
+            state, current_text=combined,
+            fallback_reply_context=reply_context)
         if live_group_context:
             extra += (
-                " 群聊回复前先在内部判断场景：认真讨论时只答疑、简洁准确，"
-                "不要玩梗或主动打断；闲聊玩梗时用一到两句口语自然接话；"
-                "中性吐槽时先共情，不抬杠、不灌鸡汤。拿不准时按认真场景处理。"
+                " 当前互动现场只用于理解本轮，不代表每条旧消息都需要回复。"
+                "先判断当前发言是对谁说的，再选择关联发言；"
+                "延续自己已经表达过的态度，被纠正时及时调整。"
             )
+        operational_extra = extra
         dynamic_lines = self._dynamic_persona_lines(state)
         if dynamic_lines:
             extra += " 本轮动态语气：" + " ".join(dynamic_lines)
@@ -1585,7 +1664,10 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if style_lines:
             mem_prefix = ("\n".join(style_lines) + "\n") + (mem_prefix or "")
         if live_group_context:
-            mem_prefix = live_group_context + "\n\n" + (mem_prefix or "")
+            mem_prefix = (
+                ((mem_prefix or "").rstrip() + "\n\n")
+                if (mem_prefix or "").strip() else ""
+            ) + live_group_context
         try:
             is_group = bool(getattr(getattr(event, "message_obj", None), "group", None))
         except Exception:
@@ -1608,13 +1690,16 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     f"[工具 {observation.capability_id}]\n[数据状态: {status}]\n"
                     f"{_redact_text(self._format_tool_data(observation.data)[:1200])}")
             tool_block = "\n".join(tool_parts)
+            prompt_body = (mem_prefix if live_group_context
+                           else f"{mem_prefix}{model_input}")
             user_msg = (
-                f"{mem_prefix}{model_input}\n\n"
+                f"{prompt_body}\n\n"
                 f"以下是通过工具查到的真实数据（必须基于这些数据如实回答，不准编造）：\n"
                 f"{tool_block}{weather_rule}"
             )
         else:
-            user_msg = mem_prefix + model_input
+            user_msg = (mem_prefix if live_group_context
+                        else mem_prefix + model_input)
         _llm_kwargs = {}
         try:
             import inspect as _inspect

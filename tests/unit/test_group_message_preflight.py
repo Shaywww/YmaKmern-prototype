@@ -1461,9 +1461,12 @@ async def test_reply_context_resolves_onebot_message_into_short_group_queue(
     context = await h._resolve_reply_context(
         plugin, event, event.get_messages())
 
-    assert context == "群成员：广场上还有太极[图片]"
+    assert context == "成员2：广场上还有太极[图片]"
+    structured = event._dududa_reply_context_structured
+    assert structured == {
+        "author": "成员2", "content": "广场上还有太极[图片]"}
     rendered = h._group_context_text(plugin, event)
-    assert "回复内容：群成员：广场上还有太极[图片]" in rendered
+    assert "回复内容：成员2：广场上还有太极[图片]" in rendered
     assert "778899" not in rendered
     assert "secret.test" not in rendered
 

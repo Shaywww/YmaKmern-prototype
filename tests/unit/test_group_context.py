@@ -140,3 +140,80 @@ def test_resumed_topic_counts_messages_for_incremental_refresh():
     assert tracker.active_message_count("g") == 12
     tracker.consume_active_messages("g", 12)
     assert tracker.active_message_count("g") == 0
+
+
+def test_interaction_scene_prioritises_current_speaker_and_bot_exchange():
+    tracker = GroupConversationTracker(capacity=12, ttl_seconds=300)
+    tracker.add(group_id="g", sender_id="a", content="作业第三题我还没写",
+                message_id="a1", now=1000)
+    tracker.add(group_id="g", sender_id="bot", content="先把受力图画出来",
+                message_id="b1", is_bot=True, now=1001)
+    tracker.add(group_id="g", sender_id="b", content="晚上打游戏吗" * 15,
+                message_id="b2", now=1002)
+    tracker.add(group_id="g", sender_id="c", content="我先开一局" * 15,
+                message_id="c1", now=1003)
+    tracker.add(group_id="g", sender_id="a", content="还没写完",
+                message_id="a2", now=1004)
+
+    scene = tracker.interaction_scene(
+        "g", current_message_id="a2", current_sender_id="a",
+        current_text="还没写完", reply_target="bot", related_turn="T2",
+        now=1005)
+    assert scene is not None
+    assert scene.current_speaker == "成员1"
+    assert scene.reply_target == "YmaKmern"
+    assert [item.content for _, item in scene.recent_relevant] == [
+        "作业第三题我还没写"]
+    assert scene.last_bot_utterance.content == "先把受力图画出来"
+    assert scene.bot_engagement == "是"
+    assert scene.recent_bot_streak == 0
+
+    rendered = tracker.render_interaction_scene(
+        "g", current_message_id="a2", current_sender_id="a",
+        current_text="还没写完", reply_target="bot", related_turn="T2",
+        awaited_input="上一轮明确要求补充的信息",
+        now=1005, budget=900)
+    assert len(rendered) <= 900
+    assert "【当前互动现场" in rendered
+    assert "本轮新消息" in rendered and "还没写完" in rendered
+    assert "最近相关往来" in rendered and "作业第三题我还没写" in rendered
+    assert "机器人上次发言：先把受力图画出来" in rendered
+    assert "感知关联发言：T2" in rendered
+    assert "正在等待的参数或回答：上一轮明确要求补充的信息" in rendered
+
+
+def test_interaction_scene_keeps_explicit_quote_author_and_no_raw_id():
+    tracker = GroupConversationTracker()
+    quoted_alias = tracker.sender_alias("g", "qq-quoted", now=1000)
+    tracker.add(group_id="g", sender_id="qq-current", content="这句什么意思",
+                message_id="m2", now=1001)
+
+    rendered = tracker.render_interaction_scene(
+        "g", current_message_id="m2", current_sender_id="qq-current",
+        current_text="这句什么意思", reply_target="other",
+        quoted_author=quoted_alias, quoted_text="合着刚才全靠自由发挥",
+        now=1002)
+    assert f"明确引用：{quoted_alias}：合着刚才全靠自由发挥" in rendered
+    assert f"当前回复对象：{quoted_alias}" in rendered
+    assert "qq-quoted" not in rendered
+    assert "qq-current" not in rendered
+
+
+def test_wider_hot_queue_keeps_perception_turn_ids_at_t1_through_t7():
+    tracker = GroupConversationTracker(capacity=12)
+    for index in range(10):
+        tracker.add(
+            group_id="g", sender_id=f"u{index % 2}",
+            content=f"消息{index}", message_id=f"m{index}", now=1000 + index)
+
+    perception_view = tracker.render("g", now=1010)
+    assert "消息3" in perception_view and "消息9" in perception_view
+    assert "消息2" not in perception_view
+    assert "T7 [" in perception_view
+    assert "T8 [" not in perception_view
+
+    scene = tracker.render_interaction_scene(
+        "g", current_message_id="m9", current_sender_id="u1",
+        current_text="消息9", now=1010, budget=1600)
+    assert "H2 成员2" in scene
+    assert "T1 成员2" in scene
