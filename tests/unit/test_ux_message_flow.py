@@ -31,6 +31,11 @@ class Event:
 def plugin(tmp_path: Path):
     async def progress(event, text):
         await event.send(text)
+    stored_memory = []
+
+    def store_memory(event, *contents, **kwargs):
+        stored_memory.extend(contents)
+
     return SimpleNamespace(
         enabled=True,
         _last_file_ts=0.0,
@@ -42,6 +47,8 @@ def plugin(tmp_path: Path):
         ux_tasks=ConversationTaskRegistry(),
         progress_delay=0.01,
         _send_progress=progress,
+        _store_memory=store_memory,
+        stored_memory=stored_memory,
     )
 
 
@@ -99,8 +106,8 @@ async def test_message_flow_rejects_parallel_and_cancel_stops_active(tmp_path, m
     first = asyncio.create_task(dududa_handlers.run_message_flow(p, Event("m1")))
     await entered.wait()
     duplicate = await dududa_handlers.run_message_flow(p, Event("m2"))
-    assert "还在处理上一条" in duplicate
-    assert "perception" not in duplicate
+    assert duplicate == ""
+    assert p.stored_memory == ["[用户]: 请认真回答"]
     key = p.ux_store.session_key(Event("cancel"))
     assert p.ux_tasks.cancel(key)
     assert "已取消" in await first

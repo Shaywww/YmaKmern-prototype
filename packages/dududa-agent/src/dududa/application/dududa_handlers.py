@@ -55,6 +55,15 @@ _COLOR_EMOJI_RE = re.compile(
     "[\U0001F1E6-\U0001F1FF\U0001F300-\U0001FAFF]"
 )
 
+# QQ does not render Markdown.  Keep this deterministic and deliberately
+# narrow: remove presentation syntax without rewriting the reply itself.
+_MD_HEADING_RE = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]*")
+_MD_BULLET_RE = re.compile(r"(?m)^[ \t]{0,3}[-*+][ \t]+")
+_MD_STRONG_RE = re.compile(r"\*{2,3}(?=\S)|(?<=\S)\*{2,3}")
+_MD_UNDERSCORE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])_{2,}(?=\S)|(?<=\S)_{2,}(?![A-Za-z0-9_])")
+_MD_NUMBER_RE = re.compile(r"(?m)^[ \t]{0,3}\d{1,2}[.、)][ \t]+")
+
 _MAX_PROACTIVE_VISUAL_BYTES = 25 * 1024 * 1024
 _MAX_PROACTIVE_BATCH_BYTES = 40 * 1024 * 1024
 _VISUAL_KINDS = {
@@ -224,12 +233,28 @@ def _visual_summary(signal: dict, *, forced_kind: str = "",
     return f"{labels[final_kind]}摘要：" + "；".join(parts), final_kind
 
 
+def _strip_markdown_artifacts(text: str) -> str:
+    """Strip display-only Markdown while preserving ordinary numbers/code."""
+    value = str(text or "")
+    value = _MD_HEADING_RE.sub("", value)
+    value = _MD_BULLET_RE.sub("", value)
+    matches = list(_MD_NUMBER_RE.finditer(value))
+    if matches:
+        lines = [line for line in value.split("\n") if line.strip()]
+        if len(matches) >= 2 or len(matches) / max(1, len(lines)) >= 0.34:
+            value = _MD_NUMBER_RE.sub("", value)
+    value = _MD_UNDERSCORE_RE.sub("", value)
+    value = _MD_STRONG_RE.sub("", value)
+    return re.sub(r"[ \t]{2,}", " ", value)
+
+
 def _normalize_reply_style(text: str) -> str:
-    """最终投递前移除彩色 Emoji，同时完整保留 ASCII/颜文字。"""
+    """最终投递前移除彩色 Emoji 与 Markdown，保留 ASCII/颜文字。"""
     if not text:
         return text
     cleaned = _COLOR_EMOJI_RE.sub("", text)
     cleaned = cleaned.replace("\ufe0f", "").replace("\u200d", "")
+    cleaned = _strip_markdown_artifacts(cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +\n", "\n", cleaned)
     return cleaned.strip()
@@ -3282,7 +3307,26 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
     task_registered = False
     if ux_tasks is not None and task is not None and not silent_background:
         if not ux_tasks.register(task_key, task):
-            return "我还在处理上一条，等我一下。想停的话发 /ymakmern_cancel。"
+            # 连发补充静默并入当前会话，避免把任务队列和内部命令暴露给用户。
+            # 当前任务未必能及时读到它，但下一轮会从短期记忆看见。
+            try:
+                plugin._store_memory(
+                    event,
+                    "[用户]: " + str(
+                        getattr(event, "message_str", "") or "")[:300],
+                    run_id=run_id,
+                    trace_id=trace_id,
+                )
+            except Exception:
+                logger.debug(
+                    "Concurrent message absorb failed", exc_info=True)
+            trace_recorder.record(
+                event="concurrent_message_absorbed",
+                run_id=run_id,
+                trace_id=trace_id,
+                action="silent",
+            )
+            return ""
         task_registered = True
     memory_token = None
     if ux_store is not None:

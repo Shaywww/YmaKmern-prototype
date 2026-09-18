@@ -72,6 +72,22 @@ _HARD_NEGATIVE_EMOTION_RE = re.compile(
     r"没通过|考砸|翻车|失败)", re.I)
 _LAUGHTER_CONTEXT_RE = re.compile(
     r"(?:哈哈|hhh+|笑死|笑不活|好笑|视频|图片|表情包|梗)", re.I)
+_PAIN_EMOJI_RE = re.compile(
+    "[\U0001F62D\U0001F622\U0001F614\U0001F61E\U0001F972\U0001F616"
+    "\U0001F629\U0001F62B\U0001F625\U0001F494\U0001F97A]")
+_CRY_SOUND_RE = re.compile(r"(?:呜呜+|嘤嘤+|呜哇|哇哇哇)")
+_HELPLESS_RE = re.compile(
+    r"(?:不知道(?:该)?怎么(?:办|搞|弄|说)|我也没辙|没辙了|"
+    r"(?:完全|根本|都)?不想搭理我|不搭理我|不理我了|"
+    r"你不懂我|没人懂我|没人理解我|"
+    r"你咋这样|你怎能这样|"
+    r"说不出话|憋得慌|喘不过气|"
+    r"蚌埠住了|绷不住了|绷不住)")
+_SIGH_RE = re.compile(
+    r"^(?:唉|哎|嗐)[呀啊哦]?[，,。！!~～\s]*$|"
+    r"^(?:唉|哎|嗐)[呀啊哦]?[，,]")
+_STRONG_EXTRA_RE = re.compile(
+    "[\U0001F62D\U0001F622\U0001F614\U0001F972\U0001F629\U0001F494]")
 
 
 def _strip_tail_particles(text: str) -> str:
@@ -140,15 +156,28 @@ def extract_profile_signals(text: str) -> tuple[str, tuple[str, ...], tuple[str,
 
 
 def detect_emotional_tone(text: str) -> str:
-    """Conservative explicit emotion signal used for short continuity only."""
+    """显式情绪信号，用于短程情绪延续。"""
     value = str(text or "")
     negative = bool(_NEGATIVE_EMOTION_RE.search(value))
     positive = bool(_POSITIVE_EMOTION_RE.search(value))
+    strong = bool(_HARD_NEGATIVE_EMOTION_RE.search(value))
+    if _PAIN_EMOJI_RE.search(value):
+        negative = True
+        if _STRONG_EXTRA_RE.search(value):
+            strong = True
+    if _CRY_SOUND_RE.search(value):
+        negative = strong = True
+    laughter = bool(_LAUGHTER_CONTEXT_RE.search(value))
+    if not laughter:
+        if _HELPLESS_RE.search(value):
+            negative = True
+        if _SIGH_RE.search(value.strip()):
+            negative = True
     if negative and positive:
         # 笑着说一次明确受挫仍按负面接住；“视频绷不住哈哈”则是玩梗。
-        if _HARD_NEGATIVE_EMOTION_RE.search(value):
+        if strong:
             return "negative"
-        if _LAUGHTER_CONTEXT_RE.search(value):
+        if laughter:
             return "positive"
         return ""
     if negative:
@@ -397,7 +426,7 @@ class ProfileStore:
             emotion = detect_emotional_tone(text)
             if emotion:
                 sess.emotional_tone = emotion
-                sess.emotion_turns_remaining = 3
+                sess.emotion_turns_remaining = 5
             elif sess.emotion_turns_remaining > 0:
                 sess.emotion_turns_remaining -= 1
                 if sess.emotion_turns_remaining == 0:

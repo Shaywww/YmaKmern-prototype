@@ -143,16 +143,16 @@ def test_banter_budget_is_a_soft_style_violation_and_prompt_is_low_effort():
         InteractionSignals(continuation_value=ContinuationValue.NONE),
         SafetyDecision(risk_level=RiskLevel.LOW))
     policy = ResolvedResponsePolicy(interaction, style)
-    assert style.max_chars == 48
-    assert "too_long" in style_contract_violations("这" * 49, style)
-    assert "too_long" not in style_contract_violations("这" * 48, style)
+    assert style.max_chars == 15
+    assert "too_long" in style_contract_violations("这" * 16, style)
+    assert "too_long" not in style_contract_violations("这" * 15, style)
     scene_prompt = build_scene_policy(Scene.PLAYFUL_BANTER, policy)
-    assert "不超过 48" in scene_prompt
+    assert "不超过 15" in scene_prompt
     assert "优先只回一短句" in scene_prompt
     assert "修辞反问" in scene_prompt
 
 
-def test_persona_kernel_26_uses_concrete_conversation_actions():
+def test_persona_kernel_27_uses_concrete_conversation_actions():
     from dududa.core.response_policy import ResolvedResponsePolicy
     style = OutputStylePolicyResolver.resolve(
         _signals(scene=Scene.CASUAL_CHAT))
@@ -161,11 +161,13 @@ def test_persona_kernel_26_uses_concrete_conversation_actions():
         SafetyDecision(risk_level=RiskLevel.LOW))
     prompt = build_scene_policy(
         Scene.CASUAL_CHAT, ResolvedResponsePolicy(interaction, style))
-    assert PERSONA_KERNEL_VERSION.endswith("/2.6")
+    assert PERSONA_KERNEL_VERSION.endswith("/2.7")
     assert "提问、调侃、质疑、补充、附和、纠正" in prompt
     assert "选择一个最贴切的回应动作" in prompt
     assert "短句、省略句、表达态度的反问都可以" in prompt
     assert "要求停止时停止发言" in prompt
+    assert "默认的动作是表态，不是解决" in prompt
+    assert "不用「不是A，是B」" in prompt
 
 
 def test_rhetorical_question_is_not_treated_as_information_followup():

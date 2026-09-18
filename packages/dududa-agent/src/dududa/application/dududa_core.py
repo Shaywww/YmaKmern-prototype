@@ -95,6 +95,12 @@ _CLAUSE_LIKE_RE = re.compile(
     r"(?:今天|昨天|明天|刚才|现在|我|你|他|她|大家|好困|困死|"
     r"好累|累死|好烦|烦死|不错|开心|难受|想要|觉得|感觉|正在|"
     r"已经|还是|但是|不过|然后|又|太|很|真|了)$")
+_LATIN_SLANG = frozenset({
+    "wok", "woc", "wocc", "wc", "emo", "yyds", "xswl", "awsl",
+    "y1s1", "u1s1", "bbl", "dd", "gg", "xjj", "xdm", "jrm",
+    "yygq", "xsw", "dbq", "lol", "hhh", "hh", "233", "2333",
+    "ok", "okay", "no", "yes", "sos", "wsl",
+})
 
 
 def _looks_like_bare_noun_query(text: str) -> bool:
@@ -109,7 +115,7 @@ def _looks_like_bare_noun_query(text: str) -> bool:
     if not value or len(value) > 16 or re.search(r"[，。！？、\s：:；;]", value):
         return False
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9+_.-]{0,15}", value):
-        return True
+        return value.lower() not in _LATIN_SLANG
     if not re.fullmatch(r"[\u4e00-\u9fff]{2,12}", value):
         return False
     if _CLAUSE_LIKE_RE.search(value):

@@ -116,6 +116,15 @@ class TestPerceptionNounQuery:
         assert "noun_query" in acts
         assert "greeting" not in acts
 
+    def test_latin_slang_is_a_statement_not_a_noun_query(
+            self, monkeypatch, tmp_path):
+        plugin = _plugin(monkeypatch, tmp_path)
+        for text in ("wok", "woc", "yyds", "hhh", "ok", "sos"):
+            pr = plugin._perceive(_FakeEvent(text, group="g1", user="u1"))
+            acts = [act.act_type for act in pr.speech_acts]
+            assert "noun_query" not in acts, text
+            assert acts, text
+
     def test_greeting_perception(self, monkeypatch, tmp_path):
         plugin = _plugin(monkeypatch, tmp_path)
         pr = plugin._perceive(_FakeEvent("你好", group="g1", user="u1"))

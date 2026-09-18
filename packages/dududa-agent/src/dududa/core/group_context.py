@@ -584,19 +584,6 @@ class GroupConversationTracker:
                 required=True)
         else:
             append("机器人上次发言：无", required=True)
-        append(
-            f"最近是否有人接机器人的话：{scene.bot_engagement}",
-            required=True)
-        append(
-            f"机器人最近连续发言条数：{scene.recent_bot_streak}",
-            required=True)
-        if scene.related_turn not in {"", "none", "unknown"}:
-            append(f"感知关联发言：{scene.related_turn}", required=True)
-        if scene.awaited_input:
-            append(
-                f"正在等待的参数或回答：{scene.awaited_input}",
-                required=True)
-
         if scene.recent_relevant:
             append("最近相关往来：")
             for turn_id, item in scene.recent_relevant[-6:]:

@@ -106,6 +106,19 @@ def test_reply_style_preserves_factual_symbols():
         "气温 24℃，评分 4.7，距离约 2 km")
 
 
+def test_reply_style_strips_markdown_artifacts_without_rewriting_content():
+    source = "# 建议\n**先停一下**\n- 喝口水\n- 休息两分钟"
+    assert h._normalize_reply_style(source) == (
+        "建议\n先停一下\n喝口水\n休息两分钟")
+
+
+def test_reply_style_strips_numbered_list_but_preserves_inline_numbers():
+    assert h._normalize_reply_style(
+        "1. 先停一下\n2. 再想想") == "先停一下\n再想想"
+    assert h._normalize_reply_style(
+        "预算 3.5 万，第 1 天报到") == "预算 3.5 万，第 1 天报到"
+
+
 def test_explicit_choice_executes_current_instruction(monkeypatch):
     monkeypatch.setattr(h.random, "choice", lambda values: values[2])
     reply = h._explicit_choice_reply(

@@ -70,7 +70,7 @@ def test_social_opening_does_not_become_generic_information_scene():
     assert {item.style_signals.scene for item in results} == {
         Scene.SOCIAL_OPENING}
     assert {item.policy.interaction.followup_mode for item in results} == {
-        FollowupMode.FORBIDDEN}
+        FollowupMode.OPTIONAL}
 
 
 def test_capability_overview_has_its_own_non_playful_scene():
@@ -111,11 +111,11 @@ def test_real_semantic_risk_change_may_change_policy():
     assert critical.policy.interaction.followup_mode == FollowupMode.REQUIRED
 
 
-def test_emotional_support_may_continue_but_casual_chat_does_not_have_to():
+def test_casual_chat_and_emotional_support_may_both_continue():
     support = _resolve("今天答辩翻车了，我好难受")
     casual = _resolve("这个真好看")
     assert support.policy.interaction.followup_mode == FollowupMode.OPTIONAL
-    assert casual.policy.interaction.followup_mode == FollowupMode.FORBIDDEN
+    assert casual.policy.interaction.followup_mode == FollowupMode.OPTIONAL
 
 
 def test_identity_probe_has_bounded_humor_and_no_kaomoji():
@@ -152,7 +152,7 @@ def test_playful_banter_beats_generic_question_shape_and_gets_tight_budget():
     results = [_resolve(text) for text in messages]
     assert {item.style_signals.scene for item in results} == {
         Scene.PLAYFUL_BANTER}
-    assert {item.policy.style.max_chars for item in results} == {48}
+    assert {item.policy.style.max_chars for item in results} == {15}
     assert {item.policy.style.humor_level for item in results} == {1}
 
 
@@ -169,9 +169,9 @@ def test_perceived_rhetorical_question_selects_banter_without_keyword_match():
     assert result.style_signals.scene == Scene.PLAYFUL_BANTER
 
 
-def test_forbidden_followup_allows_stance_question_but_flags_info_request():
+def test_banter_forbids_info_followup_but_allows_stance_question():
     rhetorical = _resolve("你攻击性太强了", response="我这算攻击性强？")
-    information = _resolve("这个真好看", response="你在哪里买的？")
+    information = _resolve("你攻击性太强了", response="你在哪里买的？")
     assert "unexpected_followup" not in rhetorical.violations
     assert "unexpected_followup" in information.violations
 
@@ -180,7 +180,7 @@ def test_real_negative_feeling_overrides_banter_terms():
     result = _resolve("被人道德绑架以后我真的很难受")
     assert result.style_signals.scene == Scene.EMOTIONAL_SUPPORT
     assert result.policy.style.humor_level == 0
-    assert result.policy.style.max_chars == 0
+    assert result.policy.style.max_chars == 40
 
 
 def test_laughter_context_and_real_setback_do_not_share_one_emotion():

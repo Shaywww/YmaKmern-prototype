@@ -17,7 +17,7 @@ from typing import Optional
 from .quality_eval import persona_contract_violations
 
 
-POLICY_VERSION = "response-policy/1.3"
+POLICY_VERSION = "response-policy/1.4"
 
 
 class Scene(str, Enum):
@@ -318,10 +318,12 @@ class OutputStylePolicyResolver:
         RiskLevel.CRITICAL: 0,
     }
     _SCENE_MAX_CHARS = {
-        # Human banter is usually a low-effort acknowledgement or comeback,
-        # not a complete miniature essay.  Other scenes intentionally remain
-        # unbounded here and are governed by their own content requirements.
-        Scene.PLAYFUL_BANTER: 48,
+        Scene.PLAYFUL_BANTER: 15,
+        Scene.CASUAL_CHAT: 25,
+        Scene.SOCIAL_OPENING: 20,
+        Scene.EMOTIONAL_SUPPORT: 40,
+        Scene.PRIDE_ACKNOWLEDGED: 25,
+        Scene.IDENTITY_PROBE: 30,
     }
 
     @classmethod

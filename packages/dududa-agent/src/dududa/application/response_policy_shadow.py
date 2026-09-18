@@ -479,6 +479,11 @@ def _continuation_value(
             ContinuationValue.USEFUL,
             "continuation.emotional_support.v1",
         )
+    elif scene in (Scene.CASUAL_CHAT, Scene.SOCIAL_OPENING):
+        value, rule = (
+            ContinuationValue.USEFUL,
+            "continuation.casual_chat.v1",
+        )
     else:
         value, rule = (
             ContinuationValue.NONE,

@@ -178,8 +178,10 @@ def test_interaction_scene_prioritises_current_speaker_and_bot_exchange():
     assert "本轮新消息" in rendered and "还没写完" in rendered
     assert "最近相关往来" in rendered and "作业第三题我还没写" in rendered
     assert "机器人上次发言：先把受力图画出来" in rendered
-    assert "感知关联发言：T2" in rendered
-    assert "正在等待的参数或回答：上一轮明确要求补充的信息" in rendered
+    assert "感知关联发言" not in rendered
+    assert "正在等待的参数或回答" not in rendered
+    assert "机器人最近连续发言条数" not in rendered
+    assert "最近是否有人接机器人的话" not in rendered
 
 
 def test_interaction_scene_keeps_explicit_quote_author_and_no_raw_id():

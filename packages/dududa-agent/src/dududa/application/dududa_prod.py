@@ -1061,6 +1061,13 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if len(recent) >= 3 and sum(
                 1 for text in recent[:3] if "AI" in text.upper()) >= 3:
             lines.append("最近三次都自称 AI；这轮不要再提 AI、机器人或给自己贴同类标签。")
+        not_a_but_b_re = re.compile(r"不是.{1,14}[，,]\s*是")
+        if len(recent) >= 3 and sum(
+                1 for text in recent[:3]
+                if not_a_but_b_re.search(text)) >= 2:
+            lines.append(
+                "最近几次都用了「不是A，是B」的结构；这轮换一种说法，"
+                "直接说结论或给一个具体反应。")
         return tuple(lines)
 
     @staticmethod
@@ -1355,10 +1362,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         plugin = self._plugin
         if plugin is not None:
             system = (
-                f"把下面这句群聊斗嘴回复压到不超过 {max_chars} 个可见字符。"
-                "删掉铺垫、重复解释和完整段子结构，只留一短句。"
+                f"把下面这句用户可见回复压到不超过 {max_chars} 个可见字符。"
+                "保留核心态度或具体感受，删掉铺垫、重复解释和完整段子结构，"
+                "只留一短句。"
                 "不得添加新事实，不提 AI 或机器人，不以笑声或叹词开头，"
-                "不用问题收尾，最多保留一个纯文本颜文字。只输出压缩结果。"
+                "最多保留一个纯文本颜文字。只输出压缩结果。"
             )
             try:
                 candidate = await plugin._call_llm(

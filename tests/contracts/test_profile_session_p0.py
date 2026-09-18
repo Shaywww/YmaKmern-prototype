@@ -171,10 +171,10 @@ class TestProfileStore:
                              "今天真的好烦", engaged=True)
         session = store.get_session("c1", "u1")
         assert session.emotional_tone == "negative"
-        assert session.emotion_turns_remaining == 3
+        assert session.emotion_turns_remaining == 5
         store.record_message("qq", "dududa", "c1", "u1",
                              "然后呢", engaged=True)
-        assert store.get_session("c1", "u1").emotion_turns_remaining == 2
+        assert store.get_session("c1", "u1").emotion_turns_remaining == 4
         loaded = ProfileStore(path=path)
         assert loaded.get_session("c1", "u1").emotional_tone == "negative"
         assert loaded.get_user("qq", "dududa", "u1").interaction_count == 2

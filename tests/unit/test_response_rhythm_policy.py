@@ -111,16 +111,27 @@ async def test_overlong_banter_gets_one_bounded_compression_attempt():
 
         async def _call_llm(self, system, user_msg, **kwargs):
             self.calls += 1
-            assert "不超过 48" in system
+            assert "不超过 15" in system
             return "这帽子扣得挺顺手。"
 
     orchestrator = object.__new__(_ProdOrchestrator)
     orchestrator._plugin = Plugin()
     state = SimpleNamespace(run_id="run-1", trace_id="trace-1")
     result = await orchestrator._compress_low_effort_reply(
-        state, "这是一段明显超过预算而且铺垫非常多的完整小作文。" * 3, 48)
+        state, "这是一段明显超过预算而且铺垫非常多的完整小作文。" * 3, 15)
     assert result == "这帽子扣得挺顺手。"
     assert orchestrator._plugin.calls == 1
+
+
+def test_repeated_not_a_but_b_structure_creates_guidance():
+    orchestrator = object.__new__(_ProdOrchestrator)
+    orchestrator._recent_bot_utterances = lambda state, limit=3: (
+        "这不是嫌弃，是担心。",
+        "不是不理你，是刚才没看见。",
+        "行，我知道了。",
+    )
+    lines = orchestrator._rhythm_persona_lines(SimpleNamespace())
+    assert any("不是A，是B" in line for line in lines)
 
 
 def test_deterministic_budget_clip_is_stable():
