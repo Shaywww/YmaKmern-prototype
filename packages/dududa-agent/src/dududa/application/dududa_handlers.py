@@ -806,6 +806,12 @@ def _event_run_id(event) -> str:
 
 def stage_group_reply_context(plugin, event, reply: str) -> None:
     """Stage a group-visible bot utterance until the send hook confirms it."""
+    origin = str(_get_event_extra(event, "dududa_response_origin", ""))
+    if origin in {"progress", "system_error", "user_cancelled"}:
+        # Operational status is visible UI state, not something the persona
+        # "said".  Keeping it out prevents later turns from treating retries
+        # and failures as shared jokes or stable positions.
+        return
     group_id = _event_group_id(event)
     text = " ".join(str(reply or "").split()).strip()[:500]
     if not group_id or not text:
@@ -864,6 +870,12 @@ async def complete_delivery_after_send(plugin, event) -> None:
     pending = getattr(plugin, "_pending_deliveries", None) or {}
     item = pending.pop(run_id, None)
     if not item:
+        trace_id = str(_get_event_extra(
+            event, "dududa_delivery_trace_id", ""))
+        if trace_id:
+            _trace_interaction_stage(
+                event, run_id=run_id, trace_id=trace_id,
+                stage="send_success")
         return
     result, reply, ready_ts = item
     latency_ms = int((time.time() - ready_ts) * 1000)
@@ -884,6 +896,9 @@ async def complete_delivery_after_send(plugin, event) -> None:
         status=receipt.status.value, skipped=False, platform=platform,
         latency_ms=latency_ms, final_phase=comp.final_phase,
         memory_write_receipts=list(comp.memory_write_receipts))
+    _trace_interaction_stage(
+        event, run_id=run_id, trace_id=result.trace_id,
+        stage="send_success")
     logger.info(
         "Flow delivery | run_id=%s trace_id=%s status=%s phase=%s "
         "memory=%d latency=%dms",
@@ -3225,9 +3240,78 @@ def _preflight_group_message(plugin, event, msgs) -> bool:
     return False
 
 
+def _set_event_extra(event, key: str, value) -> None:
+    try:
+        event.set_extra(key, value)
+    except Exception:
+        setattr(event, f"_{key}", value)
+
+
+def _get_event_extra(event, key: str, default=None):
+    try:
+        value = event.get_extra(key)
+    except Exception:
+        value = getattr(event, f"_{key}", default)
+    return default if value is None else value
+
+
+def _replace_event_text(event, text: str) -> None:
+    """Replace only this event's effective text after turn coalescing."""
+    value = str(text or "").strip()
+    event.message_str = value
+    obj = getattr(event, "message_obj", None)
+    if obj is not None and hasattr(obj, "message_str"):
+        obj.message_str = value
+
+
+def _task_key_for_event(event) -> str:
+    """Match ``UserExperienceStore.session_key`` without touching the store."""
+    try:
+        platform = str(event.get_platform_name())
+    except Exception:
+        platform = "unknown"
+    try:
+        session = str(event.get_session_id())
+    except Exception:
+        session = "unknown"
+    try:
+        actor = str(event.get_sender_id())
+    except Exception:
+        actor = "unknown"
+    return hashlib.sha256(
+        f"{platform}:{session}:{actor}".encode("utf-8", "replace")
+    ).hexdigest()
+
+
+def _turn_merge_delay(plugin, event, msgs) -> float:
+    """Return a small quiet window only for likely conversational fragments."""
+    configured = max(0.0, float(getattr(plugin, "turn_merge_delay", 0.0)))
+    if not configured or _is_ambient_wake(event) or _is_at_only(event, msgs):
+        return 0.0
+    if _detect_media(event)[0]:
+        return 0.0
+    text = " ".join(str(getattr(event, "message_str", "") or "").split())
+    if not text or len(text) > 32 or re.search(r"[。！？?!…]$", text):
+        return 0.0
+    return configured
+
+
+def _trace_interaction_stage(event, *, run_id: str, trace_id: str,
+                             stage: str) -> None:
+    started = float(_get_event_extra(event, "dududa_received_ts", time.time()))
+    trace_recorder.record(
+        event="interaction_timing", run_id=run_id, trace_id=trace_id,
+        stage=stage,
+        elapsed_ms=max(0, int((time.time() - started) * 1000)),
+        flow_kind=str(_get_event_extra(event, "dududa_flow_kind", "unknown")),
+    )
+
+
 async def run_message_flow(plugin, event) -> str | None:
     """Run one message and shadow-resolve policy for every visible reply."""
     run_id, trace_id = uuid4().hex, uuid4().hex
+    _set_event_extra(event, "dududa_received_ts", time.time())
+    _set_event_extra(event, "dududa_flow_kind", "unknown")
     try:
         event.set_extra("dududa_policy_run_id", run_id)
         event.set_extra("dududa_policy_trace_id", trace_id)
@@ -3237,6 +3321,10 @@ async def run_message_flow(plugin, event) -> str | None:
     reply = await _run_message_flow_impl(
         plugin, event, run_id=run_id, trace_id=trace_id)
     if reply:
+        # Deterministic/fallback replies do not create a RuntimeResult, but the
+        # framework send hook must still be able to record real send latency.
+        _tag_event_run(event, run_id)
+        _set_event_extra(event, "dududa_delivery_trace_id", trace_id)
         from dududa.application.response_policy_shadow import (
             trace_response_policy_shadow,
         )
@@ -3264,7 +3352,35 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
     if not msg_id: msg_id = str(id(event))
     if _dedupe_message(plugin, event, msg_id): return None
     if _cross_session_reply_dropped(plugin, event): return None
-    if not _preflight_group_message(plugin, event, msgs): return None
+    ux_store = getattr(plugin, "ux_store", None)
+    ux_tasks = getattr(plugin, "ux_tasks", None)
+    task = asyncio.current_task()
+    task_key = _task_key_for_event(event) if ux_store is not None else ""
+    turn_buffer = getattr(ux_tasks, "turn_buffer", None)
+    active_turn = (ux_tasks.running(task_key)
+                   if ux_tasks is not None and task_key else None)
+    collecting_turn = bool(
+        turn_buffer is not None and task_key
+        and turn_buffer.collecting(task_key))
+    admitted = _preflight_group_message(plugin, event, msgs)
+    # A same-speaker supplement may no longer contain an @.  Keep it attached
+    # to the already admitted turn instead of dropping it at the group gate.
+    if not admitted and not (active_turn or collecting_turn):
+        return None
+    if not admitted:
+        # A continuation of an already admitted directed turn remains directed
+        # even when the supplemental bubble does not repeat the @ mention.
+        try:
+            event.is_at_or_wake_command = True
+        except Exception:
+            pass
+    if active_turn is not None:
+        # Invalidate the in-flight answer immediately.  Waiting for the merge
+        # window before doing this could let a now-stale reply escape first.
+        active_turn.superseded = True
+    superseded_text = str(
+        getattr(active_turn, "turn_text", "") or "").strip()
+
     retired_reply = retired_course_query_reply(
         str(getattr(event, "message_str", "") or ""))
     if retired_reply and (
@@ -3297,36 +3413,76 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         return None
     if photo_batch is not None:
         _set_group_photo_batch(event, photo_batch)
+    trace_recorder.record(
+        event="interaction_timing", run_id=run_id, trace_id=trace_id,
+        stage="received", elapsed_ms=0, flow_kind="unknown")
+    if (turn_buffer is not None and task is not None and task_key
+            and not _is_ambient_wake(event)
+            and str(getattr(event, "message_str", "") or "").strip()):
+        merge_delay = _turn_merge_delay(plugin, event, msgs)
+        merged = await turn_buffer.merge(
+            task_key, str(getattr(event, "message_str", "") or ""),
+            quiet_seconds=merge_delay,
+            max_seconds=float(getattr(plugin, "turn_merge_max_delay", 1.2)),
+        )
+        if merged is None:
+            trace_recorder.record(
+                event="turn_merge", run_id=run_id, trace_id=trace_id,
+                action="merged_follower")
+            return ""
+        if (superseded_text and merged != superseded_text
+                and not merged.startswith(superseded_text + "\n")):
+            merged = superseded_text + "\n" + merged
+        if merged:
+            _replace_event_text(event, merged)
+        trace_recorder.record(
+            event="turn_merge", run_id=run_id, trace_id=trace_id,
+            action="leader", message_count=max(1, merged.count("\n") + 1),
+            wait_ms=int(merge_delay * 1000))
+    _trace_interaction_stage(
+        event, run_id=run_id, trace_id=trace_id, stage="merge_end")
     if not msgs:
         if time.time() - plugin._last_file_ts < 3: return None
-    ux_store = getattr(plugin, "ux_store", None)
-    ux_tasks = getattr(plugin, "ux_tasks", None)
-    task = asyncio.current_task()
-    task_key = ux_store.session_key(event) if ux_store is not None else ""
     silent_background = _is_ambient_wake(event)
     task_registered = False
     if ux_tasks is not None and task is not None and not silent_background:
-        if not ux_tasks.register(task_key, task):
-            # 连发补充静默并入当前会话，避免把任务队列和内部命令暴露给用户。
-            # 当前任务未必能及时读到它，但下一轮会从短期记忆看见。
-            try:
-                plugin._store_memory(
-                    event,
-                    "[用户]: " + str(
-                        getattr(event, "message_str", "") or "")[:300],
-                    run_id=run_id,
-                    trace_id=trace_id,
-                )
-            except Exception:
-                logger.debug(
-                    "Concurrent message absorb failed", exc_info=True)
+        turn_text = str(getattr(event, "message_str", "") or "")
+        try:
+            registered = ux_tasks.register(
+                task_key, task, turn_text=turn_text)
+        except TypeError:
+            # Compatibility for narrow adapter/test registries implementing
+            # the original two-argument protocol.
+            registered = ux_tasks.register(task_key, task)
+        if not registered:
+            if not hasattr(ux_tasks, "queue_replacement"):
+                trace_recorder.record(
+                    event="concurrent_message_absorbed", run_id=run_id,
+                    trace_id=trace_id, action="silent")
+                return ""
+            replacement_leader, previous = ux_tasks.queue_replacement(
+                task_key, task, turn_text)
             trace_recorder.record(
-                event="concurrent_message_absorbed",
-                run_id=run_id,
+                event="concurrent_message_absorbed", run_id=run_id,
                 trace_id=trace_id,
-                action="silent",
-            )
-            return ""
+                action=("wait_and_replace" if replacement_leader
+                        else "merged_into_replacement"))
+            if not replacement_leader:
+                return ""
+            if previous is not None:
+                try:
+                    await asyncio.shield(previous)
+                except asyncio.CancelledError:
+                    if task.cancelling():
+                        raise
+                except Exception:
+                    pass
+            replacement = ux_tasks.take_replacement(task_key, task)
+            if replacement:
+                _replace_event_text(event, replacement)
+                turn_text = replacement
+            if not ux_tasks.register(task_key, task, turn_text=turn_text):
+                return ""
         task_registered = True
     memory_token = None
     if ux_store is not None:
@@ -3359,10 +3515,29 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
     try:
         reply = await _run_flow_inner(
             plugin, event, msgs, run_id, trace_id)
+        _trace_interaction_stage(
+            event, run_id=run_id, trace_id=trace_id,
+            stage="generation_end")
+        if (task_registered and ux_tasks is not None and task is not None
+                and hasattr(ux_tasks, "is_superseded")
+                and ux_tasks.is_superseded(task_key, task)):
+            pending = getattr(plugin, "_pending_deliveries", None) or {}
+            pending.pop(run_id, None)
+            try:
+                await plugin.runtime.complete_without_delivery()
+            except Exception:
+                logger.debug("Stale turn completion failed", exc_info=True)
+            trace_recorder.record(
+                event="stale_reply_cancelled", run_id=run_id,
+                trace_id=trace_id, reason="newer_same_speaker_turn")
+            return ""
         reply = _normalize_reply_style(
             _sanitize_conversational_reply(
                 _strip_tool_leak(reply),
                 str(getattr(event, "message_str", "") or "")))
+        _trace_interaction_stage(
+            event, run_id=run_id, trace_id=trace_id,
+            stage="validation_end")
         followup_kind = _requested_followup_kind(event)
         if reply and followup_kind:
             _mark_pending_followup(event, followup_kind)
@@ -3448,11 +3623,18 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
         registry = getattr(plugin, "ux_tasks", None)
         active = registry.running(task_key) if registry is not None else None
         phase = active.phase if active is not None else "compose"
+        if phase != "tools":
+            trace_recorder.record(
+                event="progress_notice", run_id=str(
+                    _get_event_extra(event, "dududa_policy_run_id", "")),
+                trace_id=str(
+                    _get_event_extra(event, "dududa_policy_trace_id", "")),
+                action="skipped", reason="non_tool_phase",
+                phase=phase, response_origin="progress",
+                memory_eligible=False)
+            return
         labels = {
-            "preparing": "正在理解你的问题",
-            "perception": "正在分析需求",
             "tools": "正在查询并核对信息",
-            "compose": "正在整理答案",
         }
         sender = getattr(plugin, "_send_progress", None)
         if sender is not None:
@@ -3473,6 +3655,10 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
                 run_id=run_id, trace_id=trace_id,
                 origin_override=ResponseOrigin.PROGRESS)
             await sender(event, progress)
+            trace_recorder.record(
+                event="progress_notice", run_id=run_id, trace_id=trace_id,
+                action="sent", phase=phase, response_origin="progress",
+                memory_eligible=False)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -3484,6 +3670,10 @@ def _mark_task_phase(plugin, event, phase: str) -> None:
     registry = getattr(plugin, "ux_tasks", None)
     if store is not None and registry is not None:
         registry.mark_phase(store.session_key(event), phase)
+    if phase == "tools":
+        _set_event_extra(event, "dududa_flow_kind", "tool")
+    elif phase == "compose":
+        _set_event_extra(event, "dududa_flow_kind", "chat")
 
 
 async def _run_flow_inner(plugin, event, msgs, run_id, trace_id):

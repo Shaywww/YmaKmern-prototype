@@ -82,7 +82,8 @@ tests/                # 分层测试：unit / contracts / integration / evals / 
 
 ### 用户体验闭环
 
-- 会话级慢任务注册、阶段进度提示、用户取消和并发任务拦截
+- 会话级慢任务注册、工具阶段进度提示、用户取消和连续消息合并；普通闲聊不发送“正在分析/整理”状态
+- Trace 分开记录收消息、合并结束、模型开始、首个完整模型输出、生成结束、校验结束与发送成功；`python ops/latency_report.py --days 7` 可按聊天/工具路径查看 P50、P95 和每轮模型调用数
 - 首次主动私聊引导，错误恢复提供稳定支持编号；保留主/备模型降级
 - 记忆自助管理：本人作用域内查看/删除，active/paused/temporary 三种模式按异步任务隔离
 - 显式订阅中心：默认关闭、免打扰、每日限频、管理员预览确认、发送前二次资格校验
@@ -142,6 +143,7 @@ tests/                # 分层测试：unit / contracts / integration / evals / 
 - 普通聊天参与率独立于话题抽样率：`DUDUDA_AMBIENT_TOPIC_REPLY_RATE` 只影响“外卖/摸鱼”等关键词话题；小群普通对话的参与由 `DUDUDA_AMBIENT_CHAT_REPLY_RATE`（提名率，默认 `1.0`）与 `DUDUDA_AMBIENT_CHAT_MIN_CONFIDENCE`（模型放行阈值，默认 `0.68`）独立控制，三者互不影响，也不被群策略 `reply_rate` 覆盖
 - 普通语义复核允许 `casual_chat`（轻松日常交流）、`casual_meme` 和低风险 `neutral_complaint`，仍拒绝认真讨论、争执和信息不足。拒绝写入 `semantic_silence` 的 `reject_reason/scene/confidence/threshold`；放行写入 `semantic_review`。置信度标注为 `model_self_report`，不是校准后的正确率；事件不保存回复或群聊原文。环境变量显式配置优先于默认阈值。
 - 群消息前置门：无关消息在 UX 任务、进度、Trace 和模型调用前结束；图片拆条保持轻量暂存
+- 同一发言者的相邻短气泡使用有界静默窗口合为一个话轮；生成期间出现新补充时旧回复不投递，由最新话轮接替。进度/重试消息保持系统来源，不写入机器人发言历史
 - 群聊循环保护：静态发送者名单 + 重复/爆发/跨发送者回声熔断；只把精确 @YmaKmern 视为唤醒，@其他机器人保持静默
 - QQ 拆条 @ 窗口支持“先 @ 后文字”和“先文字后 @”，按平台/群/发送者/Bot 隔离并一次性消费
 - 用户风格四维隔离（平台+机器人+用户+人格），`ymakmern_style` 命令（保留 `dududa_style` 兼容）

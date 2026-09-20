@@ -170,6 +170,17 @@ def test_delivered_bot_reply_is_committed_to_hot_group_context():
     assert plugin.group_context.stats(GROUP_ID)["unique_senders"] == 0
 
 
+def test_system_status_is_not_committed_as_bot_utterance():
+    plugin = SimpleNamespace(group_context=h.GroupConversationTracker())
+    event = GroupEvent("重试", message_id="m-status")
+    event._dududa_response_origin = "system_error"
+
+    h.stage_group_reply_context(plugin, event, "这次处理没有完成，请重试。")
+    h.commit_group_reply_context(plugin, event)
+
+    assert plugin.group_context.snapshot(GROUP_ID) == ()
+
+
 class _UXStoreSpy:
     def __init__(self):
         self.session_key_calls = 0

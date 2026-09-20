@@ -86,7 +86,8 @@ def _record_model_response(request, model_id, degraded, latency_ms, error_kind="
         event="model_response", **_trace_ids(request),
         role=request.role.value, model_id=model_id,
         degraded=degraded, latency_ms=round(latency_ms, 1),
-        error_kind=error_kind)
+        error_kind=error_kind, timing_stage="model_first_output",
+        streaming=False, response_complete=True)
 
 
 def _record_model_error(request, model_id, error_kind):
@@ -265,7 +266,8 @@ class ModelRouter:
 
         trace_recorder.record(event="model_request", **_trace_ids(request),
                               role=request.role.value, model_id=model_id,
-                              data_class=request.data_class.value)
+                              data_class=request.data_class.value,
+                              timing_stage="model_start")
 
         if provider is None:
             _record_model_response(request, model_id, True,

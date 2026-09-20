@@ -113,12 +113,19 @@ class TestTraceRecorder:
         assert reply == "好的～"
         lines = rec.lines_for()
         events = [l["event"] for l in lines]
-        assert events == [
-            "experiment_decision", "flow_start", "flow_end"], events
-        assert lines[0]["stage"] == "shadow"
-        assert lines[0]["live_enabled"] is False
-        assert lines[0]["trace_id"] == lines[1]["trace_id"] == lines[2]["trace_id"]
-        assert lines[2]["duration_ms"] >= 0
+        assert "experiment_decision" in events
+        assert "flow_start" in events and "flow_end" in events
+        timing = [line for line in lines
+                  if line["event"] == "interaction_timing"]
+        assert [line["stage"] for line in timing] == [
+            "received", "merge_end", "generation_end", "validation_end"]
+        experiment = next(
+            line for line in lines if line["event"] == "experiment_decision")
+        assert experiment["stage"] == "shadow"
+        assert experiment["live_enabled"] is False
+        assert len({line["trace_id"] for line in lines}) == 1
+        end = next(line for line in lines if line["event"] == "flow_end")
+        assert end["duration_ms"] >= 0
 
     @pytest.mark.asyncio
     async def test_flow_does_not_store_raw_message_or_reply(

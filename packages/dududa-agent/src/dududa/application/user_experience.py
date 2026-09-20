@@ -238,6 +238,82 @@ class ActiveTask:
     task: asyncio.Task[Any]
     started_at: float = field(default_factory=time.monotonic)
     phase: str = "preparing"
+    turn_text: str = ""
+    superseded: bool = False
+
+
+@dataclass
+class _BufferedTurn:
+    leader: asyncio.Task[Any]
+    messages: list[str]
+    opened_at: float = field(default_factory=time.monotonic)
+    revision: int = 1
+
+
+class ConversationTurnBuffer:
+    """Briefly coalesce adjacent bubbles from one speaker into one turn.
+
+    The first caller is the leader and waits only for the configured quiet
+    window.  Followers append their text and return immediately.  This is an
+    in-memory latency feature, not durable conversation history.
+    """
+
+    def __init__(self):
+        self._turns: dict[str, _BufferedTurn] = {}
+        self._revisions: dict[str, int] = {}
+
+    def revision(self, key: str) -> int:
+        return int(self._revisions.get(key, 0))
+
+    def collecting(self, key: str) -> bool:
+        active = self._turns.get(key)
+        return bool(active is not None and not active.leader.done())
+
+    async def merge(
+        self,
+        key: str,
+        text: str,
+        *,
+        quiet_seconds: float = 0.0,
+        max_seconds: float = 1.2,
+    ) -> Optional[str]:
+        """Return merged text for the leader, ``None`` for followers."""
+        task = asyncio.current_task()
+        if task is None:
+            return str(text or "")
+        value = str(text or "").strip()
+        self._revisions[key] = self.revision(key) + 1
+        active = self._turns.get(key)
+        if active is not None and not active.leader.done():
+            if value:
+                active.messages.append(value)
+            active.revision += 1
+            return None
+
+        state = _BufferedTurn(leader=task, messages=[value] if value else [])
+        self._turns[key] = state
+        quiet = max(0.0, float(quiet_seconds))
+        maximum = max(quiet, float(max_seconds))
+        try:
+            if quiet:
+                while True:
+                    before = state.revision
+                    remaining = maximum - (time.monotonic() - state.opened_at)
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(quiet, remaining))
+                    if state.revision == before:
+                        break
+            return "\n".join(item for item in state.messages if item).strip()
+        finally:
+            if self._turns.get(key) is state:
+                self._turns.pop(key, None)
+
+
+@dataclass
+class _PendingReplacement:
+    waiter: asyncio.Task[Any]
+    messages: list[str]
 
 
 class ConversationTaskRegistry:
@@ -245,13 +321,57 @@ class ConversationTaskRegistry:
 
     def __init__(self):
         self._tasks: dict[str, ActiveTask] = {}
+        self._replacements: dict[str, _PendingReplacement] = {}
+        self.turn_buffer = ConversationTurnBuffer()
 
-    def register(self, key: str, task: asyncio.Task[Any]) -> bool:
+    def register(self, key: str, task: asyncio.Task[Any],
+                 turn_text: str = "") -> bool:
         active = self._tasks.get(key)
         if active is not None and not active.task.done():
             return False
-        self._tasks[key] = ActiveTask(task=task)
+        self._tasks[key] = ActiveTask(task=task, turn_text=str(turn_text or ""))
         return True
+
+    def queue_replacement(
+        self, key: str, task: asyncio.Task[Any], text: str,
+    ) -> tuple[bool, Optional[asyncio.Task[Any]]]:
+        """Queue newer text while a turn is generating.
+
+        Exactly one caller waits to become the replacement leader.  Further
+        bubbles only extend that pending turn and return immediately.
+        """
+        active = self.running(key)
+        if active is None:
+            return True, None
+        active.superseded = True
+        pending = self._replacements.get(key)
+        value = str(text or "").strip()
+        if pending is None or pending.waiter.done():
+            if (active.turn_text and value
+                    and (value == active.turn_text
+                         or value.startswith(active.turn_text + "\n"))):
+                messages = [value]
+            else:
+                messages = [active.turn_text] if active.turn_text else []
+                if value:
+                    messages.append(value)
+            self._replacements[key] = _PendingReplacement(task, messages)
+            return True, active.task
+        if value:
+            pending.messages.append(value)
+        return False, active.task
+
+    def take_replacement(self, key: str, task: asyncio.Task[Any]) -> str:
+        pending = self._replacements.get(key)
+        if pending is None or pending.waiter is not task:
+            return ""
+        self._replacements.pop(key, None)
+        return "\n".join(item for item in pending.messages if item).strip()
+
+    def is_superseded(self, key: str, task: asyncio.Task[Any]) -> bool:
+        active = self._tasks.get(key)
+        return bool(active is not None and active.task is task
+                    and active.superseded)
 
     def mark_phase(self, key: str, phase: str) -> None:
         active = self._tasks.get(key)
@@ -266,10 +386,15 @@ class ConversationTaskRegistry:
 
     def cancel(self, key: str) -> bool:
         active = self.running(key)
-        if active is None:
-            return False
-        active.task.cancel()
-        return True
+        pending = self._replacements.pop(key, None)
+        cancelled = False
+        if active is not None:
+            active.task.cancel()
+            cancelled = True
+        if pending is not None and not pending.waiter.done():
+            pending.waiter.cancel()
+            cancelled = True
+        return cancelled
 
     def finish(self, key: str, task: asyncio.Task[Any]) -> None:
         active = self._tasks.get(key)
@@ -283,4 +408,9 @@ class ConversationTaskRegistry:
                 active.task.cancel()
                 count += 1
         self._tasks.clear()
+        for pending in tuple(self._replacements.values()):
+            if not pending.waiter.done():
+                pending.waiter.cancel()
+                count += 1
+        self._replacements.clear()
         return count
