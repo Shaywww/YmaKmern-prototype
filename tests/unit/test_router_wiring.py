@@ -5,9 +5,10 @@ from tests.path_config import PLUGIN_DIR, PLUGIN_MAIN
 - per-call max_tokens/temperature 预算覆盖生效
 - route_request 支持 provider 临时注入（测试/会话级切换）
 - OpenAIProvider 按模型选择 base + key（多网关降级）
-- main.py 装配：8 类角色、主模型/降级/视觉角色、ROUTER_ENABLED 开关
+- main.py 装配：8 类角色、统一 DeepSeek/视觉角色、ROUTER_ENABLED 开关
 """
 import os, sys, types
+from pathlib import Path
 sys.path.insert(0, str(PLUGIN_DIR))
 
 import importlib.util
@@ -163,11 +164,13 @@ class TestMainWiring:
         assert quality.fallback_model_id is None
 
     def test_text_and_vision_share_one_deepseek_model_and_endpoint(self):
-        assert main.MODEL == "deepseek-flash"
-        assert main.VISION_MODEL == main.MODEL
         assert main.VISION_BASE == main.DEEPSEEK_BASE
         assert main.VISION_KEY == main.API_KEY
         assert main.provider._base_for(main.MODEL) == main.DEEPSEEK_BASE
+        deployment = (Path(__file__).parents[2] / "deploy" / "astrbot" /
+                      "model.conf").read_text(encoding="utf-8")
+        assert "DEEPSEEK_MODEL=deepseek-flash" in deployment
+        assert "VISION_MODEL=deepseek-flash" in deployment
 
     @pytest.mark.asyncio
     async def test_call_llm_uses_router_with_injected_provider(self, monkeypatch, tmp_path):

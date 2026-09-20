@@ -112,13 +112,13 @@ class TestModelRouter:
     def test_text_route(self):
         routes = main.router.resolve("text")
         assert len(routes) >= 1
-        assert routes[0].model == "deepseek-flash"
+        assert routes[0].model == main.MODEL
         assert routes[0].provider == "deepseek"
 
     def test_image_route_uses_same_deepseek_endpoint_without_fallback(self):
         routes = main.router.resolve("image")
         assert len(routes) == 1
-        assert routes[0].model == "deepseek-flash"
+        assert routes[0].model == main.VISION_MODEL
         assert routes[0].provider == "deepseek"
         assert routes[0].base_url == main.DEEPSEEK_BASE
         assert routes[0].api_key == main.API_KEY
@@ -126,7 +126,7 @@ class TestModelRouter:
     def test_unknown_type_fallsback_to_text(self):
         routes = main.router.resolve("video")
         assert len(routes) >= 1
-        assert routes[0].model == "deepseek-flash"
+        assert routes[0].model == main.MODEL
 
     def test_file_route(self):
         routes = main.router.resolve("file")
