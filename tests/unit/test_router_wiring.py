@@ -155,12 +155,19 @@ class TestMainWiring:
             else:
                 assert m == main.MODEL
         comp = cfg.get(ModelRole.RESPONSE_COMPOSITION)
-        assert comp.fallback_model_id == main.FALLBACK_MODEL
+        assert comp.fallback_model_id is None
         assert comp.allow_sensitive is False
         assert comp.route_hint_allowed is False
         quality = cfg.get(ModelRole.MEMORY_SUMMARY)
         assert quality.allow_sensitive is True
         assert quality.fallback_model_id is None
+
+    def test_text_and_vision_share_one_deepseek_model_and_endpoint(self):
+        assert main.MODEL == "deepseek-flash"
+        assert main.VISION_MODEL == main.MODEL
+        assert main.VISION_BASE == main.DEEPSEEK_BASE
+        assert main.VISION_KEY == main.API_KEY
+        assert main.provider._base_for(main.MODEL) == main.DEEPSEEK_BASE
 
     @pytest.mark.asyncio
     async def test_call_llm_uses_router_with_injected_provider(self, monkeypatch, tmp_path):

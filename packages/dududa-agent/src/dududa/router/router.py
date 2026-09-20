@@ -151,7 +151,7 @@ class RouterConfig:
     @classmethod
     def default_config(cls) -> "RouterConfig":
         """默认配置：所有角色使用同一模型（简单模式）。"""
-        default_model = "gpt-5.6-sol"
+        default_model = "deepseek-flash"
         def _cfg(role: ModelRole, effort: str, tokens: int, temp: float = 0.7) -> ModelConfig:
             return ModelConfig(role=role, model_id=default_model,
                                reasoning_effort=effort, max_tokens=tokens,

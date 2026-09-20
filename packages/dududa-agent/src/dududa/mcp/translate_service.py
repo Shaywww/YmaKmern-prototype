@@ -14,7 +14,7 @@ _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"
 
 
 class TranslateService(BaseMCPService):
-    """中英互译：deepseek-chat 高质量翻译；无 key 或失败时降级有道词典。"""
+    """中英互译：deepseek-flash 高质量翻译；无 key 或失败时降级有道词典。"""
 
     def __init__(self):
         super().__init__(MCPServiceConfig(
@@ -47,7 +47,7 @@ class TranslateService(BaseMCPService):
                         _DS_URL,
                         headers={"Authorization": f"Bearer {key}"},
                         json={
-                            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+                            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"),
                             "messages": [
                                 {"role": "system",
                                  "content": "你是专业翻译。只输出译文本身，不要任何解释、引号或多余内容。"},

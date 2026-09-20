@@ -112,20 +112,21 @@ class TestModelRouter:
     def test_text_route(self):
         routes = main.router.resolve("text")
         assert len(routes) >= 1
-        assert routes[0].model == "deepseek-chat"
+        assert routes[0].model == "deepseek-flash"
         assert routes[0].provider == "deepseek"
 
-    def test_image_route_has_fallback(self):
+    def test_image_route_uses_same_deepseek_endpoint_without_fallback(self):
         routes = main.router.resolve("image")
-        assert len(routes) >= 2  # Claude + Gemini fallback
-        models = [r.model for r in routes]
-        assert "claude-haiku-4-5-20251001" in models
-        assert "gemini-3.1-flash-image-preview" in models
+        assert len(routes) == 1
+        assert routes[0].model == "deepseek-flash"
+        assert routes[0].provider == "deepseek"
+        assert routes[0].base_url == main.DEEPSEEK_BASE
+        assert routes[0].api_key == main.API_KEY
 
     def test_unknown_type_fallsback_to_text(self):
         routes = main.router.resolve("video")
         assert len(routes) >= 1
-        assert routes[0].model == "deepseek-chat"
+        assert routes[0].model == "deepseek-flash"
 
     def test_file_route(self):
         routes = main.router.resolve("file")

@@ -25,7 +25,7 @@ class ModelRole(str, Enum):
 
 class ModelConfig(BaseModel):
     """单个模型角色的配置。"""
-    model_id: str = Field(default="deepseek-chat", min_length=1, description="模型 ID，不能为空")
+    model_id: str = Field(default="deepseek-flash", min_length=1, description="模型 ID，不能为空")
     base_url: Optional[str] = None
     max_tokens: int = Field(default=1024, ge=1, le=8192)
     temperature: float = Field(default=0.5, ge=0.0, le=2.0)

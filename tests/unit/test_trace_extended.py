@@ -359,7 +359,8 @@ async def test_call_vision_threads_run_id(monkeypatch, tmp_path):
 
     monkeypatch.setattr(core_mod, "httpx",
                         types.SimpleNamespace(AsyncClient=_FakeClient))
-    plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    plugin, main_mod = _load_plugin(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_mod, "VISION_BASE", "https://relay.example/v1")
     monkeypatch.setenv("DUDUDA_VISION_ALLOW_THIRD_PARTY", "1")
     reply = await plugin._call_vision("描述图片", "这是什么", "b64", "image/png",
                                       run_id="r10", trace_id="t10",
@@ -379,7 +380,8 @@ async def test_third_party_vision_fails_closed_without_two_key_opt_in(
     from dududa.application import dududa_core as core_mod
     rec = TraceRecorder(tmp_path / "traces")
     monkeypatch.setattr(core_mod, "trace_recorder", rec)
-    plugin, _ = _load_plugin(tmp_path, monkeypatch)
+    plugin, main_mod = _load_plugin(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_mod, "VISION_BASE", "https://relay.example/v1")
     monkeypatch.setenv("DUDUDA_VISION_ALLOW_THIRD_PARTY", "1")
 
     reply = await plugin._call_vision(

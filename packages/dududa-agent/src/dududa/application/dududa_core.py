@@ -662,6 +662,7 @@ class DududaCore:
             logger.warning("Restricted content blocked from LLM")
             return "这类敏感信息我不能处理哦，请不要发送密码、Token、Cookie 或登录凭证。"
         msgs = [{"role":"system","content":system},{"role":"user","content":user_msg}]
+        primary_error = None
         # Primary: 角色化 Model Router（文档 2.5.7：RESPONSE_COMPOSITION + 降级）
         if self._model_router is not None:
             try:
@@ -678,9 +679,10 @@ class DududaCore:
                                    ModelRole.RESPONSE_COMPOSITION.value,
                                    resp.model_id)
             except ModelError as e:
-                logger.warning("Router %s failed (%s), trying fallback...",
+                logger.warning("Router %s failed (%s); no external fallback configured",
                                ModelRole.RESPONSE_COMPOSITION.value,
                                e.stable_code)
+                primary_error = e
                 reply = ""
             if reply:
                 if not skip_render:
@@ -696,41 +698,16 @@ class DududaCore:
                     reply = self._render_response(reply or "", self._persona_tone())
                 return reply or ""
             except Exception as e:
-                logger.warning("Primary LLM (%s) failed: %s, trying fallback...", self._cfg["MODEL"], e)
-        # Fallback: MHCoding GPT-5.5 via httpx
-        try:
-            try:
-                _fb_base = str(self._cfg["FALLBACK_BASE"] or "").strip().rstrip("/")
-            except (KeyError, TypeError, AttributeError):
-                _fb_base = ""
-            if _fb_base and _fb_base.count("/") == 2:
-                _fb_base += "/v1"  # OpenAI 兼容网关 API 路径在 /v1 下
-            async with httpx.AsyncClient(timeout=60) as c:
-                r = await c.post(
-                    f"{_fb_base}/chat/completions",
-                    headers={"Authorization": f"Bearer {self._cfg['FALLBACK_KEY']}",
-                             "Content-Type": "application/json"},
-                    json={"model": self._cfg["FALLBACK_MODEL"], "messages": msgs,
-                          "max_tokens": max_tokens, "temperature": temperature},
-                )
-                r.raise_for_status()
-                try:
-                    reply = r.json()["choices"][0]["message"]["content"]
-                except Exception:
-                    logger.error(
-                        "Fallback non-JSON response from %s: %.150s",
-                        _fb_base,
-                        (r.text or "")[:150])
-                    raise
-            if not skip_render:
-                reply = self._render_response(reply or "", self._persona_tone())
-            return reply or ""
-        except Exception as e2:
-            logger.exception("Fallback LLM also failed: %s", e2)
-            support_id = make_support_id("llm", e2, trace_id)
-            return ("模型服务暂时没有响应，主线路和备用线路都已尝试。"
-                    "你可以稍后重试，或让我换一种更简单的方式回答。"
-                    f"\n错误编号：{support_id}")
+                logger.warning("Primary LLM (%s) failed: %s; no external fallback configured",
+                               self._cfg["MODEL"], e)
+                primary_error = e
+        # Fail closed on the single audited DeepSeek route.  A hidden relay
+        # would make data residency and incident diagnosis ambiguous.
+        if primary_error is None:
+            primary_error = RuntimeError("empty primary model response")
+        support_id = make_support_id("llm", primary_error, trace_id)
+        return ("模型服务暂时没有响应，你可以稍后重试。"
+                f"\n错误编号：{support_id}")
 
     def _vision_provider_policy(self) -> tuple[bool, str]:
         """Return whether the configured endpoint is third-party and its host."""
@@ -740,7 +717,7 @@ class DududaCore:
             base = ""
         host = (urlparse(base).hostname or "").lower()
         raw = os.environ.get(
-            "DUDUDA_VISION_TRUSTED_HOSTS", "api.openai.com")
+            "DUDUDA_VISION_TRUSTED_HOSTS", "api.deepseek.com")
         if isinstance(raw, str):
             trusted = {item.strip().lower() for item in raw.split(",")
                        if item.strip()}

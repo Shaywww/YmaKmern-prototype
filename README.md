@@ -2,6 +2,10 @@
 
 基于文档 https://docs.mmdustc.top/dududa107/ 开发的 2.0 独立原型：QQ 机器人（AstrBot 插件）+ Web 控制台 + 运维工具链。
 
+生产文字回复与图片识别统一使用 `deepseek-flash`，共享
+`DEEPSEEK_API_KEY` 与 `DEEPSEEK_BASE_URL`；不配置 GPT/Claude 中转或
+备用线路。systemd 配置见 `deploy/astrbot/model.conf`。
+
 ## 0.7.1 查课功能下架
 
 - 公开开课查询、评课社区查询及联合选课推荐已下架。
@@ -28,7 +32,7 @@
 
 - 领域模型与 13 阶段 Pipeline（感知 → 决策 → 规划 → 工具执行 → 合成 → 渲染 → 投递）
 - MCP 工具链（考试/日历/二课/通知/成绩/时钟/天气/新闻/翻译/联网搜索）
-- 8 角色 LLM 路由（主模型 + 降级）、记忆/画像、安全校验、Trace 与评估
+- 8 角色 LLM 路由（统一 DeepSeek 模型）、记忆/画像、安全校验、Trace 与评估
 - Web 控制台（Control Plane）与运维工具链（门禁/健康检查/备份）
 
 **它不是插件本体。** 配套仓库 [YmaKmern-plugin](https://github.com/Shaywww/YmaKmern-plugin) 是 AstrBot 插件薄壳（生产部署入口），通过 `DUDUDA_AGENT_SRC` 指向本仓库的 `packages/dududa-agent/src`；两个仓库配合部署，改动核心逻辑提交本仓库，改动插件装配/命令提交插件仓库。
@@ -37,8 +41,8 @@
 
 - 图片、GIF 抽帧和视频关键帧会以 Base64 编码发往配置的视觉模型端点；因此截图可能包含账号、聊天记录或其他敏感内容。
 - 所有视觉请求的 Trace 数据类别固定为 `sensitive`，不再将图片标记为公开数据。
-- 第三方视觉端点默认禁用。需要同时设置 `DUDUDA_VISION_ALLOW_THIRD_PARTY=1` 和群管理员执行 `/ymakmern_vision on` 才会处理该群的图片；任一开关关闭都会拒绝上传。
-- `DUDUDA_VISION_TRUSTED_HOSTS` 用于配置经管理员审核的官方端点域名，默认仅为 `api.openai.com`。自定义中转不会自动获得信任。
+- 图片识别与文字回复共享 DeepSeek 官方 API；群策略仍可用 `/ymakmern_vision on|off` 单独控制图片能力。
+- `DUDUDA_VISION_TRUSTED_HOSTS` 用于配置经管理员审核的官方端点域名，默认仅为 `api.deepseek.com`。自定义中转不会自动获得信任。
 - 外部服务的日志和保留周期由该服务提供方决定；部署者应在开启前审查其隐私与数据保留政策。
 
 ## 线上人格质量影子评测

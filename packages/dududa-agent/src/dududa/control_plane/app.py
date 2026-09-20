@@ -39,11 +39,9 @@ _trace_sink = InMemoryTraceSink()
 _tracer = Tracer(sink=_trace_sink)
 
 # ---- P3 trace 可视化：成本估算（trace 无 token 计数，按角色估算 token/调用 × 模型单价） ----
-# 元 / 1K tokens（估算单价；中转网关实际价格不同，仅作量级参考）
+# 元 / 1K tokens（估算单价；仅作量级参考）
 _MODEL_PRICE_YUAN = {
-    "deepseek-chat": (0.001, 0.002),
-    "claude-haiku-4-5-20251001": (0.006, 0.03),
-    "gpt-5.5": (0.02, 0.08),
+    "deepseek-flash": (0.001, 0.002),
 }
 _DEFAULT_PRICE_YUAN = (0.01, 0.02)
 # 每角色单次调用估算 token（输入, 输出）
@@ -279,9 +277,8 @@ def _weekly_cost_report(events: list, weeks: int = 8) -> list:
 def _playground_llm_cb():
     """Playground LLM 回调：有 key 走 OpenAI 兼容接口；无 key 离线占位（不调真实模型）。"""
     api_key = (os.environ.get("DUDUDA_CP_LLM_KEY")
-               or os.environ.get("DEEPSEEK_API_KEY")
-               or os.environ.get("OPENAI_API_KEY") or "")
-    model = os.environ.get("DUDUDA_CP_LLM_MODEL", "deepseek-chat")
+               or os.environ.get("DEEPSEEK_API_KEY") or "")
+    model = os.environ.get("DUDUDA_CP_LLM_MODEL", "deepseek-flash")
     base = os.environ.get("DUDUDA_CP_LLM_BASE", "https://api.deepseek.com/v1")
     if not api_key:
         return None
