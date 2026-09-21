@@ -7,7 +7,7 @@
 3. 脱敏不变量：Trace metadata 不含明文凭证；
 4. Scope 过滤：非 owner 只见自己的事件；
 5. 审计完整性：受保护请求必有审计行（含 actor/role/status）；
-6. MCP query 不再直连：access 策略拒绝 -> 403，服务级授权仍生效。
+6. MCP query 不再直连，只允许注册表中的通用只读能力。
 """
 import json
 import os
@@ -25,13 +25,10 @@ TOKEN = "cp-secret"
 def cp(tmp_path):
     os.environ["DUDUDA_CP_TOKEN"] = TOKEN
     os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
-    # MCP access 隔离：指向不存在的路径 -> legacy allow
-    os.environ.setdefault("DUDUDA_MCP_ACCESS", "/tmp/dududa-cp-test-access-absent.json")
     app = create_app()
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {TOKEN}"})
     yield app, client
-    os.environ.pop("DUDUDA_MCP_ACCESS", None)
     os.environ.pop("DUDUDA_CP_TOKEN", None)
     os.environ.pop("DUDUDA_CP_AUDIT", None)
 
@@ -167,52 +164,8 @@ class TestMCPEntry:
         assert r.status_code == 200
         assert r.json()["success"] is True
 
-    def test_retired_course_query_404(self, cp):
+    def test_removed_school_service_query_404(self, cp):
         app, client = cp
         r = client.post("/mcp/services/course_schedule/query",
                         json={"action": "nope"})
         assert r.status_code == 404
-
-    def test_query_denied_by_access_policy(self, cp, tmp_path):
-        cfg = tmp_path / "deny.json"
-        cfg.write_text(json.dumps({
-            "default_policy": "deny",
-            "groups": {"allow": [], "deny": []},
-            "users": {"allow": [], "deny": []},
-        }), encoding="utf-8")
-        os.environ["DUDUDA_MCP_ACCESS"] = str(cfg)
-        try:
-            app = create_app()   # 重建 app，MCPAccessPolicy 读取新配置
-            client = TestClient(app)
-            client.headers.update({"Authorization": f"Bearer {TOKEN}"})
-            r = client.post("/mcp/services/exam_schedule/query",
-                            json={"action": "get_all_exams"})
-            assert r.status_code == 403
-            # 非 iCourse（clock）不受策略限制
-            r2 = client.post("/mcp/services/clock/query", json={"action": "get_now"})
-            assert r2.status_code == 200
-        finally:
-            os.environ.pop("DUDUDA_MCP_ACCESS", None)
-
-    def test_academic_affairs_service_token_still_gated(self, cp):
-        app, client = cp
-        r = client.post("/mcp/services/academic_affairs/query",
-                        json={"action": "get_student_info",
-                              "student_id": "PB21000001"})
-        assert r.status_code == 200
-        body = r.json()
-        assert body["success"] is False
-        assert "unauthorized" in body["error"]
-
-    def test_academic_affairs_with_service_token(self, cp):
-        app, client = cp
-        os.environ["DUDUDA_ACADEMIC_AFFAIRS_TOKEN"] = "svc-token"
-        try:
-            r = client.post("/mcp/services/academic_affairs/query",
-                            json={"action": "get_student_info",
-                                  "student_id": "PB21000001",
-                                  "token": "svc-token"})
-            assert r.status_code == 200
-            assert r.json()["success"] is True
-        finally:
-            os.environ.pop("DUDUDA_ACADEMIC_AFFAIRS_TOKEN", None)

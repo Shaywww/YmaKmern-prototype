@@ -2,13 +2,7 @@
 import logging
 
 logger = logging.getLogger("dududa20.mcp.registry")
-from .exam_schedule import ExamScheduleService
-from .academic_calendar import AcademicCalendarService
-from .training_program import TrainingProgramService
-from .second_classroom import SecondClassroomService
-from .campus_notice import CampusNoticeService
 from .clock_service import ClockService
-from .academic_affairs import AcademicAffairsService
 from .web_search_service import WebSearchService
 from .weather_service import WeatherService
 from .news_service import NewsService
@@ -131,12 +125,6 @@ def create_all_services() -> dict:
     # reference to this process cache.  Rebinding after a controlled reset
     # would leave those references permanently empty.
     _SERVICES.update({
-        "exam_schedule": ExamScheduleService(),
-        "academic_calendar": AcademicCalendarService(),
-        "training_program": TrainingProgramService(),
-        "second_classroom": SecondClassroomService(),
-        "campus_notice": CampusNoticeService(),
-        "academic_affairs": AcademicAffairsService(),
         "clock": ClockService(),
         "web_search": WebSearchService(),
         "weather": WeatherService(),
@@ -204,13 +192,7 @@ def register_all_mcp_services(registry, provider_factory=None) -> int:
 
     services = create_all_services()
     schemas = {
-        "exam_schedule": {"type":"object","properties":{"action":{"type":"string","enum":["get_exams_by_course","get_personal_exams","get_all_exams"]},"course_id":{"type":"string"},"student_id":{"type":"string"},"semester":{"type":"string"}}},
-        "academic_calendar": {"type":"object","properties":{"action":{"type":"string","enum":["get_semester","get_holidays","get_events"]}}},
-        "training_program": {"type":"object","properties":{"action":{"type":"string","enum":["get_program","list_majors"]},"major_id":{"type":"string"}}},
-        "second_classroom": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_upcoming","get_by_category"]},"keyword":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
-        "campus_notice": {"type":"object","properties":{"action":{"type":"string","enum":["search","get_pinned","get_recent"]},"keyword":{"type":"string"},"source":{"type":"string"},"category":{"type":"string"},"days":{"type":"integer"}}},
         "clock": {"type":"object","properties":{"action":{"type":"string","enum":["get_now","get_date","get_time"]},"fmt":{"type":"string"}}},
-        "academic_affairs": {"type":"object","properties":{"action":{"type":"string","enum":["get_student_info","get_grade","get_credits_summary","get_graduation_requirements"]},"student_id":{"type":"string"},"semester":{"type":"string"},"major_id":{"type":"string"},"token":{"type":"string"}}},
         "weather": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"city":{"type":"string"},"q":{"type":"string"}}},
         "news": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"q":{"type":"string"},"keyword":{"type":"string"},"limit":{"type":"integer"}}},
         "translate": {"type":"object","properties":{"action":{"type":"string","enum":["search"]},"text":{"type":"string"},"q":{"type":"string"},"target":{"type":"string"}}},

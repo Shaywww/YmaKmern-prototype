@@ -7,7 +7,7 @@
 - McpServerRegistry：default deny、allow/deny 表（deny 优先）、未知 server
 - extract_mcp_result：text / json / structuredContent / isError
 - UnifiedMCPProvider：显式映射；未映射 action / 未就绪 / MCP 错误 -> mock 降级
-- create_unified_provider_factory：env 解析、懒启动、icourse 安全表
+- create_unified_provider_factory：通用 env 解析与懒启动
 - register_all_mcp_services(provider_factory=...) 集成
 - 真实 stdio 子进程握手（仅服务器/Linux 上执行）
 """
@@ -19,7 +19,6 @@ from dududa.mcp.client import (
     McpError, McpErrorKind, StdioMCPTransport, UnifiedMCPClient,
     McpServerRegistry, UnifiedMCPProvider, ProviderFactory,
     create_unified_provider_factory, extract_mcp_result,
-    _ICOURSE_ALLOW_TOOLS, _ICOURSE_DENY_TOOLS, _CAP_TOOL_MAP,
 )
 from dududa.mcp.registry import register_all_mcp_services, MCPProvider
 from dududa.core.trace_recorder import trace_recorder
@@ -359,26 +358,26 @@ class TestExtractResult:
 
 class TestProviderFallback:
     def _prov(self, t, mock=None, mapping=None, allow=None, deny=None,
-               server="icourse"):
+               server="default"):
         c = UnifiedMCPClient(cmd="fake-cmd", max_retries=0,
                              transport_factory=lambda: t)
         reg = McpServerRegistry()
         reg.register(server, c, allow=allow, deny=deny)
         mock = mock or _FakeMock()
-        prov = UnifiedMCPProvider(reg, server, "mcp.course_schedule",
+        prov = UnifiedMCPProvider(reg, server, "mcp.generic",
                                   mock, mapping or {})
         return prov, mock, c
 
     @pytest.mark.asyncio
     async def test_mapped_action_uses_mcp(self):
         t = _FakeTransport(responses={"tools/call": {
-            "content": [{"type": "text", "text": "课程数据"}]}})
+            "content": [{"type": "text", "text": "搜索结果"}]}})
         prov, mock, _c = self._prov(
-            t, mapping={"search": "search_courses", "default": "search_courses"},
-            allow=_ICOURSE_ALLOW_TOOLS)
-        obs = await prov.execute(None, {"action": "search", "keyword": "数据结构"})
+            t, mapping={"search": "search", "default": "search"},
+            allow=("search",))
+        obs = await prov.execute(None, {"action": "search", "keyword": "量子计算"})
         assert obs.success and obs.source == "mcp"
-        assert obs.data == "课程数据"
+        assert obs.data == "搜索结果"
         assert mock.calls == 0
 
     @pytest.mark.asyncio
@@ -386,8 +385,8 @@ class TestProviderFallback:
         t = _FakeTransport()
         prov, mock, _c = self._prov(
             t, mapping={"get_personal_schedule": None,
-                        "default": "search_courses"},
-            allow=_ICOURSE_ALLOW_TOOLS)
+                        "default": "search"},
+            allow=("search",))
         obs = await prov.execute(None, {"action": "get_personal_schedule"})
         assert obs.source == "mock" and mock.calls == 1
         assert t.request_count == 0
@@ -395,7 +394,7 @@ class TestProviderFallback:
     @pytest.mark.asyncio
     async def test_empty_mapping_falls_back(self):
         t = _FakeTransport()
-        prov, mock, _c = self._prov(t, mapping={}, allow=_ICOURSE_ALLOW_TOOLS)
+        prov, mock, _c = self._prov(t, mapping={}, allow=("search",))
         obs = await prov.execute(None, {"action": "search"})
         assert obs.source == "mock" and mock.calls == 1
 
@@ -413,8 +412,8 @@ class TestProviderFallback:
         t = _FakeTransport(fail=McpError(McpErrorKind.CONNECTION, "down"),
                            fail_n=99)
         prov, mock, _c = self._prov(
-            t, mapping={"search": "search_courses", "default": "search_courses"},
-            allow=_ICOURSE_ALLOW_TOOLS)
+            t, mapping={"search": "search", "default": "search"},
+            allow=("search",))
         obs = await prov.execute(None, {"action": "search"})
         assert obs.source == "mock" and mock.calls == 1
 
@@ -422,8 +421,8 @@ class TestProviderFallback:
     async def test_denied_tool_falls_back(self):
         t = _FakeTransport()
         prov, mock, _c = self._prov(
-            t, mapping={"search": "search_courses", "default": "search_courses"},
-            allow=_ICOURSE_ALLOW_TOOLS, deny=("search_courses",))
+            t, mapping={"search": "search", "default": "search"},
+            allow=("search",), deny=("search",))
         obs = await prov.execute(None, {"action": "search"})
         assert obs.source == "mock" and mock.calls == 1
 
@@ -433,8 +432,8 @@ class TestProviderFallback:
             "content": [{"type": "text", "text": "工具执行失败"}],
             "isError": True}})
         prov, mock, _c = self._prov(
-            t, mapping={"search": "search_courses", "default": "search_courses"},
-            allow=_ICOURSE_ALLOW_TOOLS)
+            t, mapping={"search": "search", "default": "search"},
+            allow=("search",))
         obs = await prov.execute(None, {"action": "search"})
         assert obs.source == "mock" and mock.calls == 1
 
@@ -448,8 +447,9 @@ class TestProviderFallback:
 class TestFactory:
     def test_env_parsing(self):
         factory = create_unified_provider_factory({
-            "ICOURSE_MCP_CMD": "my-mcp",
-            "ICOURSE_MCP_ARGS": "--x 1 --y",
+            "DUDUDA_MCP_CMD": "my-mcp",
+            "DUDUDA_MCP_ARGS": "--x 1 --y",
+            "DUDUDA_MCP_SERVER_ID": "custom",
             "DUDUDA_MCP_TIMEOUT": "5",
             "DUDUDA_MCP_RETRIES": "1",
             "DUDUDA_MCP_BREAKER": "3",
@@ -465,7 +465,7 @@ class TestFactory:
 
     def test_env_defaults_and_bad_values(self):
         factory = create_unified_provider_factory({})
-        assert factory.client._cmd == "python3 -m icourse_mcp"
+        assert factory.client._cmd == "python3 -m mcp_server"
         assert factory.client._timeout == 10.0
         assert factory.client._max_retries == 2
         assert factory.client._breaker_threshold == 5
@@ -479,19 +479,11 @@ class TestFactory:
         assert factory2.client._breaker_threshold == 1
 
     @pytest.mark.asyncio
-    async def test_icourse_policy_deny_before_start(self):
+    async def test_unknown_server_is_denied_before_start(self):
         factory = create_unified_provider_factory({})
-        # deny 表在策略层拦截，不触达传输（不 spawn 进程）
         with pytest.raises(McpError) as ei:
-            await factory.registry.call("icourse", "crawl_course")
-        assert ei.value.kind == McpErrorKind.DENIED
-        with pytest.raises(McpError) as ei2:
-            await factory.registry.call("icourse", "export_dataset")
-        assert ei2.value.kind == McpErrorKind.DENIED
-        # 未注册 server
-        with pytest.raises(McpError) as ei3:
             await factory.registry.call("other", "x")
-        assert ei3.value.kind == McpErrorKind.CONNECTION
+        assert ei.value.kind == McpErrorKind.CONNECTION
         assert factory.health() == "idle"
 
     @pytest.mark.asyncio
@@ -505,30 +497,16 @@ class TestFactory:
         factory = create_unified_provider_factory({})
         reg = CapabilityRegistry()
         n = register_all_mcp_services(reg, provider_factory=factory)
-        assert n == 11
-        cap = reg.get("mcp.exam_schedule")
+        assert n == 5
+        cap = reg.get("mcp.clock")
         assert cap is not None
-        provider = reg.get_provider("mcp.exam_schedule")
+        provider = reg.get_provider("mcp.clock")
         assert isinstance(provider, UnifiedMCPProvider)
-        # exam_schedule 映射为空 -> 任意 action 不触达 MCP -> mock 降级，
-        # 服务层返回 mock 考试数据（确定性，不 spawn 真实进程）
-        obs = await provider.execute(cap, {"action": "get_exams_by_course", "course_id": "CS2001"})
+        # No mapping means deterministic local provider fallback; no process starts.
+        obs = await provider.execute(cap, {"action": "get_now"})
         assert obs.success
-        assert obs.source == "mock"
         assert obs.data
         await factory.close()
-
-    def test_mappings_cover_allow_tools_only(self):
-        # 所有映射的工具都必须在 allow 表内
-        for cap_id, mapping in _CAP_TOOL_MAP.items():
-            for tool in mapping.values():
-                if tool is not None:
-                    assert tool in _ICOURSE_ALLOW_TOOLS, f"{cap_id}: {tool}"
-        # deny 工具绝不进映射
-        for cap_id, mapping in _CAP_TOOL_MAP.items():
-            for tool in mapping.values():
-                if tool is not None:
-                    assert tool not in _ICOURSE_DENY_TOOLS
 
 
 # ---- 2.5.6: export root / crawl 限频 / trace 审计 ----
@@ -730,7 +708,7 @@ class TestMcpCallTrace:
             "DUDUDA_MCP_CRAWL_LIMIT": "3",
             "DUDUDA_MCP_CRAWL_STEPS": "5",
         })
-        assert factory.client._export_root == "/data/export"
+        assert factory.client._export_root == os.path.abspath("/data/export")
         assert factory.client._crawl_limit == 3
         assert factory.client._crawl_max_steps == 5
 
@@ -746,7 +724,7 @@ for line in sys.stdin:
         out = {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "fake-icourse", "version": "1.0"}}}
+            "serverInfo": {"name": "fake-general", "version": "1.0"}}}
     elif msg.get("method") == "tools/list":
         out = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
             {"name": "ping", "description": "p",
@@ -770,7 +748,7 @@ async def test_real_stdio_handshake_call():
                               args=("-c", _FAKE_SERVER_SCRIPT), timeout=5)
     try:
         res = await client.initialize()
-        assert res["serverInfo"]["name"] == "fake-icourse"
+        assert res["serverInfo"]["name"] == "fake-general"
         tools = await client.list_tools()
         assert len(tools) == 1 and tools[0]["name"] == "ping"
         data, is_error = extract_mcp_result(

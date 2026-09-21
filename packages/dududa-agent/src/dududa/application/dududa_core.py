@@ -36,10 +36,6 @@ from dududa.application.dududa_utils import (
     _has_media_in_raw, _IGNORE_PATTERNS, _is_greeting_text,
     _is_textual_greeting,
 )
-from dududa.application.ustc_routing import (
-    is_ustc_course_query, is_ustc_review_query, ustc_tool_capabilities,
-)
-
 from dududa.application.dududa_log import get_logger as _get_logger
 from dududa.application.user_experience import make_support_id
 logger = _get_logger("dududa20")
@@ -73,13 +69,12 @@ def persona_to_oc(template):
 
 
 _GROUP_SENSITIVE_ASKS = (
-    "我的成绩", "我成绩", "我的课表", "我课表", "我的位置",
-    "我的健康", "我健康", "私聊发我", "私聊我",
+    "我的位置", "我的健康", "我健康", "私聊发我", "私聊我",
 )
 
 
 def _is_group_sensitive_ask(text: str) -> bool:
-    """群聊隐私门（文档 2.5.9）：课表/成绩/健康/位置/私聊 类请求群聊默认不返回。"""
+    """群聊隐私门：健康、位置和私聊数据默认不在群里返回。"""
     t = (text or "").lower()
     return any(p in t for p in _GROUP_SENSITIVE_ASKS)
 
@@ -121,6 +116,25 @@ def _looks_like_bare_noun_query(text: str) -> bool:
     if _CLAUSE_LIKE_RE.search(value):
         return False
     return value in _BARE_NOUN_TERMS or bool(_BARE_NOUN_SUFFIX_RE.search(value))
+
+
+def _suggest_tool_capabilities(text: str) -> tuple[str, ...]:
+    """Return only general-purpose tools supported by the current product."""
+    value = str(text or "").lower()
+    suggested: list[str] = []
+    rules = (
+        ("mcp.weather", ("天气", "气温", "温度", "下雨", "下雪", "预报",
+                         "weather", "forecast")),
+        ("mcp.clock", ("几点", "几号", "星期几", "日期", "现在是", "现在几")),
+        ("mcp.news", ("新闻", "资讯", "热点", "热搜", "报道")),
+        ("mcp.translate", ("翻译", "译成", "translate")),
+        ("mcp.web_search", ("搜索", "搜一下", "百度", "查一下", "查询",
+                            "找一下", "最新", "官网")),
+    )
+    for capability_id, markers in rules:
+        if any(marker.lower() in value for marker in markers):
+            suggested.append(capability_id)
+    return tuple(suggested)
 
 
 class DududaCore:
@@ -371,10 +385,9 @@ class DududaCore:
             return None
 
     _TOOL_KW = ("帮我", "查", "搜", "算", "翻译", "了解", "介绍",
-                 "是什么", "多少", "招生", "分数线", "排名",
+                 "是什么", "多少", "排名",
                  "查询", "查查", "百度", "搜索", "找一下",
-                 "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下",
-                 "开课", "课程号", "谁教", "哪个老师", "上课时间", "上课地点")
+                 "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下")
 
     def _social_decision(self, event) -> tuple:
         try:
@@ -396,15 +409,14 @@ class DududaCore:
             or getattr(obj, "group", None))
         if not is_group:
             clean_0 = re.sub(r"@\S+", "", combined).strip()
-            if (any(kw in clean_0 for kw in self._TOOL_KW)
-                    or is_ustc_course_query(clean_0)):
+            if any(kw in clean_0 for kw in self._TOOL_KW):
                 return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
             return SocialAction.DIRECT_REPLY, DecisionReason.HIGH_RELEVANCE.value
         # 群策略（文档 2.5.2/2.5.4）：mode / reply_rate / meme_rate 落地到回复策略
         policy = self._group_policy_for(event)
         if policy is not None and policy.mode == "off":
             return SocialAction.IGNORE, DecisionReason.GROUP_MODE_OFF.value
-        # 群聊隐私门（文档 2.5.9）：课表/成绩/健康/位置/私聊 类请求群聊默认不返回
+        # 群聊隐私门：健康、位置和私聊数据默认不返回。
         if _is_group_sensitive_ask(combined):
             return SocialAction.IGNORE, DecisionReason.SENSITIVE_GROUP_REQUEST.value
         ambient_reason = ""
@@ -423,12 +435,11 @@ class DududaCore:
             return SocialAction.IGNORE, DecisionReason.LOW_RELEVANCE.value
         clean = re.sub(r"@\S+", "", combined).strip()
         # 显式工具/命令意图 -> USE_TOOLS（与 _perceive 的 command 词一致）
-        if (any(kw in clean for kw in self._TOOL_KW)
-                or is_ustc_course_query(clean)):
+        if any(kw in clean for kw in self._TOOL_KW):
             return SocialAction.USE_TOOLS, DecisionReason.EXPLICIT_COMMAND.value
         # 明确的文字问候要用文字回应；颜文字只能点缀，不能代替回答。
         # 只有单表情/非文字轻互动才走 REACT（同会话 10s 冷却）。
-        # 短名词（USTC/AI/课程名）不属于问候，走 DIRECT_REPLY 解释含义。
+        # 短名词或专名不属于问候，走 DIRECT_REPLY 解释含义。
         if _is_textual_greeting(clean):
             return SocialAction.DIRECT_REPLY, DecisionReason.GREETING_ONLY.value
         if len(clean) <= 1 or _is_greeting_text(clean):
@@ -462,8 +473,7 @@ class DududaCore:
         if any(combined.endswith(q) for q in ("?", "？", "吗", "呢", "嘛", "么")):
             acts.append(SpeechAct(act_type="question", confidence=0.8))
         if (combined.startswith("/")
-                or any(kw in combined for kw in self._TOOL_KW)
-                or is_ustc_course_query(combined)):
+                or any(kw in combined for kw in self._TOOL_KW)):
             acts.append(SpeechAct(act_type="command", confidence=0.7))
         if not acts:
             if _is_greeting_text(combined):
@@ -484,36 +494,25 @@ class DududaCore:
                     name=name, entity_type="person", confidence=0.9,
                     evidence=f"@{name}"))
         topics = []
-        topic_kw = {"课程": "course", "开课": "course", "课程号": "course",
-                    "上课时间": "course", "上课地点": "course",
-                    "考试": "exam", "作业": "homework", "天气": "weather",
-                    "文件": "file", "图片": "image", "成绩": "grade", "食堂": "canteen", "图书馆": "library",
+        topic_kw = {"天气": "weather",
+                    "文件": "file", "图片": "image",
                     "几点": "time", "时间": "time", "几号": "time", "星期几": "time",
                     "日期": "time", "什么时候了": "time", "现在是": "time", "现在几": "time",
-                    "通知": "notice", "公告": "notice", "校历": "calendar", "放假": "calendar",
-                    "节假日": "calendar", "学期": "calendar", "活动": "activity", "讲座": "activity",
-                    "竞赛": "activity", "社团": "activity", "第二课堂": "activity",
-                    "培养方案": "training", "毕业要求": "training", "选课": "training",
+                    "通知": "notice", "公告": "notice",
                     "新闻": "news", "资讯": "news", "热点": "news", "热搜": "news",
-                    "学分": "training", "绩点": "grade", "分数": "grade",
                     "翻译": "translate", "翻译成": "translate", "译成": "translate",
-                    "招生": "websearch", "录取": "websearch", "百科": "websearch",
+                    "百科": "websearch",
                     "是什么": "websearch", "什么是": "websearch",
                     "啥是": "websearch", "啥叫": "websearch"}
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
-        if is_ustc_review_query(combined):
-            topics.append("course_review")
-        if is_ustc_course_query(combined) and "course" not in topics:
-            topics.append("course")
         intents = list(topics) if topics else ["chitchat"]
         # 工具意图门：命令词（_TOOL_KW）命中即触发工具链，与 _social_decision 对齐，
         # 避免「帮我查一下/查查XX」被判为纯闲聊；工具话题命中同样触发。
         has_command = any(a.act_type == "command" for a in acts)
-        needs_tools = has_command or any(t in ("course", "course_review", "exam", "grade", "weather",
-                                      "time", "notice", "activity", "calendar",
-                                      "training", "news", "translate", "websearch")
+        needs_tools = has_command or any(t in ("weather", "time", "notice",
+                                      "news", "translate", "websearch")
                                       for t in topics)
         return PerceptionResult(
             speech_acts=tuple(acts),
@@ -521,7 +520,7 @@ class DududaCore:
             entities=tuple(entities),
             candidate_intents=tuple(intents),
             needs_tools=needs_tools,
-            suggested_capabilities=ustc_tool_capabilities(combined),
+            suggested_capabilities=_suggest_tool_capabilities(combined),
             is_explicit_command=has_command,
             confidence=0.6,
         )

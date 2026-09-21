@@ -259,7 +259,7 @@ class TestComposeProdBehavior:
             _state("@bot 你是怎么搭出来的"))
         assert "住在 QQ 里的 AI 群友" in cap.system
         assert "NapCat 与 AstrBot" in cap.system
-        assert "不要把校园背景带进无关闲聊" in cap.system
+        assert "校园背景" not in cap.system
         assert "群里谁最帅" not in cap.system
         assert "旧的 /dududa_help" not in cap.system
 

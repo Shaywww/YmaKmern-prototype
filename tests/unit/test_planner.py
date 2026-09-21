@@ -19,7 +19,7 @@ class StubProvider(CapProvider):
 
 def _make_registry():
     reg = CapabilityRegistry()
-    for cid in ["mcp.exam_schedule", "mcp.academic_calendar", "mcp.second_classroom", "mcp.campus_notice"]:
+    for cid in ["mcp.clock", "mcp.weather", "mcp.news", "mcp.translate"]:
         cap = Capability(capability_id=cid, name=cid, description=f"Mock {cid}", provider=ProviderType.MCP)
         reg.register(cap, StubProvider())
     return reg
@@ -45,11 +45,11 @@ class TestWebSearchPattern:
             max_steps=4, permissions=()))
 
     def test_search_command_plans_web_search(self):
-        plan = self._plan("帮我搜一下USTC")
+        plan = self._plan("帮我搜一下量子计算")
         assert plan is not None and plan.steps
         assert plan.steps[0].capability_id == "mcp.web_search"
         assert plan.steps[0].arguments.get("action") == "search"
-        assert plan.steps[0].arguments.get("q") == "USTC"
+        assert plan.steps[0].arguments.get("q") == "量子计算"
 
     def test_search_with_mention_and_particles(self):
         plan = self._plan("@bot 百度一下量子计算呗")
@@ -61,17 +61,9 @@ class TestWebSearchPattern:
         assert plan.steps[0].capability_id == "mcp.web_search"
         assert plan.steps[0].arguments.get("q") == "数据结构"
 
-    def test_generic_query_cannot_use_retired_course_capability(self):
+    def test_generic_query_uses_web_search(self):
         plan = self._plan("帮我查一下数据结构")
-        assert all(step.capability_id != "mcp.course_schedule" for step in plan.steps)
-
-    def test_course_pattern_is_not_registered(self):
-        plan = self._plan("帮我查一下课表")
-        assert all(step.capability_id != "mcp.course_schedule" for step in plan.steps)
-
-    def test_exam_pattern_still_priority(self):
-        plan = self._plan("帮我搜一下考试安排")
-        assert plan.steps[0].capability_id == "mcp.exam_schedule"
+        assert plan.steps[0].capability_id == "mcp.web_search"
 
 
 class TestDependencyResolver:
@@ -125,7 +117,7 @@ class TestToolPlanner:
         p = ToolPlanner()
         reg = _make_registry()
         candidates = reg.filter_candidates(permissions=())
-        ctx = PlanningContext(user_intent="查询数据结构课程", available_capabilities=candidates)
+        ctx = PlanningContext(user_intent="查询量子计算资料", available_capabilities=candidates)
         plan = p.plan(ctx)
         assert plan.goal
         assert len(plan.steps) >= 0
@@ -140,10 +132,10 @@ class TestToolPlanner:
 
     def test_pattern_matching(self):
         p = ToolPlanner()
-        p.register_pattern(("查考试",), {"name": "test", "goal": "test_pattern", "steps": [{"step_id": "s1", "capability_id": "mcp.exam_schedule", "arguments": {}, "purpose": "test"}]})
+        p.register_pattern(("查天气",), {"name": "test", "goal": "test_pattern", "steps": [{"step_id": "s1", "capability_id": "mcp.weather", "arguments": {}, "purpose": "test"}]})
         reg = _make_registry()
         candidates = reg.filter_candidates(permissions=())
-        ctx = PlanningContext(user_intent="帮我查考试", available_capabilities=candidates)
+        ctx = PlanningContext(user_intent="帮我查天气", available_capabilities=candidates)
         plan = p.plan(ctx)
         assert plan.rationale == "Pattern: test"
 
@@ -162,7 +154,7 @@ class TestToolExecutor:
         from dududa.planner.planner import PlannedStep, GeneratedPlan
         reg = _make_registry()
         executor = ToolExecutor(reg)
-        step = PlannedStep("s1", "mcp.exam_schedule", {}, "test")
+        step = PlannedStep("s1", "mcp.weather", {}, "test")
         plan = GeneratedPlan(goal="test", steps=(step,))
         results = await executor.execute_plan(plan)
         assert len(results) == 1
@@ -220,7 +212,7 @@ class TestToolChainIntegration:
         reg = _make_registry()
         integration = integrate_with_orchestrator(None, reg)
         result = await integration.plan_and_execute(
-            user_intent="查课", perception=None,
+            user_intent="查天气", perception=None,
             candidates=reg.filter_candidates(permissions=()),
             permissions=(), budget=type("B", (), {"max_tool_steps": 4, "deadline_seconds": 30})(),
         )
@@ -229,11 +221,11 @@ class TestToolChainIntegration:
         assert "recovery" in result
 
     @pytest.mark.asyncio
-    async def test_plan_and_execute_exam(self):
+    async def test_plan_and_execute_news(self):
         reg = _make_registry()
         integration = integrate_with_orchestrator(None, reg)
         result = await integration.plan_and_execute(
-            user_intent="什么时候考试", perception=None,
+            user_intent="今天有什么新闻", perception=None,
             candidates=reg.filter_candidates(permissions=()),
             permissions=(), budget=type("B", (), {"max_tool_steps": 4, "deadline_seconds": 30})(),
         )
@@ -279,26 +271,9 @@ class TestNewSkillPatterns:
         assert plan.steps[0].capability_id == "mcp.translate"
 
     def test_definition_query_plans_web_search(self):
-        plan = self._plan("USTC今年招生怎么样", ("mcp.web_search",))
+        plan = self._plan("什么是量子纠缠", ("mcp.web_search",))
         assert plan.steps[0].capability_id == "mcp.web_search"
-
-    def test_course_pattern_is_retired(self):
-        plan = self._plan("开课表是什么", ("mcp.course_schedule",))
-        assert plan is None or all(
-            step.capability_id not in {
-                "mcp.course_schedule", "mcp.icourse_reviews"}
-            for step in plan.steps)
 
     def test_time_pattern_still_priority_over_definition(self):
         plan = self._plan("现在是什么时间", ("mcp.clock",))
         assert plan.steps[0].capability_id == "mcp.clock"
-
-    def test_binary_grading_has_no_retired_course_plan(self):
-        plan = self._plan(
-            "在评课社区里找出所有的二等级制课程",
-            ("mcp.course_schedule", "mcp.icourse_reviews"),
-        )
-        assert plan is None or all(
-            step.capability_id not in {
-                "mcp.course_schedule", "mcp.icourse_reviews"}
-            for step in plan.steps)

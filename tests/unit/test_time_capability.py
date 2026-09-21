@@ -1,14 +1,9 @@
 # -*- coding: utf-8 -*-
 """时钟能力（mcp.clock）：用系统时钟回答日期/时间，不靠 LLM 猜测。
 
-覆盖：服务实时性、注册计数、Planner 模式（时间 vs 考试优先级）、E2E 工具链。
+覆盖：服务实时性、注册计数、Planner 模式与 E2E 工具链。
 """
-import os
 import sys
-# 测试与生产运行时数据隔离：access 策略指向不存在的路径 = legacy allow，
-# 不受 data/mcp_access.json（生产 default deny）影响（文档 2.5.6）。
-os.environ.setdefault(
-    "DUDUDA_MCP_ACCESS", "/tmp/dududa-test-mcp-access-absent.json")
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -81,8 +76,7 @@ class _StubProvider:
 class TestCandidateCutoff:
     @pytest.mark.asyncio
     async def test_production_shape_keeps_clock_in_candidates(self):
-        """生产注册表（3 内置 + 13 MCP = 16 项）超过默认 top_k=8 时，
-        mcp.clock 不得被候选截断（曾导致「现在几点」降级为闲聊）。"""
+        """通用生产注册表必须稳定保留 mcp.clock 候选。"""
         reg = CapabilityRegistry()
         for i in range(3):
             reg.register(
@@ -91,7 +85,7 @@ class TestCandidateCutoff:
                            risk=CapabilityRisk.READ_ONLY),
                 _StubProvider())
         register_all_mcp_services(reg)
-        assert len(reg.list_enabled()) == 14
+        assert len(reg.list_enabled()) == 8
         orch = RuntimeOrchestrator(
             decision_engine=_ForceToolsEngine(),
             capability_registry=reg,
@@ -136,7 +130,7 @@ class TestClockCapability:
         assert "clock" in services
         reg = CapabilityRegistry()
         n = register_all_mcp_services(reg)
-        assert n == 11
+        assert n == 5
         assert reg.get("mcp.clock") is not None
 
     @pytest.mark.asyncio
@@ -157,16 +151,6 @@ class TestClockCapability:
         assert result.outcome == RunOutcome.SUCCEEDED
         caps = {o.capability_id for o in orch._last_state.tool_observations}
         assert "mcp.clock" in caps
-
-    @pytest.mark.asyncio
-    async def test_exam_question_keeps_exam_priority(self):
-        """「考试时间」仍走考试能力，不被时钟截胡。"""
-        orch = _orch_with_clock()
-        result = await orch.run(_envelope("考试时间"))
-        assert result.outcome == RunOutcome.SUCCEEDED
-        caps = {o.capability_id for o in orch._last_state.tool_observations}
-        assert "mcp.exam_schedule" in caps
-        assert "mcp.clock" not in caps
 
     @pytest.mark.asyncio
     async def test_base_perceive_flags_time(self):

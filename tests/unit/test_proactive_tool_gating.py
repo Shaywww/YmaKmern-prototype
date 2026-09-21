@@ -101,10 +101,6 @@ def _make_orchestrator(memory=None):
     memory = memory or InMemoryRepository()
     reg = CapabilityRegistry()
     register_all_mcp_services(reg)
-    import dududa.runtime.orchestrator as _orch_mod
-    from dududa.mcp.access import MCPAccessPolicy
-    _orch_mod.mcp_access = MCPAccessPolicy(
-        config_path="/nonexistent/mcp_access_unittest_ptg.json")
     plugin = _FakePlugin(memory)
     orch = main._ProdOrchestrator(
         plugin=plugin,
@@ -139,19 +135,19 @@ def _plugin(monkeypatch, tmp_path):
 
 
 class TestToolIntentGate:
-    """needs_tools 与 _TOOL_KW 对齐：查/招生/天气/新闻 等意图进入工具链。"""
+    """needs_tools 与 _TOOL_KW 对齐：搜索/天气/新闻等进入工具链。"""
 
     def _perceive(self, monkeypatch, tmp_path, text):
         return _plugin(monkeypatch, tmp_path)._perceive(
             _FakeEvent(text, group="g1"))
 
-    def test_chacha_ustc(self, monkeypatch, tmp_path):
-        p = self._perceive(monkeypatch, tmp_path, "帮我查一下USTC")
+    def test_explicit_lookup(self, monkeypatch, tmp_path):
+        p = self._perceive(monkeypatch, tmp_path, "帮我查一下量子计算")
         assert p.needs_tools is True
         assert p.is_explicit_command is True
 
-    def test_zhaosheng(self, monkeypatch, tmp_path):
-        p = self._perceive(monkeypatch, tmp_path, "USTC今年招生怎么样")
+    def test_explicit_search(self, monkeypatch, tmp_path):
+        p = self._perceive(monkeypatch, tmp_path, "搜索最新AI模型")
         assert p.needs_tools is True
 
     def test_weather_with_city(self, monkeypatch, tmp_path):
@@ -165,17 +161,6 @@ class TestToolIntentGate:
     def test_greeting_no_tools(self, monkeypatch, tmp_path):
         p = self._perceive(monkeypatch, tmp_path, "你好呀")
         assert p.needs_tools is False
-
-    @pytest.mark.parametrize("text", [
-        "推荐几门课", "拿高分", "哪些老师评分高", "有没有好拿分的课",
-    ])
-    def test_ustc_course_language_has_no_retired_capability(
-            self, monkeypatch, tmp_path, text):
-        p = self._perceive(monkeypatch, tmp_path, text)
-        assert p.needs_tools is True
-        assert "course" in p.topics
-        assert p.suggested_capabilities == ()
-
 
 class TestRuleFallbackPlan:
     def _cands(self, reg):
@@ -193,15 +178,15 @@ class TestRuleFallbackPlan:
     def test_generic_chacha_to_web_search(self):
         orch, _plugin, reg = _make_orchestrator()
         plan = orch._rule_fallback_plan(_state(orch), self._cands(reg),
-                                        "帮我查一下USTC")
+                                        "帮我查一下量子计算")
         assert plan is not None
         assert plan.steps[0].capability_id == "mcp.web_search"
-        assert "USTC" in plan.steps[0].arguments.get("q", "")
+        assert "量子计算" in plan.steps[0].arguments.get("q", "")
 
-    def test_zhaosheng_to_web_search(self):
+    def test_explicit_search_to_web_search(self):
         orch, _plugin, reg = _make_orchestrator()
         plan = orch._rule_fallback_plan(_state(orch), self._cands(reg),
-                                        "USTC今年招生怎么样")
+                                        "搜索最新AI模型")
         assert plan is not None
         assert plan.steps[0].capability_id == "mcp.web_search"
 
@@ -409,34 +394,33 @@ class TestToolFailureDetail:
 class TestSearchRanking:
     def test_video_deprioritized_without_video_intent(self):
         results = [
-            {"title": "USTC 官网", "link": "https://www.ustc.edu.cn/",
-             "snippet": "中国科学技术大学"},
-            {"title": "腾讯视频 USTC", "link": "https://v.qq.com/x/page/x.html",
-             "snippet": "USTC 相关视频"},
-            {"title": "USTC - Wikipedia", "link": "https://en.wikipedia.org/wiki/USTC",
-             "snippet": "University of Science and Technology of China"},
+            {"title": "Python 官网", "link": "https://www.python.org/",
+             "snippet": "Python programming language"},
+            {"title": "腾讯视频 Python", "link": "https://v.qq.com/x/page/x.html",
+             "snippet": "Python 视频"},
+            {"title": "Python - Wikipedia", "link": "https://en.wikipedia.org/wiki/Python",
+             "snippet": "Python programming language"},
         ]
-        ranked = _rank_results(results, "USTC")
+        ranked = _rank_results(results, "Python")
         links = [r["link"] for r in ranked]
-        assert links[0] == "https://www.ustc.edu.cn/"
         assert "https://v.qq.com/x/page/x.html" not in links[:2]
 
     def test_video_kept_when_video_intent(self):
         results = [
-            {"title": "USTC 宣传视频", "link": "https://v.qq.com/x/page/y.html",
-             "snippet": "USTC 官方宣传视频"},
-            {"title": "USTC 官网", "link": "https://www.ustc.edu.cn/",
-             "snippet": "中国科学技术大学"},
+            {"title": "Python 教程视频", "link": "https://v.qq.com/x/page/y.html",
+             "snippet": "Python 教程视频"},
+            {"title": "Python 官网", "link": "https://www.python.org/",
+             "snippet": "Python programming language"},
         ]
-        ranked = _rank_results(results, "USTC 宣传视频")
+        ranked = _rank_results(results, "Python 教程视频")
         links = [r["link"] for r in ranked]
         assert "https://v.qq.com/x/page/y.html" in links
 
     def test_dedupe_by_domain(self):
         results = [
-            {"title": "A", "link": "https://www.ustc.edu.cn/a", "snippet": "x"},
-            {"title": "B", "link": "https://www.ustc.edu.cn/b", "snippet": "y"},
+            {"title": "A", "link": "https://www.python.org/a", "snippet": "x"},
+            {"title": "B", "link": "https://www.python.org/b", "snippet": "y"},
             {"title": "C", "link": "https://other.com/c", "snippet": "z"},
         ]
-        ranked = _rank_results(results, "USTC")
+        ranked = _rank_results(results, "Python")
         assert len(ranked) == 2

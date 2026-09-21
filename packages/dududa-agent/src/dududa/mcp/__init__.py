@@ -1,8 +1,3 @@
-"""Campus MCP Services - USTC data capabilities."""
+"""General-purpose MCP services available to the QQ agent."""
 from .base import BaseMCPService, MCPServiceConfig, CachePolicy, ServiceHealth
-from .exam_schedule import ExamScheduleService
-from .academic_calendar import AcademicCalendarService
-from .training_program import TrainingProgramService
-from .second_classroom import SecondClassroomService
-from .campus_notice import CampusNoticeService
 from .registry import register_all_mcp_services

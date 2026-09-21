@@ -401,8 +401,8 @@ def run_capability_retrieval() -> dict:
     schema = CapabilitySchema(input_schema={"required": ["action"]})
     reg.register(
         Capability(
-            capability_id="mcp.course_schedule", name="课表",
-            description="查询课程表", provider=ProviderType.MCP,
+            capability_id="mcp.web_search", name="网页搜索",
+            description="搜索公开网页", provider=ProviderType.MCP,
             risk=CapabilityRisk.READ_ONLY, schema=schema,
         ),
         _NoopProvider(),

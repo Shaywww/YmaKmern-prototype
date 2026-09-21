@@ -381,12 +381,13 @@ async def test_unmentioned_plain_group_message_is_dropped_before_ux_progress_and
 
 
 @pytest.mark.asyncio
-async def test_direct_course_query_returns_retirement_notice_without_runtime(
+async def test_direct_school_query_is_silent_before_runtime_and_progress(
     tmp_path, monkeypatch
 ):
     plugin = FlowPlugin(tmp_path)
     event = GroupEvent(
-        "帮我查一下数据结构课程", message_id="retired-course-1", at=True)
+        "帮我查一下数据结构课程", message_id="school-silent-1", at=True)
+    trace, created_tasks, prune_calls = _install_side_effect_spies(monkeypatch)
     inner_calls = []
 
     async def forbidden_inner(*args):
@@ -394,10 +395,16 @@ async def test_direct_course_query_returns_retirement_notice_without_runtime(
         return "不应该进入模型或工具链"
 
     monkeypatch.setattr(h, "_run_flow_inner", forbidden_inner)
-    reply = await h.run_message_flow(plugin, event)
-
-    assert reply == "查课和评课查询已经下架了，暂时不能帮你查课程、老师或评分。"
+    assert await h.run_message_flow(plugin, event) is None
     assert inner_calls == []
+    assert plugin.ux_store.session_key_calls == 0
+    assert plugin.progress_messages == []
+    assert created_tasks == []
+    assert prune_calls == []
+    assert len(trace.events) == 1
+    assert trace.events[0]["event"] == "school_scope_silenced"
+    assert trace.events[0]["action"] == "ignore"
+    assert "text" not in trace.events[0]
 
 
 @pytest.mark.asyncio

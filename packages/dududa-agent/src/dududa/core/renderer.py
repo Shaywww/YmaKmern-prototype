@@ -65,21 +65,21 @@ _NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+)?(?![A-Za-z0-9_.])")
 _NUMBER_WITH_UNIT_RE = re.compile(
     r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+)?\s*"
-    r"(?:%|\u2103|\u5ea6|\u5206|\u4eba|\u540d|\u4e2a|\u95e8|\u6b21|\u5929|\u5c0f\u65f6|\u5206\u949f|\u5143|"
-    r"\u516c\u91cc|km/h|km|kph|\u5b66\u5206|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
+    r"(?:%|\u2103|\u5ea6|\u5206\u949f|\u5206|\u4eba|\u540d|\u4e2a|\u6b21|\u5929|\u5c0f\u65f6|\u5143|"
+    r"\u516c\u91cc|km/h|km|kph|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
     re.IGNORECASE,
 )
 _RANGE_WITH_UNIT_RE = re.compile(
     r"(?<![A-Za-z0-9_.])(-?\d+(?:\.\d+)?)\s*"
     r"(?:到|至|[-~～—])\s*(-?\d+(?:\.\d+)?)\s*"
-    r"(%|\u2103|\u5ea6|\u5206|\u4eba|\u540d|\u4e2a|\u95e8|\u6b21|\u5929|\u5c0f\u65f6|\u5206\u949f|\u5143|"
-    r"\u516c\u91cc|km/h|km|kph|\u5b66\u5206|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
+    r"(%|\u2103|\u5ea6|\u5206\u949f|\u5206|\u4eba|\u540d|\u4e2a|\u6b21|\u5929|\u5c0f\u65f6|\u5143|"
+    r"\u516c\u91cc|km/h|km|kph|\u6761|\u665a|\u6444\u6c0f\u5ea6)",
     re.IGNORECASE,
 )
 _LABELED_NUMBER_RE = re.compile(
     r"(?:\u8bc4\u5206|\u5f97\u5206|\u6e29\u5ea6|\u6c14\u6e29|\u4f53\u611f|\u6e7f\u5ea6|\u98ce\u901f|\u4ef7\u683c|\u5bb9\u91cf|"
-    r"\u9009\u8bfe\u4eba\u6570|\u8bc4\u4ef7\u6570|\u5b66\u5206)\s*(?:\u4e3a|\u662f|\u7ea6|[:\uff1a])?\s*"
-    r"-?\d+(?:\.\d+)?\s*(?:%|\u2103|\u5ea6|km/h|km|kph|\u5b66\u5206|\u5143)?",
+    r"\u8bc4\u4ef7\u6570)\s*(?:\u4e3a|\u662f|\u7ea6|[:\uff1a])?\s*"
+    r"-?\d+(?:\.\d+)?\s*(?:%|\u2103|\u5ea6|km/h|km|kph|\u5143)?",
     re.IGNORECASE,
 )
 _NEGATION_PREFIXES = ("没有", "并非", "不是", "无", "没", "不")
@@ -121,12 +121,15 @@ def _semantic_from_field(field: str) -> str:
         return "percentage"
     if any(key in value for key in ("wind", "kph", "speed")):
         return "speed"
-    if any(key in value for key in ("credit", "\u5b66\u5206")):
-        return "credits"
     if any(key in value for key in (
             "count", "reviews", "review_count", "capacity", "enrolled",
-            "total", "returned", "items")):
+            "people", "persons", "total", "returned", "items")):
         return "count"
+    if any(key in value for key in ("distance", "kilometer", "_km")):
+        return "distance"
+    if any(key in value for key in (
+            "duration", "minutes", "minute", "hours", "hour", "days")):
+        return "duration"
     if any(key in value for key in ("price", "cost", "amount")):
         return "price"
     return ""
@@ -142,10 +145,8 @@ def _semantic_from_claim(value: str) -> str:
         return "percentage"
     if any(key in normalized for key in ("风速", "km/h", "kph")):
         return "speed"
-    if "学分" in normalized:
-        return "credits"
     if any(key in normalized for key in (
-            "人", "名", "个", "门", "次", "条", "晚", "容量", "选课人数", "评价数")):
+            "人", "名", "个", "次", "条", "晚", "容量", "评价数")):
         return "count"
     if "元" in normalized or "价格" in normalized:
         return "price"

@@ -99,22 +99,9 @@ systemctl is-active astrbot                 # active
 真机行为抽查：QQ 发图 + `@机器人` 追问，`journalctl -u astrbot -n 50 | grep -E "Flow start|Run end"` 应出现 `run_id/trace_id` 配对的 `Flow start → Run end → Flow end`；`data/traces/2026-08-06.jsonl`（按日滚动）记录 `model_request/model_response/render_result/memory_gate/run_end/flow_end` 等事件。
 感知结果按日入库 `data/perceptions/YYYY-MM-DD.jsonl`（目录可用 `DUDUDA_PERCEPTION_DIR` 覆盖），记录每条消息的 speech_acts/topics/entities/candidate_intents/needs_tools/confidence 与 run/trace 绑定。
 
-## 6. iCourse MCP 按群/按人切换 + 服务熔断（文档 2.5.6）
+## 6. 通用 MCP 服务熔断（文档 2.5.6）
 
-策略文件默认 data/mcp_access.json（首次启动由插件自动种下：default deny + DUDUDA_OWNER_IDS 放行），
-可用环境变量 DUDUDA_MCP_ACCESS 覆盖路径。修改配置即时生效（按 mtime 热加载），无需重启。
-
-    {
-      "default_policy": "deny",
-      "groups": {"allow": ["群号1"], "deny": []},
-      "users":  {"allow": ["QQ号"], "deny": []}
-    }
-
-- 约束范围：六个校园服务 exam_schedule / academic_calendar / training_program /
-  second_classroom / campus_notice / academic_affairs；mcp.clock 等非校园能力恒允许。
-- 查课与评课能力（course_schedule / icourse_reviews）已经下架，不再注册、路由或启动对应外部查询链路。
-- 判定优先级：用户 deny → 用户 allow（个人放行优先于群）→ 群 deny → 群 allow → default_policy（默认 deny，fail closed）。
-- 群号兼容 group_123 与裸 123 两种写法。
+当前只注册时钟、天气、新闻、翻译和联网搜索五个通用只读能力。校园服务已从代码、注册表和部署配置中移除。
 
 服务熔断（Server Registry）：每服务连续失败 >= DUDUDA_MCP_BREAKER_THRESHOLD（默认 3）次
 自动 open（快速失败，不再触碰 service）；冷却 DUDUDA_MCP_BREAKER_RESET（默认 30s）后放行
@@ -123,10 +110,9 @@ systemctl is-active astrbot                 # active
 
 验证：
 
-    grep -n "ICOURSE_SERVICE_IDS" packages/dududa-agent/src/dududa/mcp/access.py
     grep -n "ServerCircuitBreaker" packages/dududa-agent/src/dududa/mcp/registry.py
-    python3.12 -m pytest tests/test_mcp_access_breaker.py -q   # 预期全绿
-    # QQ 发 /dududa_mcp 查看访问策略与熔断状态
+    python3.12 -m pytest tests/unit/test_general_mcp_registry.py -q
+    # QQ 发 /ymakmern_mcp 查看熔断与统一 MCP Client 状态
 
 ## 7. 用户画像（SESSION_STATE / USER_PROFILE，文档 2.4.6）
 

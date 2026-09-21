@@ -14,46 +14,7 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
     recovery = ErrorRecovery()
 
     # Register common intent patterns
-    planner.register_pattern(
-        ("考试", "期末", "期中", "exam", "什么时候考"),
-        {"name": "exam_lookup", "goal": "Find exam information",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.exam_schedule",
-                     "arguments": {"action": "get_all_exams"}, "purpose": "Get exam schedule",
-                     "expected_output": "Exam timetable"}]},
-    )
-    planner.register_pattern(
-        ("选课", "培养方案", "学分", "毕业要求"),
-        {"name": "program_lookup", "goal": "Check degree requirements",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.training_program",
-                     "arguments": {"action": "get_program"}, "purpose": "Get training program"}]},
-    )
-    planner.register_pattern(
-        ("活动", "讲座", "竞赛", "第二课堂", "社团"),
-        {"name": "activity_lookup", "goal": "Find campus activities",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.second_classroom",
-                     "arguments": {"action": "search"}, "purpose": "Search activities"}]},
-    )
-    planner.register_pattern(
-        ("通知", "公告", "news", "notice"),
-        {"name": "notice_lookup", "goal": "Find campus notices",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.campus_notice",
-                     "arguments": {"action": "search"}, "purpose": "Search notices"}]},
-    )
-
-    planner.register_pattern(
-        ("成绩", "分数", "绩点"),
-        {"name": "grade_lookup", "goal": "Get student grades",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.academic_affairs",
-                     "arguments": {"action": "get_grade"}, "purpose": "Get grades"}]},
-    )
-    planner.register_pattern(
-        ("放假", "校历", "节假日", "什么时候放"),
-        {"name": "holiday_lookup", "goal": "Get academic calendar holidays",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.academic_calendar",
-                     "arguments": {"action": "get_holidays"}, "purpose": "Get holidays"}]},
-    )
-
-    # 日期/时间（文档 2.5.x 时钟能力）：注册在最后，考试/课表等模式优先
+    # 日期/时间能力。
     planner.register_pattern(
         ("几点", "时间", "几号", "星期几", "日期", "什么时候了", "现在是", "现在几"),
         {"name": "time_lookup", "goal": "Get current date and time",
@@ -61,17 +22,6 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                      "arguments": {"action": "get_now"},
                      "purpose": "Get current local time",
                      "expected_output": "Current date/time"}]},
-    )
-
-    # 联网搜索（mcp.web_search）：通用「搜/查/找」命令；q 由 {query} 占位符填充。
-    # 注册在最后：课表/考试/时间等专属模式优先于通用搜索。
-    planner.register_pattern(
-        ("搜", "百度", "百度一下", "search", "find"),
-        {"name": "web_search", "goal": "Search the web for the requested topic",
-         "steps": [{"step_id": "s1", "capability_id": "mcp.web_search",
-                    "arguments": {"action": "search", "q": "{query}"},
-                    "purpose": "Search the web",
-                    "expected_output": "Top ranked web results with titles, links and snippets"}]},
     )
 
     # 天气（mcp.weather）：城市由生产 _enrich_plan_args 提取，默认合肥
@@ -100,14 +50,24 @@ def integrate_with_orchestrator(orchestrator, capability_registry=None):
                      "purpose": "Translate text",
                      "expected_output": "Translation result"}]},
     )
-    # 百科/名词查询（招生/录取/是什么…）-> 联网搜索
+    # 百科/名词查询 -> 联网搜索
     planner.register_pattern(
-        ("招生", "录取", "百科", "是什么", "什么是", "啥是", "啥叫"),
+        ("百科", "是什么", "什么是", "啥是", "啥叫"),
         {"name": "definition_lookup", "goal": "Look up facts about a noun or topic",
          "steps": [{"step_id": "s1", "capability_id": "mcp.web_search",
                      "arguments": {"action": "search", "q": "{query}"},
                      "purpose": "Search the web for facts",
                      "expected_output": "Top ranked web results with titles and snippets"}]},
+    )
+    # 通用联网搜索放在专用能力之后注册。一个请求同时含「查」和
+    # 「天气/时间/新闻」时，专用能力优先；其余查询落到网页搜索。
+    planner.register_pattern(
+        ("搜", "搜索", "百度", "查", "查询", "找", "search", "find"),
+        {"name": "web_search", "goal": "Search the web for the requested topic",
+         "steps": [{"step_id": "s1", "capability_id": "mcp.web_search",
+                    "arguments": {"action": "search", "q": "{query}"},
+                    "purpose": "Search the web",
+                    "expected_output": "Top ranked web results with titles, links and snippets"}]},
     )
 
     return ToolChainIntegration(planner, executor, recovery, capability_registry)

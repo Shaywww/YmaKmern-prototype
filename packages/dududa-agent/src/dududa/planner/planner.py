@@ -143,16 +143,6 @@ class ToolPlanner:
                         arguments={"keyword": item, "action": "search"},
                         purpose=f"Look up {item}",
                     ))
-            # Add third step for exam/calendar context
-            for cap_id in ("mcp.exam_schedule", "mcp.academic_calendar"):
-                if cap_id in capabilities:
-                    steps.append(PlannedStep(
-                        step_id=f"s{len(steps)+1}", capability_id=cap_id,
-                        arguments={"action": "get_all_exams"} if "exam" in cap_id else {"action": "get_semester"},
-                        purpose="Get context info",
-                    ))
-                    break
-
         elif intent_type == "lookup":
             # Simple lookup: 1 step
             best = self._pick_best_capability(caps, context.user_intent)

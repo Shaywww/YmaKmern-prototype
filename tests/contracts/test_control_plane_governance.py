@@ -19,7 +19,6 @@ def cp(tmp_path):
         "DUDUDA_CP_AUDIT": str(tmp_path / "audit.jsonl"),
         "DUDUDA_EXPERIMENT_FILE": str(tmp_path / "experiments.json"),
         "DUDUDA_EXPERIMENT_BUCKET_SALT": "stable-test-salt",
-        "DUDUDA_MCP_ACCESS": str(tmp_path / "missing-access.json"),
         "DUDUDA_MEMORY_FILE": str(tmp_path / "memory.json"),
     }
     os.environ.update(values)

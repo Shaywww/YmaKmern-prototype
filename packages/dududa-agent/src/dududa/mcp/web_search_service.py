@@ -41,7 +41,7 @@ def _clean_source_url(value: str) -> str:
                        parsed.query, ""))
 
 
-# 视频站：无视频意图时降权（避免「搜USTC」返回腾讯视频）
+# 视频站：无视频意图时降权，避免普通搜索被视频聚合页淹没。
 _VIDEO_HOST_MARKERS = (
     "v.qq.com", "bilibili.com", "youku.com", "iqiyi.com", "douyin.com",
     "kuaishou.com", "youtube.com", "m1905.com", "mgtv.com", "sohu.com/v",
@@ -50,8 +50,8 @@ _VIDEO_HOST_MARKERS = (
 _VIDEO_QUERY_HINTS = ("视频", "电影", "番剧", "电视剧", "看", "直播", "预告", "片源", "怎么演")
 # 权威/官方来源加权
 _BOOST_HOST_MARKERS = (
-    "wikipedia.org", "baike.baidu.com", ".edu.cn", ".gov.cn", "zhihu.com",
-    "ustc.edu.cn", "docs.mmdustc.top", "qq.com/qqcom", "people.com.cn",
+    "wikipedia.org", "baike.baidu.com", ".gov.cn", "zhihu.com",
+    "qq.com/qqcom", "people.com.cn",
     "xinhuanet.com", "chinanews.com.cn",
 )
 # 内容子域（news./m./en./bbs./...）：主站是权威答案，查询未点名子域时降权

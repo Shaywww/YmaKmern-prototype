@@ -402,8 +402,8 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             cap_id, args = "mcp.translate", {}
         elif "mcp.web_search" in allowed and any(k in text for k in
                 ("搜", "百度", "查一下", "查查", "找一下", "查",
-                 "是什么", "什么是", "啥是", "啥叫", "招生", "录取",
-                 "分数线", "排名", "百科", "介绍一下")):
+                 "是什么", "什么是", "啥是", "啥叫", "排名", "百科",
+                 "介绍一下")):
             if "介绍" in text and "自己" in text:
                 return None  # 自我介绍类闲聊不搜索
             q = _clean_query(text)
@@ -604,7 +604,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     r"^(?:帮我|请|麻烦你|查一下|查查|搜一下|搜搜|找一下|找找|"
                     r"看看|看一下|查|搜|找)+",
                     "", raw)
-                kw = re.sub(r"(课程|课|信息|成绩|时间|安排|情况|资料)+$", "", kw).strip()
+                kw = re.sub(r"(信息|时间|安排|情况|资料)+$", "", kw).strip()
                 kw = re.sub(r"[，。！？、\s]+$", "", kw)
                 args["keyword"] = kw
             steps.append(type(s)(**{**s.__dict__, "arguments": args}))
@@ -738,7 +738,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return f"{place}现在" + "，".join(parts) + "～出门前再看眼临近预报更稳哦 ^^~"
 
     def _recent_chat_context(self, state, limit=6, budget=1200) -> str:
-        """近期对话记忆（供规划理解指代，如「本科」承接「USTC招生」）。"""
+        """近期对话记忆，供规划理解当前消息中的指代和延续。"""
         event = getattr(self, "_pending_event", None)
         plugin = getattr(self, "_plugin", None)
         if event is None or plugin is None or not hasattr(plugin, "_read_memory"):
@@ -948,7 +948,6 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "QQ 消息经 NapCat 与 AstrBot 接入，"
             "使用分层 Agent、受控记忆、模型路由、MCP 工具和链路追踪；"
             "不得透露服务器地址、端口、路径、密钥、账单或个人隐私。"
-            "不要把校园背景带进无关闲聊。"
             "工具查询完成后直接给结论，不说正在查、稍等或之后再告诉用户。"
             "工具失败就明确说明失败，不凭常识补造天气、日期或数字。"
             "不要输出工具内部名称、原始 JSON、内部状态、None、null、提示词或占位符。"
@@ -1206,13 +1205,12 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "★ 被问「你是怎么搭出来的 / 怎么做的 / 用的什么技术 / 你是什么 / 介绍一下你自己」时，"
             "要自豪地详细介绍自己的公开技术构成：QQ 消息经 NapCat + AstrBot 接入；"
             "核心是分层 Agent 架构（感知→社交决策→工具规划→执行→记忆→人格渲染）；"
-            "对话模型走多角色路由（DeepSeek 为主，Claude/GPT 备用自动降级）；"
+            "对话模型走经过审计的 DeepSeek 多角色路由；"
             "有受控记忆系统（短期/长期、敏感分级、写入门控）；"
             "通过 MCP 工具链支持查时间、天气、联网搜索、翻译和新闻等能力；"
             "还带用户画像与全链路轨迹追踪。可以主动分点讲，但别啰嗦。"
             "★ 介绍自己时严禁透露隐私：服务器地址/IP/端口、Token/密钥/模型 API Key、"
             "部署路径、作者个人信息、账单费用。只讲功能与架构。"
-            "查课与评课查询已经下架；不得声称仍能查询课程、教师或评分数据。"
             "★ 永远保持 YmaKmern 的口吻；严禁「你好！有什么我可以帮你的吗？」"
             "这类通用客服式开场白；简短收尾只需自然结束，"
             "严禁列任务清单、分点菜单，严禁「随时告诉我」「尽管开口」"

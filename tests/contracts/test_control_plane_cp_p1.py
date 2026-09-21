@@ -41,8 +41,6 @@ def _write_memory(path):
 def cp(tmp_path):
     os.environ["DUDUDA_CP_TOKEN"] = TOKEN
     os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
-    # MCP access 隔离：指向不存在的路径 -> legacy allow
-    os.environ.setdefault("DUDUDA_MCP_ACCESS", "/tmp/dududa-cp-test-access-absent.json")
     mem = tmp_path / "memory.json"
     os.environ["DUDUDA_MEMORY_FILE"] = str(mem)
     evals = tmp_path / "evals"
@@ -58,7 +56,7 @@ def cp(tmp_path):
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {TOKEN}"})
     yield app, client, rids
-    for k in ("DUDUDA_CP_TOKEN", "DUDUDA_CP_AUDIT", "DUDUDA_MCP_ACCESS",
+    for k in ("DUDUDA_CP_TOKEN", "DUDUDA_CP_AUDIT",
               "DUDUDA_MEMORY_FILE", "DUDUDA_EVAL_DIR"):
         os.environ.pop(k, None)
 

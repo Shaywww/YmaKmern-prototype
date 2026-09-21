@@ -9,8 +9,7 @@
 - UnifiedMCPProvider：显式 Capability mapping；未映射的 action、
   未注册 server 或调用失败时降级到 mock Provider（可观测，不静默）。
 
-iCourse 真实工具（10 个）中，crawl*/export_dataset/check_robots 属
-高频/副作用/进程可见路径，不映射给普通用户（文档 2.5.6 安全修复）。
+具体 MCP server 必须由部署环境显式配置，本模块不内置产品域或外部服务。
 """
 from __future__ import annotations
 
@@ -267,7 +266,7 @@ class UnifiedMCPClient:
         if "{data_dir}" in value:
             data_dir = self._data_dir or os.path.join(os.getcwd(), "data")
             value = value.replace("{data_dir}", data_dir)
-        return value
+        return os.path.normpath(value)
 
     def _looks_like_path(self, value: Any) -> bool:
         if not isinstance(value, str) or not value:
@@ -488,14 +487,14 @@ class McpServerRegistry:
             latency_ms=round((time.time() - start) * 1000, 1))
         return result
 
-    async def list_tools(self, server_id: str = "icourse",
+    async def list_tools(self, server_id: str = "default",
                          refresh: bool = False) -> tuple[dict, ...]:
         client = self._servers.get(server_id)
         if client is None:
             return ()
         return await client.list_tools(refresh)
 
-    def health(self, server_id: str = "icourse") -> str:
+    def health(self, server_id: str = "default") -> str:
         client = self._servers.get(server_id)
         return client.health() if client is not None else "unregistered"
 
@@ -523,32 +522,6 @@ def extract_mcp_result(result: dict) -> tuple[Any, bool]:
     is_error = bool(result.get("isError")) or (
         data is None and not result.get("structuredContent"))
     return data, is_error
-
-
-# ---- iCourse 显式 Capability mapping（文档 2.5.6） ----
-# 真实工具：icourse_stats / search_courses / get_course / get_reviews /
-# search_site_courses；crawl*/export_dataset/check_robots 不对普通用户开放。
-_ICOURSE_ALLOW_TOOLS = (
-    "icourse_stats", "search_courses", "get_course",
-    "get_reviews", "search_site_courses",
-)
-_ICOURSE_DENY_TOOLS = (
-    "crawl_course", "crawl_courses", "crawl_latest_reviews",
-    "export_dataset", "check_robots",
-)
-# action -> 工具名；None 或缺失 -> 该 action 不映射，降级 mock
-_CAP_TOOL_MAP: dict[str, dict[str, Optional[str]]] = {
-    "mcp.campus_notice": {
-        "default": "search_site_courses",
-        "search": "search_site_courses",
-        "get_pinned": None,
-        "get_recent": None,
-    },
-    "mcp.exam_schedule": {},
-    "mcp.academic_calendar": {},
-    "mcp.training_program": {},
-    "mcp.second_classroom": {},
-}
 
 
 class UnifiedMCPProvider:
@@ -599,25 +572,28 @@ class UnifiedMCPProvider:
 
 
 class ProviderFactory:
-    """provider_factory 兼容包装：registry + client 状态查询。"""
+    """Generic provider-factory wrapper for one explicitly configured server."""
 
     def __init__(self, registry: McpServerRegistry,
-                 client: UnifiedMCPClient):
+                 client: UnifiedMCPClient, server_id: str = "default",
+                 mappings: Optional[dict[str, dict[str, Optional[str]]]] = None):
         self.registry = registry
         self.client = client
+        self.server_id = server_id
+        self.mappings = mappings or {}
 
     def __call__(self, svc):
         from .registry import MCPProvider
         cap_id = f"mcp.{svc.name}"
-        mapping = _CAP_TOOL_MAP.get(cap_id) or {}
+        mapping = self.mappings.get(cap_id) or {}
         return UnifiedMCPProvider(
-            self.registry, "icourse", cap_id, MCPProvider(svc), mapping)
+            self.registry, self.server_id, cap_id, MCPProvider(svc), mapping)
 
     async def list_tools(self, refresh: bool = False):
-        return await self.registry.list_tools("icourse", refresh)
+        return await self.registry.list_tools(self.server_id, refresh)
 
     def health(self) -> str:
-        return self.registry.health("icourse")
+        return self.registry.health(self.server_id)
 
     async def close(self) -> None:
         await self.client.close()
@@ -629,9 +605,9 @@ def create_unified_provider_factory(
     """由环境变量构建统一 MCP Client（懒启动，不 spawn 进程）。
 
     环境变量：
-      ICOURSE_MCP_CMD       iCourse stdio MCP server 启动命令
-                            （默认 python3 -m icourse_mcp）
-      ICOURSE_MCP_ARGS      附加参数（空格分隔）
+      DUDUDA_MCP_CMD        stdio MCP server 启动命令（必须显式配置）
+      DUDUDA_MCP_ARGS       附加参数（空格分隔）
+      DUDUDA_MCP_SERVER_ID  本地服务标识（默认 default）
       DUDUDA_MCP_TIMEOUT    单次请求超时秒数（默认 10）
       DUDUDA_MCP_RETRIES    重试次数（默认 2）
       DUDUDA_MCP_BREAKER    熔断阈值（默认 5）
@@ -642,8 +618,9 @@ def create_unified_provider_factory(
       DUDUDA_MCP_CRAWL_STEPS crawl* 步数/页数上限（默认 0 = 不限）
     """
     env = env if env is not None else os.environ
-    cmd = env.get("ICOURSE_MCP_CMD", "") or "python3 -m icourse_mcp"
-    args = tuple(a for a in env.get("ICOURSE_MCP_ARGS", "").split() if a)
+    cmd = env.get("DUDUDA_MCP_CMD", "") or "python3 -m mcp_server"
+    args = tuple(a for a in env.get("DUDUDA_MCP_ARGS", "").split() if a)
+    server_id = str(env.get("DUDUDA_MCP_SERVER_ID", "default") or "default")
     try:
         timeout = float(env.get("DUDUDA_MCP_TIMEOUT", "10"))
     except ValueError:
@@ -674,7 +651,5 @@ def create_unified_provider_factory(
         export_root=export_root, data_dir=data_dir,
         crawl_limit=crawl_limit, crawl_max_steps=crawl_steps)
     registry = McpServerRegistry()
-    registry.register("icourse", client,
-                      allow=_ICOURSE_ALLOW_TOOLS,
-                      deny=_ICOURSE_DENY_TOOLS)
-    return ProviderFactory(registry, client)
+    registry.register(server_id, client)
+    return ProviderFactory(registry, client, server_id=server_id)

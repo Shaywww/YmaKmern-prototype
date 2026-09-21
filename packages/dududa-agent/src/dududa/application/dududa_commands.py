@@ -42,17 +42,10 @@ async def cmd_status_impl(plugin) -> str:
 
 
 async def cmd_mcp_impl(plugin) -> str:
-    """MCP 状态：访问策略（按群/按人）+ 服务熔断 + 统一 Client（可选）。"""
-    from dududa.mcp.access import mcp_access
+    """MCP 状态：服务熔断 + 统一 Client（可选）。"""
     from dududa.mcp.registry import breaker_status
 
-    acc = mcp_access.status()
-    lines = [
-        f"访问策略: default={acc['default_policy']}",
-        f"  文件: {acc['path']} (exists={acc['exists']})",
-        f"  群 allow={list(acc['groups'].get('allow', ()))} deny={list(acc['groups'].get('deny', ()))}",
-        f"  人 allow={list(acc['users'].get('allow', ()))} deny={list(acc['users'].get('deny', ()))}",
-    ]
+    lines = []
     st = breaker_status()
     if st:
         lines.append("熔断: " + ", ".join(f"{k}={v}" for k, v in st.items()))

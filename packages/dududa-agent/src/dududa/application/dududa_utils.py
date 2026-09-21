@@ -56,7 +56,7 @@ def _is_textual_greeting(text: str) -> bool:
 def _is_greeting_text(text: str) -> bool:
     """是否纯问候/轻互动（文档 2.5.4：REACT / greeting_only 判定）。
 
-    短名词（USTC/AI/课程名）不属于问候，避免被归为 REACT 或套话回复。
+    短名词或专名不属于问候，避免被归为 REACT 或套话回复。
     """
     t = (text or "").strip().lower()
     if not t:
@@ -82,8 +82,8 @@ _RESTRICTED_PATTERNS = (
     re.compile(r"cookie\s*[:=]\s*\S+", re.IGNORECASE),
     re.compile(r"(?:密码|口令|密钥|令牌|私钥|登录态)\s*[:：=]\s*\S+"),
 )
-# Sensitive 数据群聊默认不得返回（课表/成绩/健康/位置/私聊等）
-_SENSITIVE_GROUP_KW = ("成绩", "课表", "个人安排", "健康", "位置", "就诊", "体检")
+# Sensitive 数据群聊默认不得返回。
+_SENSITIVE_GROUP_KW = ("个人安排", "健康", "位置", "就诊", "体检")
 
 _REDACTOR = Redactor()
 
@@ -113,7 +113,7 @@ def _atomic_write_json(path: str, obj) -> None:
 
 
 def _group_safe_observations(observations, is_group: bool) -> tuple:
-    """群聊默认不返回 Sensitive 数据（课表/成绩/健康/位置/私聊）。"""
+    """群聊默认不返回健康、位置、个人安排和私聊数据。"""
     out = []
     for o in observations or ():
         if not o.success or o.data is None:

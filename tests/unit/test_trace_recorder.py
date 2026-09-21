@@ -108,7 +108,7 @@ class TestTraceRecorder:
             return "好的～"
 
         monkeypatch.setattr(h, "_run_flow_inner", fake_inner)
-        ev = _FakeEvent("@bot USTC")
+        ev = _FakeEvent("@bot 你好")
         reply = await h.run_message_flow(plugin, ev)
         assert reply == "好的～"
         lines = rec.lines_for()

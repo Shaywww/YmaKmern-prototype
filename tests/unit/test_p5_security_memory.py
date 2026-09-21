@@ -532,13 +532,13 @@ class TestMainSecurityWiring:
 
     def test_group_safe_observations(self):
         obs_ok = main.ToolObservation(
-            step_id="", capability_id="mcp.course_schedule",
-            success=True, data="数据结构课程信息", source="mock")
+            step_id="", capability_id="mcp.weather",
+            success=True, data="兰州晴，20℃", source="mock")
         obs_sensitive = main.ToolObservation(
-            step_id="", capability_id="mcp.exam_schedule",
-            success=True, data="我的个人课表: 周一高数", source="mock")
+            step_id="", capability_id="mcp.web_search",
+            success=True, data="我的健康: 需要复诊", source="mock")
         in_group = main._group_safe_observations([obs_ok, obs_sensitive], True)
-        assert len(in_group) == 1 and in_group[0].capability_id == "mcp.course_schedule"
+        assert len(in_group) == 1 and in_group[0].capability_id == "mcp.weather"
         in_private = main._group_safe_observations([obs_ok, obs_sensitive], False)
         assert len(in_private) == 2
 

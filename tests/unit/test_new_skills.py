@@ -225,8 +225,8 @@ class TestSkillPerception:
     def test_translate_needs_tools(self):
         assert self._perceive("翻译一下 hello world").needs_tools is True
 
-    def test_admission_needs_tools(self):
-        assert self._perceive("USTC今年招生怎么样").needs_tools is True
+    def test_explicit_web_search_needs_tools(self):
+        assert self._perceive("搜索一下最新人工智能进展").needs_tools is True
 
     def test_greeting_no_tools(self):
         assert self._perceive("你好").needs_tools is False

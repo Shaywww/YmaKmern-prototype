@@ -104,7 +104,7 @@ class TestPlugin:
     def test_create(self):
         p = create_plugin()
         h = p.health_check()
-        assert p._enabled and h['services'] >= 6
+        assert p._enabled and h['services'] >= 5
 
     def test_group_msg(self):
         p = create_plugin()

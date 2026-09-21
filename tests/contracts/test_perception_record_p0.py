@@ -145,7 +145,7 @@ class TestOrchestratorRecords:
         assert entry["run_id"] == "r3" and entry["trace_id"] == "t3"
         assert entry["text"] == "帮我查一下数据结构"
         assert entry["needs_tools"] is True
-        assert entry["candidate_intents"] == ["course_query"]
+        assert entry["candidate_intents"] == ["lookup_query"]
 
     def test_each_message_records(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DUDUDA_PERCEPTION_DIR", str(tmp_path))

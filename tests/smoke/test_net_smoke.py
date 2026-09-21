@@ -105,15 +105,19 @@ def test_production_clock_capability():
 
 
 def test_retired_course_capabilities_are_absent():
-    """查课/评课下架后不得出现在生产能力注册表。"""
+    """学校领域能力下架后不得出现在生产能力注册表。"""
     main_mod, p = _load_plugin()
     caps = {c.capability_id: c for c in p.cap_registry.list_enabled()}
-    assert "mcp.course_schedule" not in caps
-    assert "mcp.icourse_reviews" not in caps
-    for want in ("mcp.exam_schedule", "mcp.academic_calendar",
-                 "mcp.academic_affairs"):
-        assert want in caps, f"{want} 未注册"
-        assert caps[want].is_healthy, f"{want} 不健康"
+    retired = {
+        "mcp.course_schedule", "mcp.icourse_reviews", "mcp.exam_schedule",
+        "mcp.academic_calendar", "mcp.academic_affairs",
+        "mcp.training_program", "mcp.second_classroom", "mcp.campus_notice",
+    }
+    assert retired.isdisjoint(caps)
+    assert set(caps) == {
+        "mcp.clock", "mcp.web_search", "mcp.weather", "mcp.news",
+        "mcp.translate",
+    }
 
 
 def test_live_weather_query():

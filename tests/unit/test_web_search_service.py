@@ -33,11 +33,11 @@ class _FakeClient:
         self._seen["headers"] = headers
         rss = """<?xml version="1.0"?>
 <rss version="2.0"><channel>
-<item><title>中国科学技术大学</title><link>https://www.ustc.edu.cn/</link>
-<description>中国科学技术大学&lt;b&gt;官方&lt;/b&gt;网站 &amp;amp; 主页</description></item>
-<item><title>USTC News</title><link>https://news.ustc.edu.cn/</link>
-<description>Latest &lt;i&gt;news&lt;/i&gt; from USTC</description></item>
-<item><title>Third</title><link>https://example.com/3</link><description>three</description></item>
+<item><title>Python Official</title><link>https://www.python.org/</link>
+<description>Python &lt;b&gt;official&lt;/b&gt; website &amp;amp; documentation</description></item>
+<item><title>Python Documentation</title><link>https://docs.python.org/</link>
+<description>Latest &lt;i&gt;Python&lt;/i&gt; language documentation</description></item>
+<item><title>Python Guide</title><link>https://example.com/python</link><description>Python guide</description></item>
 </channel></rss>"""
         return _FakeResp(rss)
 
@@ -87,7 +87,7 @@ def _clean_hosted_search_env(monkeypatch):
 
 class TestStripHtml:
     def test_tags_and_entities(self):
-        assert ws._strip_html("<b>中国科学技术大学</b> &amp; more") == "中国科学技术大学 & more"
+        assert ws._strip_html("<b>Python</b> &amp; more") == "Python & more"
 
     def test_none_safe(self):
         assert ws._strip_html(None) == ""
@@ -105,26 +105,26 @@ class TestWebSearchService:
     async def test_search_clamps_max_results(self):
         svc = ws.WebSearchService()
         assert svc.config.mock_mode is False
-        r = await svc.search("ustc", max_results=999)
+        r = await svc.search("python", max_results=999)
         assert not r.success or len(r.data) <= ws._MAX_RESULTS
 
     @pytest.mark.asyncio
     async def test_fetch_live_parses_bing_rss(self, monkeypatch):
         monkeypatch.setattr(ws.httpx, "AsyncClient", _FakeClient)
         svc = ws.WebSearchService()
-        results = await svc._fetch_live(q="ustc", max_results=5)
+        results = await svc._fetch_live(q="python", max_results=5)
         assert len(results) == 3
-        assert results[0]["title"] == "中国科学技术大学"
-        assert results[0]["link"] == "https://www.ustc.edu.cn/"
-        assert "官方" in results[0]["snippet"]
-        assert results[0]["snippet"].endswith("& 主页")
-        assert results[1]["title"] == "USTC News"
+        assert results[0]["title"] == "Python Official"
+        assert results[0]["link"] == "https://www.python.org/"
+        assert "official" in results[0]["snippet"]
+        assert results[0]["snippet"].endswith("& documentation")
+        assert results[1]["title"] == "Python Documentation"
 
     @pytest.mark.asyncio
     async def test_fetch_live_max_results_cap(self, monkeypatch):
         monkeypatch.setattr(ws.httpx, "AsyncClient", _FakeClient)
         svc = ws.WebSearchService()
-        results = await svc._fetch_live(q="ustc", max_results=2)
+        results = await svc._fetch_live(q="python", max_results=2)
         assert len(results) == 2
 
     @pytest.mark.asyncio
@@ -331,4 +331,4 @@ class TestRegistryIntegration:
         n = register_all_mcp_services(reg)
         caps = {c.capability_id for c in reg.list_enabled()}
         assert "mcp.web_search" in caps
-        assert n >= 9
+        assert n == 5

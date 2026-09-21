@@ -11,13 +11,10 @@ def client(tmp_path):
     os.environ["DUDUDA_CP_TOKEN"] = "cp-test-token"
     os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
     os.environ["DUDUDA_EVOLUTION_DIR"] = str(tmp_path / "evolution")
-    # MCP access 隔离：指向不存在的路径 -> legacy allow（生产 default deny 不干扰测试）
-    os.environ.setdefault("DUDUDA_MCP_ACCESS", "/tmp/dududa-cp-test-access-absent.json")
     app = create_app()
     c = TestClient(app)
     c.headers.update({"Authorization": "Bearer cp-test-token"})
     yield c
-    os.environ.pop("DUDUDA_MCP_ACCESS", None)
     os.environ.pop("DUDUDA_CP_TOKEN", None)
     os.environ.pop("DUDUDA_CP_AUDIT", None)
     os.environ.pop("DUDUDA_EVOLUTION_DIR", None)
@@ -100,12 +97,12 @@ class TestMCP:
         r = client.get("/mcp/services")
         assert r.status_code == 200
         data = r.json()
-        assert data["count"] == 11
+        assert data["count"] == 5
         assert "clock" in data["services"]
         assert "course_schedule" not in data["services"]
         assert "icourse_reviews" not in data["services"]
 
-    def test_retired_course_service_health_is_404(self, client):
+    def test_removed_school_service_health_is_404(self, client):
         r = client.get("/mcp/services/course_schedule/health")
         assert r.status_code == 404
 
@@ -119,7 +116,7 @@ class TestMCP:
         data = r.json()
         assert data["success"] is True
 
-    def test_retired_course_service_query_is_404(self, client):
+    def test_removed_school_service_query_is_404(self, client):
         r = client.post("/mcp/services/course_schedule/query", json={"action": "nonexistent"})
         assert r.status_code == 404
 
@@ -147,7 +144,7 @@ class TestRuntime:
         data = r.json()
         assert "active_persona" in data
         assert data["persona_count"] >= 4
-        assert data["mcp_services"] == 11
+        assert data["mcp_services"] == 5
         assert data["evolution"]["mode"] == "shadow"
         assert data["evolution"]["auto_activate"] is False
 

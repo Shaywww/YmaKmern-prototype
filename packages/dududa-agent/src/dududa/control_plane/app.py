@@ -15,7 +15,6 @@ from ..core.persona.registry import PersonaRegistry
 from ..mcp.registry import create_all_services, register_all_mcp_services
 from ..core.capability import CapabilityRegistry, CapabilityRisk
 from ..safeguards.security import PermissionEngine, Redactor
-from ..mcp import access as mcp_access
 from ..core.memory import (
     JSONMemoryRepository, ScopeSelector, SensitivityLevel, MemoryType,
 )
@@ -191,7 +190,6 @@ def create_app() -> FastAPI:
     cap_registry = CapabilityRegistry()
     register_all_mcp_services(cap_registry)
     app.state.cap_registry = cap_registry
-    app.state.mcp_access = mcp_access.MCPAccessPolicy()
     # CP-P1 只读面板（ADR-0001）：Memory Explorer 经 JSONMemoryRepository；Eval 报告只读
     app.state.memory_repo = JSONMemoryRepository(
         path=os.environ.get("DUDUDA_MEMORY_FILE") or str(
@@ -443,7 +441,7 @@ def _register_routes(app: FastAPI):
 
     @app.post('/mcp/services/{service_id}/query')
     async def query_mcp_service(service_id: str, body: MCPQuery, request: Request):
-        # CP-P0（ADR-0001）：不直连 service，经 CapabilityRegistry + access 策略 + 熔断
+        # CP-P0（ADR-0001）：不直连 service，经 CapabilityRegistry + 熔断。
         op = get_operator(request)
         cap_id = f"mcp.{service_id}"
         cap = app.state.cap_registry.get(cap_id)
@@ -451,8 +449,6 @@ def _register_routes(app: FastAPI):
             raise HTTPException(404, f'MCP service {service_id!r} not found')
         if cap.risk == CapabilityRisk.DANGEROUS:
             raise HTTPException(403, f'dangerous capability not allowed via CP: {cap_id}')
-        if not app.state.mcp_access.is_allowed(cap_id, "", op.actor_id):
-            raise HTTPException(403, f'access policy denied: {cap_id}')
         provider = app.state.cap_registry.get_provider(cap_id)
         if provider is None:
             raise HTTPException(500, f'no provider for {cap_id}')

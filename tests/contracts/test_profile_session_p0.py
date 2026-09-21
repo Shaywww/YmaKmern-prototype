@@ -232,12 +232,12 @@ class TestOrchestratorWiring:
         orch = RuntimeOrchestrator(
             delivery_manager=DeliveryManager(NoOpOutputAdapter()),
             profile_store=store)
-        for text in ("帮我查一下课程", "现在几点", "明天考什么"):
+        for text in ("帮我查一下量子计算", "现在几点", "明天有什么新闻"):
             await orch.run(_state(text, conv="c1", actor="u1",
                                   mentions=("bot",)))
         sess = store.get_session("c1", "u1")
         assert sess.message_count == 3
-        assert sess.active_topics[0] == "course_query"
+        assert sess.active_topics[0] == "lookup_query"
 
 
 class TestProdProfileLines:

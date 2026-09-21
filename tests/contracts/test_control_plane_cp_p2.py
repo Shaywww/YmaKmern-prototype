@@ -48,7 +48,6 @@ def _write_traces(trace_dir):
 def cp(tmp_path):
     os.environ["DUDUDA_CP_TOKEN"] = TOKEN
     os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
-    os.environ.setdefault("DUDUDA_MCP_ACCESS", "/tmp/dududa-cp-test-access-absent.json")
     os.environ["DUDUDA_MEMORY_FILE"] = str(tmp_path / "memory.json")
     os.environ["DUDUDA_EVAL_DIR"] = str(tmp_path / "evals")
     os.environ["DUDUDA_CP_TRACE_DIR"] = str(tmp_path / "traces")
@@ -57,7 +56,7 @@ def cp(tmp_path):
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {TOKEN}"})
     yield app, client
-    for k in ("DUDUDA_CP_TOKEN", "DUDUDA_CP_AUDIT", "DUDUDA_MCP_ACCESS",
+    for k in ("DUDUDA_CP_TOKEN", "DUDUDA_CP_AUDIT",
               "DUDUDA_MEMORY_FILE", "DUDUDA_EVAL_DIR", "DUDUDA_CP_TRACE_DIR"):
         os.environ.pop(k, None)
 
