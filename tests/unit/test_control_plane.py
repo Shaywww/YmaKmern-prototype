@@ -6,18 +6,20 @@ from dududa.control_plane.app import create_app
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
     """CP-P0（ADR-0001）：所有请求带管理 token；审计落 tmp。"""
-    os.environ["DUDUDA_CP_TOKEN"] = "cp-test-token"
-    os.environ["DUDUDA_CP_AUDIT"] = str(tmp_path / "cp_audit.jsonl")
-    os.environ["DUDUDA_EVOLUTION_DIR"] = str(tmp_path / "evolution")
+    monkeypatch.setenv("DUDUDA_CP_TOKEN", "cp-test-token")
+    monkeypatch.setenv("DUDUDA_CP_AUDIT", str(tmp_path / "cp_audit.jsonl"))
+    monkeypatch.setenv("DUDUDA_EVOLUTION_DIR", str(tmp_path / "evolution"))
+    monkeypatch.setenv("DUDUDA_CP_TRACE_DIR", str(tmp_path / "traces"))
+    monkeypatch.setenv(
+        "DUDUDA_EXPERIMENT_FILE", str(tmp_path / "experiments.json"))
+    monkeypatch.setenv("DUDUDA_MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setenv("DUDUDA_EVAL_DIR", str(tmp_path / "evals"))
     app = create_app()
     c = TestClient(app)
     c.headers.update({"Authorization": "Bearer cp-test-token"})
     yield c
-    os.environ.pop("DUDUDA_CP_TOKEN", None)
-    os.environ.pop("DUDUDA_CP_AUDIT", None)
-    os.environ.pop("DUDUDA_EVOLUTION_DIR", None)
 
 class TestHealth:
     def test_health_ok(self, client):
