@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Mapping
 
 
-SELECTOR_VERSION = "message-selector/1.0"
+SELECTOR_VERSION = "message-selector/1.1"
 
 
 class MessageKey(str, Enum):
@@ -49,7 +49,7 @@ DEFAULT_MESSAGES: Mapping[MessageKey, tuple[MessageVariant, ...]] = {
         MessageVariant("user_cancelled.1", "好，这次任务已经取消。"),
     ),
     MessageKey.MODEL_UNAVAILABLE: (
-        MessageVariant("model_unavailable.1", "我这会儿有点卡，稍后再试一次。"),
+        MessageVariant("model_unavailable.1", "刚才没回上来，你再说一次？"),
     ),
     MessageKey.MEDIA_UNREADABLE: (
         MessageVariant("media_unreadable.1", "这份内容没有识别清楚，可以重新发一次。"),
@@ -73,6 +73,13 @@ _FIXED_KEYS = frozenset({
     MessageKey.PERMISSION_DENIED,
     MessageKey.SAFETY_CLARIFICATION,
 })
+
+
+def matches_message_key(key: MessageKey, text: str) -> bool:
+    """Whether text is one of the audited deterministic variants for key."""
+    value = str(text or "").strip()
+    return bool(value and any(
+        value == variant.text for variant in DEFAULT_MESSAGES.get(key, ())))
 
 
 class MessageCatalog:

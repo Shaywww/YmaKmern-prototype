@@ -186,3 +186,24 @@ class TestMainWiring:
         assert prov.calls[0][0] == main.MODEL
         assert "你好" in prov.calls[0][1][-1]["content"]
         assert reply
+
+    @pytest.mark.asyncio
+    async def test_model_failure_is_short_for_users_and_empty_internally(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(main, "MEMORY_FILE", str(tmp_path / "memory.json"))
+        monkeypatch.setattr(
+            main, "CONFIRM_FILE", str(tmp_path / "confirmations.json"))
+        plugin = main.Main(_make_context())
+        plugin._core._llm_provider = _RecProvider(err=ModelError(
+            ModelErrorKind.PROVIDER_UNAVAILABLE, retryable=False))
+
+        visible = await plugin._core._call_llm(
+            "system", "hello", run_id="visible-run", trace_id="visible-trace")
+        internal = await plugin._core._call_llm(
+            "system", "hello", run_id="internal-run", trace_id="internal-trace",
+            skip_render=True)
+
+        assert visible == "刚才没回上来，你再说一次？"
+        assert "错误编号" not in visible
+        assert internal == ""

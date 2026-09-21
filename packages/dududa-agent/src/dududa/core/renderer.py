@@ -14,6 +14,7 @@ import re
 from typing import Awaitable, Callable, Optional
 
 from .trace_recorder import trace_recorder
+from .message_catalog import MessageKey, matches_message_key
 
 # 模型回调：(prompt, *, run_id="", trace_id="") -> 转换后的回复文本
 RenderLLM = Callable[..., Awaitable[str]]
@@ -513,6 +514,8 @@ class OCRenderer:
                 prompt, run_id, trace_id) or "").strip()
         except Exception:
             text = ""
+        if matches_message_key(MessageKey.MODEL_UNAVAILABLE, text):
+            text = ""
         if not text:
             return self.render(draft)
 
@@ -537,6 +540,8 @@ class OCRenderer:
                 text = (await self._invoke_llm(
                     repair_prompt, run_id, trace_id) or "").strip()
             except Exception:
+                text = ""
+            if matches_message_key(MessageKey.MODEL_UNAVAILABLE, text):
                 text = ""
             if not text:
                 break

@@ -148,6 +148,24 @@ class TestComposeSystemKnowledge:
 
 class TestComposeProdBehavior:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("question", "expected"), (
+        ("Yma 这名字有什么含义？",
+         "名字怎么来的还没有确定设定，叫我 Yma 就行。"),
+        ("你大几了？",
+         "我是 AI，没有现实年龄和年级；QQ 资料年龄不代表我。"),
+    ))
+    async def test_unset_identity_facts_are_not_invented(
+            self, plugin, question, expected):
+        plugin.runtime._pending_event = _FakeEvent(question, group="")
+
+        async def unexpected_llm(*args, **kwargs):
+            raise AssertionError("verified self facts must not be improvised")
+
+        plugin._call_llm = unexpected_llm
+        reply = await plugin.runtime._compose_prod_text(_state(question))
+        assert reply == expected
+
+    @pytest.mark.asyncio
     async def test_friend_request_does_not_demand_an_introduction(self, plugin):
         plugin.runtime._pending_event = _FakeEvent("请求添加你为好友", group="")
 
@@ -258,6 +276,8 @@ class TestComposeProdBehavior:
         await plugin.runtime._compose_prod_text(
             _state("@bot 你是怎么搭出来的"))
         assert "住在 QQ 里的 AI 群友" in cap.system
+        assert "名字的来源和含义目前没有已确认设定" in cap.system
+        assert "QQ 账号资料属于宿主账号元数据" in cap.system
         assert "NapCat 与 AstrBot" in cap.system
         assert "校园背景" not in cap.system
         assert "群里谁最帅" not in cap.system

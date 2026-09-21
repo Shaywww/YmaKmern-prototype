@@ -294,6 +294,15 @@ class TestHybridRenderer:
         assert final.text == self._draft().text
 
     @pytest.mark.asyncio
+    async def test_model_unavailable_message_falls_back_to_fact_draft(self):
+        async def llm(prompt, **kw):
+            return "刚才没回上来，你再说一次？"
+        r = OCRenderer(persona=self._persona(), llm=llm)
+        final = await r.render_hybrid(self._draft())
+        assert final.text == self._draft().text
+        assert "4.5" in final.text
+
+    @pytest.mark.asyncio
     async def test_emoji_limit_falls_back(self):
         async def llm(prompt, **kw):
             return "评分 4.5 分 😀😀😀😀😀"

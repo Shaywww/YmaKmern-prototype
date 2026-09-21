@@ -27,6 +27,9 @@ from dududa.core.perception import PerceptionResult, SpeechAct, EntityRef
 from dududa.core.renderer import DraftResponse, Persona as OCPersona
 from dududa.router.router import ModelConfig, ModelRole, ModelError, ModelRequest
 from dududa.core.envelope import Actor, Platform
+from dududa.core.tool_intent import is_explicit_clock_query
+from dududa.core.message_catalog import MessageCatalog, MessageKey
+from dududa.core.response_policy import POLICY_VERSION
 from dududa.safeguards.security import (
     AuthorizationDecision, AuthorizationResult, AuthReason,
 )
@@ -125,7 +128,6 @@ def _suggest_tool_capabilities(text: str) -> tuple[str, ...]:
     rules = (
         ("mcp.weather", ("天气", "气温", "温度", "下雨", "下雪", "预报",
                          "weather", "forecast")),
-        ("mcp.clock", ("几点", "几号", "星期几", "日期", "现在是", "现在几")),
         ("mcp.news", ("新闻", "资讯", "热点", "热搜", "报道")),
         ("mcp.translate", ("翻译", "译成", "translate")),
         ("mcp.web_search", ("搜索", "搜一下", "百度", "查一下", "查询",
@@ -134,6 +136,8 @@ def _suggest_tool_capabilities(text: str) -> tuple[str, ...]:
     for capability_id, markers in rules:
         if any(marker.lower() in value for marker in markers):
             suggested.append(capability_id)
+    if is_explicit_clock_query(value):
+        suggested.append("mcp.clock")
     return tuple(suggested)
 
 
@@ -384,8 +388,7 @@ class DududaCore:
         except Exception:
             return None
 
-    _TOOL_KW = ("帮我", "查", "搜", "算", "翻译", "了解", "介绍",
-                 "是什么", "多少", "排名",
+    _TOOL_KW = ("查", "搜", "算一下", "计算", "翻译",
                  "查询", "查查", "百度", "搜索", "找一下",
                  "新闻", "资讯", "热点", "天气", "气温", "下雨", "翻译一下")
 
@@ -496,17 +499,15 @@ class DududaCore:
         topics = []
         topic_kw = {"天气": "weather",
                     "文件": "file", "图片": "image",
-                    "几点": "time", "时间": "time", "几号": "time", "星期几": "time",
-                    "日期": "time", "什么时候了": "time", "现在是": "time", "现在几": "time",
                     "通知": "notice", "公告": "notice",
                     "新闻": "news", "资讯": "news", "热点": "news", "热搜": "news",
                     "翻译": "translate", "翻译成": "translate", "译成": "translate",
-                    "百科": "websearch",
-                    "是什么": "websearch", "什么是": "websearch",
-                    "啥是": "websearch", "啥叫": "websearch"}
+                    "百科": "websearch"}
         for kw, topic in topic_kw.items():
             if kw in combined:
                 topics.append(topic)
+        if is_explicit_clock_query(combined):
+            topics.append("time")
         intents = list(topics) if topics else ["chitchat"]
         # 工具意图门：命令词（_TOOL_KW）命中即触发工具链，与 _social_decision 对齐，
         # 避免「帮我查一下/查查XX」被判为纯闲聊；工具话题命中同样触发。
@@ -705,8 +706,23 @@ class DududaCore:
         if primary_error is None:
             primary_error = RuntimeError("empty primary model response")
         support_id = make_support_id("llm", primary_error, trace_id)
-        return ("模型服务暂时没有响应，你可以稍后重试。"
-                f"\n错误编号：{support_id}")
+        trace_recorder.record(
+            event="model_unavailable", run_id=run_id, trace_id=trace_id,
+            support_id=support_id,
+            error_code=str(getattr(
+                primary_error, "stable_code", type(primary_error).__name__)),
+            internal_call=bool(skip_render),
+        )
+        # Internal JSON/planning/render calls fail as an empty result so their
+        # caller can use its typed fallback. Only the user-visible compose path
+        # gets a short message; support ids remain in trace instead of QQ chat.
+        if skip_render:
+            return ""
+        return MessageCatalog().select(
+            MessageKey.MODEL_UNAVAILABLE,
+            policy_version=POLICY_VERSION,
+            run_id=run_id,
+        ).variant.text
 
     def _vision_provider_policy(self) -> tuple[bool, str]:
         """Return whether the configured endpoint is third-party and its host."""

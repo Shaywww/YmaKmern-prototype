@@ -24,6 +24,7 @@ from dududa.core.structured_output import merge_perception_with_model
 from dududa.core.trace_recorder import trace_recorder
 from dududa.core.decision import DecisionReason
 from dududa.core.message_catalog import MessageKey
+from dududa.core.tool_intent import is_explicit_clock_query
 
 from dududa.application.dududa_utils import (
     _detect_media, _detect_media_kind, _raw_message_segments, _segment_data,
@@ -67,6 +68,25 @@ _MAX_PROACTIVE_BATCH_BYTES = 40 * 1024 * 1024
 _VISUAL_KINDS = {
     "meme", "sticker", "photo", "screenshot", "gif", "video", "other",
 }
+
+_INFLIGHT_NUDGE_RE = re.compile(
+    r"^\s*(?:嗯+|啊+|哈+|喂+|在吗|人呢|回话|怎么没回|"
+    r"是不是卡住了|卡住了[吗？?]?|还在(?:处理|查)[吗？?]?)\s*[？?。！!~～]*\s*$"
+)
+_INFLIGHT_STOP_RE = re.compile(
+    r"^\s*(?:停下|停止|取消|别说了|不要说了|别回了|不用回了|"
+    r"先别说|先停一下|算了不用了)\s*[。！!？?~～]*\s*$"
+)
+
+
+def _inflight_control(text: str) -> str:
+    """Classify only unambiguous controls for an already-running turn."""
+    value = " ".join(str(text or "").split()).strip()
+    if _INFLIGHT_STOP_RE.fullmatch(value):
+        return "cancel"
+    if _INFLIGHT_NUDGE_RE.fullmatch(value):
+        return "nudge"
+    return "replace"
 
 
 def _mark_catalog_fallback(event, key: MessageKey, run_id: str) -> None:
@@ -1040,8 +1060,10 @@ async def handle_text(plugin, event, run_id="", trace_id="", perception=None) ->
     except Exception as e:
         logger.exception("Text error: %s", e)
         support_id = make_support_id("text", e, trace_id)
-        return ("这次回答没有生成完整。你可以直接重试，或换一种问法。"
-                f"\n错误编号：{support_id}")
+        trace_recorder.record(
+            event="user_visible_failure", run_id=run_id, trace_id=trace_id,
+            support_id=support_id, failure_kind="text_exception")
+        return "刚才没回上来，你再说一次？"
 
 
 
@@ -1132,8 +1154,6 @@ def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
             "天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷",
             "热不热", "适合出门", "要不要带伞", "带不带伞",
             "weather", "forecast"),
-        "mcp.clock": (
-            "几点", "时间", "几号", "星期几", "日期", "现在是", "现在几"),
         "mcp.news": ("新闻", "资讯", "热点", "热搜", "报道"),
         "mcp.translate": ("翻译", "译成", "translate"),
     }
@@ -1142,6 +1162,8 @@ def _tool_step_has_textual_evidence(text: str, capability_id: str) -> bool:
             not _is_casual_advice_without_lookup(value)
             and _EXPLICIT_LOOKUP_RE.search(value)
         )
+    if cid == "mcp.clock":
+        return is_explicit_clock_query(value)
     markers = evidence.get(cid)
     if markers is None:
         return False
@@ -3374,6 +3396,22 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         except Exception:
             pass
     if active_turn is not None:
+        inflight_control = _inflight_control(
+            getattr(event, "message_str", ""))
+        if inflight_control == "cancel":
+            cancelled = ux_tasks.cancel(task_key, silent=True)
+            trace_recorder.record(
+                event="inflight_message_control", run_id=run_id,
+                trace_id=trace_id, action="cancel",
+                cancelled=bool(cancelled))
+            return "好，停下了。" if cancelled else ""
+        if inflight_control == "nudge":
+            trace_recorder.record(
+                event="inflight_message_control", run_id=run_id,
+                trace_id=trace_id, action="absorbed_nudge",
+                operation_id=(ux_tasks.operation_id(task_key)
+                              if hasattr(ux_tasks, "operation_id") else ""))
+            return ""
         # Invalidate the in-flight answer immediately.  Waiting for the merge
         # window before doing this could let a now-stale reply escape first.
         active_turn.superseded = True
@@ -3451,7 +3489,9 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
                 event="concurrent_message_absorbed", run_id=run_id,
                 trace_id=trace_id,
                 action=("wait_and_replace" if replacement_leader
-                        else "merged_into_replacement"))
+                        else "merged_into_replacement"),
+                operation_id=(ux_tasks.operation_id(task_key)
+                              if hasattr(ux_tasks, "operation_id") else ""))
             if not replacement_leader:
                 return ""
             if previous is not None:
@@ -3495,11 +3535,27 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         _bot_id = ""
     _session_hash = hashlib.sha256(
         f"{_bot_id}|{_session}".encode("utf-8")).hexdigest()[:16]
-    trace_recorder.record(event="flow_start", run_id=run_id, trace_id=trace_id,
-                          msg_len=_msg_len, session_hash=_session_hash)
+    trace_recorder.record(
+        event="flow_start", run_id=run_id, trace_id=trace_id,
+        msg_len=_msg_len, session_hash=_session_hash,
+        operation_id=(ux_tasks.operation_id(task_key)
+                      if task_registered and ux_tasks is not None
+                      and hasattr(ux_tasks, "operation_id") else ""))
+    terminal_status = "started"
     try:
-        reply = await _run_flow_inner(
-            plugin, event, msgs, run_id, trace_id)
+        remaining = None
+        if (task_registered and ux_tasks is not None
+                and hasattr(ux_tasks, "remaining_seconds")):
+            remaining = ux_tasks.remaining_seconds(task_key)
+        if remaining is not None:
+            if remaining <= 0:
+                raise TimeoutError("conversation operation deadline exceeded")
+            async with asyncio.timeout(remaining):
+                reply = await _run_flow_inner(
+                    plugin, event, msgs, run_id, trace_id)
+        else:
+            reply = await _run_flow_inner(
+                plugin, event, msgs, run_id, trace_id)
         _trace_interaction_stage(
             event, run_id=run_id, trace_id=trace_id,
             stage="generation_end")
@@ -3515,6 +3571,7 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
             trace_recorder.record(
                 event="stale_reply_cancelled", run_id=run_id,
                 trace_id=trace_id, reason="newer_same_speaker_turn")
+            terminal_status = "superseded"
             return ""
         reply = _normalize_reply_style(
             _sanitize_conversational_reply(
@@ -3529,16 +3586,45 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         trace_recorder.record(event="flow_end", run_id=run_id, trace_id=trace_id,
                               duration_ms=int((time.time() - _flow_ts) * 1000),
                               reply_len=len(reply or ""))
+        terminal_status = "completed"
         return reply
-    except asyncio.CancelledError:
-        trace_recorder.record(event="flow_cancelled", run_id=run_id,
-                              trace_id=trace_id)
+    except TimeoutError as exc:
+        terminal_status = "timeout"
+        trace_recorder.record(
+            event="flow_timeout", run_id=run_id, trace_id=trace_id,
+            duration_ms=int((time.time() - _flow_ts) * 1000),
+            operation_id=(ux_tasks.operation_id(task_key)
+                          if ux_tasks is not None
+                          and hasattr(ux_tasks, "operation_id") else ""))
         if silent_background:
             return None
         from dududa.application.response_policy_shadow import (
             mark_catalog_message_shadow, mark_response_origin,
         )
-        from dududa.core.message_catalog import MessageKey
+        from dududa.core.response_policy import ResponseOrigin
+        mark_catalog_message_shadow(
+            event, MessageKey.MODEL_UNAVAILABLE, run_id=run_id)
+        mark_response_origin(
+            event, ResponseOrigin.SYSTEM_ERROR,
+            fallback_reason="operation_timeout")
+        support_id = make_support_id("timeout", exc, trace_id)
+        trace_recorder.record(
+            event="user_visible_failure", run_id=run_id, trace_id=trace_id,
+            support_id=support_id, failure_kind="operation_timeout")
+        return "刚才没回上来，你再说一次？"
+    except asyncio.CancelledError:
+        terminal_status = "cancelled"
+        trace_recorder.record(event="flow_cancelled", run_id=run_id,
+                              trace_id=trace_id)
+        if (task_registered and ux_tasks is not None and task is not None
+                and hasattr(ux_tasks, "is_silent_cancel")
+                and ux_tasks.is_silent_cancel(task_key, task)):
+            return ""
+        if silent_background:
+            return None
+        from dududa.application.response_policy_shadow import (
+            mark_catalog_message_shadow, mark_response_origin,
+        )
         from dududa.core.response_policy import ResponseOrigin
         mark_catalog_message_shadow(
             event, MessageKey.USER_CANCELLED, run_id=run_id)
@@ -3547,6 +3633,7 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
             fallback_reason="user_cancelled")
         return "当前任务已取消。你可以换一种问法后重新发送。"
     except Exception as e:
+        terminal_status = "failed"
         logger.exception("Flow error | run_id=%s trace_id=%s: %s",
                          run_id, trace_id, e)
         trace_recorder.record(event="flow_error", run_id=run_id, trace_id=trace_id,
@@ -3557,7 +3644,6 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         from dududa.application.response_policy_shadow import (
             mark_catalog_message_shadow, mark_response_origin,
         )
-        from dududa.core.message_catalog import MessageKey
         from dududa.core.response_policy import ResponseOrigin
         mark_catalog_message_shadow(
             event, MessageKey.MODEL_UNAVAILABLE, run_id=run_id)
@@ -3565,8 +3651,10 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
             event, ResponseOrigin.SYSTEM_ERROR,
             fallback_reason="flow_exception")
         support_id = make_support_id("flow", e, trace_id)
-        return ("这次处理没有完成。你可以直接重试，或换一种方式提问。"
-                f"\n错误编号：{support_id}")
+        trace_recorder.record(
+            event="user_visible_failure", run_id=run_id, trace_id=trace_id,
+            support_id=support_id, failure_kind="flow_exception")
+        return "刚才没回上来，你再说一次？"
     finally:
         progress_task.cancel()
         try:
@@ -3576,6 +3664,11 @@ async def _run_message_flow_impl(plugin, event, *, run_id: str,
         if memory_token is not None:
             reset_memory_access_mode(memory_token)
         if task_registered and ux_tasks is not None and task is not None:
+            trace_recorder.record(
+                event="conversation_task_terminal", run_id=run_id,
+                trace_id=trace_id, status=terminal_status,
+                operation_id=(ux_tasks.operation_id(task_key)
+                              if hasattr(ux_tasks, "operation_id") else ""))
             ux_tasks.finish(task_key, task)
 
 
@@ -3594,6 +3687,8 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
                 _is_ambient_wake(event)
                 or _semantic_media_candidate(event)
                 or group_multimodal
+                or is_explicit_clock_query(
+                    getattr(event, "message_str", ""))
                 or _is_casual_advice_without_lookup(
                     getattr(event, "message_str", "")))
 
@@ -3617,6 +3712,20 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
                 action="skipped", reason="non_tool_phase",
                 phase=phase, response_origin="progress",
                 memory_eligible=False)
+            return
+        if (registry is not None
+                and hasattr(registry, "claim_progress_notice")
+                and not registry.claim_progress_notice(task_key)):
+            trace_recorder.record(
+                event="progress_notice", run_id=str(
+                    _get_event_extra(event, "dududa_policy_run_id", "")),
+                trace_id=str(
+                    _get_event_extra(event, "dududa_policy_trace_id", "")),
+                action="skipped", reason="operation_progress_already_sent",
+                phase=phase, response_origin="progress",
+                memory_eligible=False, visible_reply_delivered=False,
+                operation_id=(registry.operation_id(task_key)
+                              if hasattr(registry, "operation_id") else ""))
             return
         labels = {
             "tools": "正在查询并核对信息",
@@ -3643,7 +3752,10 @@ async def _send_delayed_progress(plugin, event, task_key: str) -> None:
             trace_recorder.record(
                 event="progress_notice", run_id=run_id, trace_id=trace_id,
                 action="sent", phase=phase, response_origin="progress",
-                memory_eligible=False)
+                memory_eligible=False, visible_reply_delivered=False,
+                operation_id=(registry.operation_id(task_key)
+                              if registry is not None
+                              and hasattr(registry, "operation_id") else ""))
     except asyncio.CancelledError:
         raise
     except Exception as exc:

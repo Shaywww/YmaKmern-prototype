@@ -31,6 +31,8 @@ from dududa.planner.planner import PlannedStep
 from dududa.planner.executor import ToolExecutor, ExecutionContext
 from dududa.mcp.web_search_service import _rank_results
 from dududa.core.trace_recorder import trace_recorder
+from dududa.core.tool_intent import is_explicit_clock_query
+from dududa.application import dududa_handlers
 
 
 def _make_context():
@@ -162,6 +164,36 @@ class TestToolIntentGate:
         p = self._perceive(monkeypatch, tmp_path, "你好呀")
         assert p.needs_tools is False
 
+    @pytest.mark.parametrize("text", (
+        "天亮还要等到几点",
+        "你这只猫的作息是几点睡",
+        "我有点好奇你几点起床",
+        "今天时间过得好快",
+        "时间不够用了",
+    ))
+    def test_time_banter_stays_chat(self, monkeypatch, tmp_path, text):
+        p = self._perceive(monkeypatch, tmp_path, text)
+        assert p.needs_tools is False
+        assert "mcp.clock" not in p.suggested_capabilities
+        assert is_explicit_clock_query(text) is False
+
+    @pytest.mark.parametrize("text", (
+        "现在几点",
+        "请问北京时间现在几点了？",
+        "今天星期几",
+    ))
+    def test_current_clock_question_uses_tool(self, monkeypatch, tmp_path, text):
+        p = self._perceive(monkeypatch, tmp_path, text)
+        assert p.needs_tools is True
+        assert "mcp.clock" in p.suggested_capabilities
+        assert is_explicit_clock_query(text) is True
+
+    def test_model_proposed_clock_requires_current_clock_evidence(self):
+        assert dududa_handlers._tool_step_has_textual_evidence(
+            "现在几点", "mcp.clock") is True
+        assert dududa_handlers._tool_step_has_textual_evidence(
+            "那得等到几点，你这只猫什么作息", "mcp.clock") is False
+
 class TestRuleFallbackPlan:
     def _cands(self, reg):
         return reg.filter_candidates(permissions=(), max_count=24)
@@ -203,6 +235,13 @@ class TestRuleFallbackPlan:
                                         "现在几点")
         assert plan is not None
         assert plan.steps[0].capability_id == "mcp.clock"
+
+    def test_schedule_banter_has_no_clock_fallback(self):
+        orch, _plugin, reg = _make_orchestrator()
+        plan = orch._rule_fallback_plan(
+            _state(orch), self._cands(reg),
+            "天亮还要等到几点，你这只猫什么作息")
+        assert plan is None
 
     def test_self_intro_not_searched(self):
         orch, _plugin, reg = _make_orchestrator()

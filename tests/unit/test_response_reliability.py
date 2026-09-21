@@ -61,5 +61,4 @@ async def test_failed_tool_query_never_falls_back_to_guessing():
 @pytest.mark.asyncio
 async def test_identity_question_gets_concrete_answer_without_llm():
     reply = await _orchestrator("你是谁啊")._compose_prod_text(RuntimeState())
-    assert "运行在 QQ 里的 AI 群友" in reply
-    assert "不会装作知道" in reply
+    assert reply == "我是 YmaKmern，一个运行在 QQ 里的 AI 群友。"

@@ -28,6 +28,7 @@ from dududa.core.response_policy import (
 from dududa.core.persona.prompt_policy import (
     PERSONA_KERNEL_VERSION, build_user_visible_system_prompt,
 )
+from dududa.core.persona.identity_profile import identity_reply
 from dududa.core.decision import SocialDecisionEngine, SocialDecision, DecisionReason
 from dududa.core.memory import (
     MemoryCandidate, MemoryRecord, MemoryType, ScopeSelector,
@@ -37,6 +38,8 @@ from dududa.core.profile import extract_location
 from dududa.runtime.orchestrator import RuntimeOrchestrator
 from dududa.core.perception_store import record_state_perception
 from dududa.core.trace_recorder import trace_recorder
+from dududa.core.tool_intent import is_explicit_clock_query
+from dududa.core.message_catalog import MessageKey, matches_message_key
 from uuid import uuid4
 
 from dududa.application.dududa_utils import (
@@ -384,8 +387,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             return None
         allowed = {c.capability.capability_id for c in candidates}
         cap_id, args = None, {}
-        if "mcp.clock" in allowed and any(k in text for k in
-                ("几点", "几号", "星期几", "日期", "什么时候", "现在几", "现在是")):
+        if "mcp.clock" in allowed and is_explicit_clock_query(text):
             cap_id, args = "mcp.clock", {}
         elif "mcp.weather" in allowed and any(k in text for k in
                 ("天气", "气温", "温度", "下雨", "下雪", "预报", "冷不冷", "热不热")):
@@ -402,10 +404,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             cap_id, args = "mcp.translate", {}
         elif "mcp.web_search" in allowed and any(k in text for k in
                 ("搜", "百度", "查一下", "查查", "找一下", "查",
-                 "是什么", "什么是", "啥是", "啥叫", "排名", "百科",
-                 "介绍一下")):
-            if "介绍" in text and "自己" in text:
-                return None  # 自我介绍类闲聊不搜索
+                 "百科")):
             q = _clean_query(text)
             cap_id, args = "mcp.web_search", {"q": q or text}
         if cap_id is None:
@@ -1202,8 +1201,12 @@ class _ProdOrchestrator(RuntimeOrchestrator):
             "默认把它当作群友间的调侃来接梗：要有立场、风趣、可以轻微嘴欠，"
             "但不攻击外貌、不侮辱具体成员，也不要拒答或端水。"
             "只有复杂资料整理才使用分点，普通聊天禁止列菜单式 1、2、3。"
-            "★ 被问「你是怎么搭出来的 / 怎么做的 / 用的什么技术 / 你是什么 / 介绍一下你自己」时，"
-            "要自豪地详细介绍自己的公开技术构成：QQ 消息经 NapCat + AstrBot 接入；"
+            "★ 被问「你是谁 / 你是什么 / 介绍一下你自己」时，只需简短说明："
+            "你是运行在 QQ 里的 AI 群友 YmaKmern；不要顺带宣读能力清单。"
+            "名字来源和含义没有已确认设定，不得编造词源、典故或命名经历。"
+            "你没有现实年龄、年级和学籍；QQ 账号资料不代表你或账号主人的真实经历。"
+            "只有被问「你是怎么搭出来的 / 怎么做的 / 用的什么技术」时，"
+            "才介绍公开技术构成：QQ 消息经 NapCat + AstrBot 接入；"
             "核心是分层 Agent 架构（感知→社交决策→工具规划→执行→记忆→人格渲染）；"
             "对话模型走经过审计的 DeepSeek 多角色路由；"
             "有受控记忆系统（短期/长期、敏感分级、写入门控）；"
@@ -1291,7 +1294,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                 max_chars=style_policy.max_chars,
                 violations=list(style_violations),
             )
-        kind = self._response_kind(state)
+        kind = self._response_kind(state, draft_text)
         atomic_facts = self._prod_atomic_facts(state)
         contract = validate_response_contract(
             draft_text,
@@ -1448,7 +1451,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         return "；".join(parts), disclose
 
     @staticmethod
-    def _response_kind(state) -> ResponseKind:
+    def _response_kind(state, draft_text: str = "") -> ResponseKind:
+        if matches_message_key(MessageKey.MODEL_UNAVAILABLE, draft_text):
+            return ResponseKind.CHAT
         has_grounded_tool_data = any(
             getattr(obs, "success", False)
             and getattr(obs, "data", None) is not None
@@ -1508,14 +1513,11 @@ class _ProdOrchestrator(RuntimeOrchestrator):
         if re.fullmatch(
                 r"\s*(?:@\S+\s*)?(?:你是(?:谁|什么|干嘛的)(?:啊|呀|呢)?|"
                 r"介绍(?:一下)?你自己(?:吧)?)\s*[？?]?\s*", combined):
-            return (
-                "我是 YmaKmern，一个运行在 QQ 里的 AI 群友。"
-                "我能陪你聊天，也能在确实查到资料后帮你整理；"
-                "没查到的内容我会直说，不会装作知道。"
-                "发送 /ymakmern_help 可以查看当前真实可用的能力，"
-                "旧的 /dududa_help 也仍然可用。"
-            )
+            return "我是 YmaKmern，一个运行在 QQ 里的 AI 群友。"
         direct_text = re.sub(r"@\S+", " ", combined).strip()
+        verified_identity_reply = identity_reply(direct_text)
+        if verified_identity_reply:
+            return verified_identity_reply
         if re.fullmatch(
                 r"(?:请(?:求)?添加你为好友|好友申请)\s*[。！!？?]*",
                 direct_text):

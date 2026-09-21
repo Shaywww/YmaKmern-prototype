@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "cases": [
     {"name": "interrupt_cost=1 blocks passive reply",
      "setup": {"mode": "normal", "reply_rate": 1.0, "interruption_cost": 1.0},
@@ -29,6 +29,9 @@
      "group": null, "text": "我的健康记录", "at": true, "expect": "direct_reply"},
     {"name": "non-sensitive mention still replies",
      "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0},
-     "text": "@bot 这个算法难吗", "at": true, "expect": "use_tools"}
+     "text": "@bot 这个算法难吗", "at": true, "expect": "direct_reply"},
+    {"name": "explicit lookup still uses tools",
+     "setup": {"mode": "normal", "reply_rate": 0.0, "interruption_cost": 0.0},
+     "text": "@bot 帮我查一下这个算法", "at": true, "expect": "use_tools"}
   ]
 }

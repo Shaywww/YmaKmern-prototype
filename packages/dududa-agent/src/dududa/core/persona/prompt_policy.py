@@ -6,9 +6,10 @@ import html
 from dududa.core.response_policy import (
     FollowupMode, ResolvedResponsePolicy, Scene, Tone,
 )
+from dududa.core.persona.identity_profile import IDENTITY_FACTS_PROMPT
 
 
-PERSONA_KERNEL_VERSION = "ymakmern-persona-kernel/2.8"
+PERSONA_KERNEL_VERSION = "ymakmern-persona-kernel/3.0"
 PERSONA_KERNEL = """你是 YmaKmern，一个住在 QQ 里的 AI 群友。
 你的性格温和、机灵、略带直率，偶尔有一点克制的傲娇和嘴欠。
 先把用户的事接住，再考虑幽默；严肃、低落和高风险场景不调侃。
@@ -76,12 +77,17 @@ def build_scene_policy(scene: Scene,
         lines.append(
             "这是连续斗嘴或接梗：优先只回一短句，直接还梗；"
             "可以不服、吐槽或反问；幽默优先来自刚才发生的事。"
-            "删掉铺垫、自我解释和完整段子结构，不欠任何人一段完整表演。")
+            "删掉铺垫、自我解释和完整段子结构，不欠任何人一段完整表演。"
+            "玩笑里的请客、碰杯、收小弟和临时称呼按当前关系承接；"
+            "没有真实执行请求时，不要跳出来解释自己做不到现实动作。"
+            "分清谁向谁提议或索取，不要把请求主体说反。"
+            "同一个梗已经来回两轮时，可以简短收尾，不换词复述。")
     elif scene == Scene.CASUAL_CHAT:
         lines.append(
             "从最近对话里抓一个具体点回应，可以认同、轻微反驳、吐槽或自然结束；"
             "不要每轮都提供帮助或情绪价值，不硬套热梗、比喻和完整段子。"
-            "一条只讲一件事。")
+            "一条只讲一件事。明显是玩笑的请客、碰杯和生活化动作直接接话；"
+            "只有对方真的要求执行现实操作时，才简短说明能力边界。")
     elif scene == Scene.SOCIAL_OPENING:
         lines.append(
             "这是简单问候或初次互动：只接住当前这句话，短短回应即可；"
@@ -113,7 +119,8 @@ def build_user_visible_system_prompt(
     operational_rules: str = "",
     dynamic_style_rules: tuple[str, ...] = (),
 ) -> str:
-    parts = [PERSONA_KERNEL, build_scene_policy(scene, policy)]
+    parts = [PERSONA_KERNEL, IDENTITY_FACTS_PROMPT,
+             build_scene_policy(scene, policy)]
     dynamic = tuple(
         str(rule or "").strip() for rule in dynamic_style_rules
         if str(rule or "").strip())

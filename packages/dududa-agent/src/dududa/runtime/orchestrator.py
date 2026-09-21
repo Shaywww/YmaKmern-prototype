@@ -36,6 +36,7 @@ from ..core.delivery import (
 )
 from ..safeguards.security import Redactor
 from ..core.trace_recorder import trace_recorder
+from ..core.tool_intent import is_explicit_clock_query
 
 _TOOL_HARD_CAP = 8  # 全局硬上限（文档 2.5.5：默认 4 步、硬上限 8）
 _REDACTOR = Redactor()  # 工具结果脱敏（文档 2.5.9）
@@ -239,12 +240,10 @@ class RuntimeOrchestrator:
             has_reply_chain=envelope.reply_to is not None,
             is_explicit_command=is_explicit,
             needs_tools=("查" in text or "搜" in text or "/" in text
-                         or any(k in text for k in
-                                ("几点", "时间", "几号", "星期几", "日期",
-                                 "什么时候了", "现在是", "现在几",
-                                 "天气", "气温", "预报", "新闻", "资讯",
-                                 "翻译", "译成", "百科",
-                                 "是什么", "什么是"))),
+                          or is_explicit_clock_query(text)
+                          or any(k in text for k in
+                                 ("天气", "气温", "预报", "新闻", "资讯",
+                                  "翻译", "译成", "百科"))),
             target_users=envelope.mentions or (),
             resolved_references={"text": text},
             speech_acts=speech_acts,

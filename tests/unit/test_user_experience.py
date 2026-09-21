@@ -151,3 +151,39 @@ async def test_task_registry_prevents_parallel_work_and_can_cancel():
         second.cancel()
         with pytest.raises(asyncio.CancelledError):
             await second
+
+
+@pytest.mark.asyncio
+async def test_replacement_chain_shares_deadline_and_progress_budget():
+    registry = ConversationTaskRegistry(operation_timeout_seconds=5.0)
+    first = asyncio.create_task(asyncio.sleep(10))
+    second = asyncio.create_task(asyncio.sleep(10))
+    try:
+        assert registry.register("session", first, turn_text="先说颜色")
+        operation_id = registry.operation_id("session")
+        first_remaining = registry.remaining_seconds("session")
+        assert operation_id
+        assert first_remaining is not None and first_remaining <= 5.0
+        assert registry.claim_progress_notice("session") is True
+        assert registry.claim_progress_notice("session") is False
+
+        leader, previous = registry.queue_replacement(
+            "session", second, "奶白色")
+        assert leader is True and previous is first
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        registry.finish("session", first)
+        replacement = registry.take_replacement("session", second)
+        assert replacement == "先说颜色\n奶白色"
+        assert registry.register("session", second, turn_text=replacement)
+        assert registry.operation_id("session") == operation_id
+        assert registry.claim_progress_notice("session") is False
+        second_remaining = registry.remaining_seconds("session")
+        assert second_remaining is not None
+        assert second_remaining <= first_remaining
+    finally:
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        registry.finish("session", second)

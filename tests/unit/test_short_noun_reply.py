@@ -105,7 +105,19 @@ class TestShortNounDecision:
         plugin = _plugin(monkeypatch, tmp_path)
         action, _ = plugin._social_decision(
             _FakeEvent("@bot USTC是什么", group="g1", user="u1"))
-        assert action == SocialAction.USE_TOOLS
+        assert action == SocialAction.DIRECT_REPLY
+
+    def test_fictional_attribute_question_does_not_open_tools(
+            self, monkeypatch, tmp_path):
+        plugin = _plugin(monkeypatch, tmp_path)
+        event = _FakeEvent(
+            "我当那个毛球，但你得告诉我它是什么颜色的吧",
+            group="g1", user="u1")
+        action, _ = plugin._social_decision(event)
+        perception = plugin._perceive(event)
+        assert action == SocialAction.DIRECT_REPLY
+        assert perception.needs_tools is False
+        assert "websearch" not in perception.topics
 
 
 class TestPerceptionNounQuery:

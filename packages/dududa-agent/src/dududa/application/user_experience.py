@@ -240,6 +240,22 @@ class ActiveTask:
     phase: str = "preparing"
     turn_text: str = ""
     superseded: bool = False
+    silent_cancel: bool = False
+
+
+@dataclass
+class _ConversationOperation:
+    """Shared lifetime for every replacement task in one user turn.
+
+    A newer bubble may replace an in-flight draft, but it must not buy a new
+    deadline or another progress notification.  Keeping this state separate
+    from ``ActiveTask`` makes those limits survive the hand-off.
+    """
+
+    operation_id: str
+    started_at: float
+    deadline_at: float
+    progress_sent: bool = False
 
 
 @dataclass
@@ -319,9 +335,12 @@ class _PendingReplacement:
 class ConversationTaskRegistry:
     """One cancellable active task per user/session."""
 
-    def __init__(self):
+    def __init__(self, operation_timeout_seconds: float = 45.0):
         self._tasks: dict[str, ActiveTask] = {}
         self._replacements: dict[str, _PendingReplacement] = {}
+        self._operations: dict[str, _ConversationOperation] = {}
+        self._operation_timeout_seconds = max(
+            1.0, float(operation_timeout_seconds))
         self.turn_buffer = ConversationTurnBuffer()
 
     def register(self, key: str, task: asyncio.Task[Any],
@@ -329,7 +348,35 @@ class ConversationTaskRegistry:
         active = self._tasks.get(key)
         if active is not None and not active.task.done():
             return False
+        now = time.monotonic()
+        if key not in self._operations:
+            seed = f"{key}|{now:.9f}|{id(task)}"
+            operation_id = hashlib.sha256(
+                seed.encode("utf-8", "replace")).hexdigest()[:16]
+            self._operations[key] = _ConversationOperation(
+                operation_id=operation_id,
+                started_at=now,
+                deadline_at=now + self._operation_timeout_seconds,
+            )
         self._tasks[key] = ActiveTask(task=task, turn_text=str(turn_text or ""))
+        return True
+
+    def operation_id(self, key: str) -> str:
+        operation = self._operations.get(key)
+        return operation.operation_id if operation is not None else ""
+
+    def remaining_seconds(self, key: str) -> Optional[float]:
+        operation = self._operations.get(key)
+        if operation is None:
+            return None
+        return max(0.0, operation.deadline_at - time.monotonic())
+
+    def claim_progress_notice(self, key: str) -> bool:
+        """Grant at most one progress bubble for a replacement chain."""
+        operation = self._operations.get(key)
+        if operation is None or operation.progress_sent:
+            return False
+        operation.progress_sent = True
         return True
 
     def queue_replacement(
@@ -366,12 +413,28 @@ class ConversationTaskRegistry:
         if pending is None or pending.waiter is not task:
             return ""
         self._replacements.pop(key, None)
-        return "\n".join(item for item in pending.messages if item).strip()
+        # Preserve the semantic turn without letting repeated replacement
+        # tasks grow the prompt without bound.  Exact duplicate bubbles are
+        # removed while the newest six distinct messages win.
+        distinct: list[str] = []
+        for item in pending.messages:
+            value = str(item or "").strip()
+            if value and (not distinct or value != distinct[-1]):
+                distinct.append(value)
+        bounded = distinct[-6:]
+        while len("\n".join(bounded)) > 1200 and len(bounded) > 1:
+            bounded.pop(0)
+        return "\n".join(bounded).strip()
 
     def is_superseded(self, key: str, task: asyncio.Task[Any]) -> bool:
         active = self._tasks.get(key)
         return bool(active is not None and active.task is task
                     and active.superseded)
+
+    def is_silent_cancel(self, key: str, task: asyncio.Task[Any]) -> bool:
+        active = self._tasks.get(key)
+        return bool(active is not None and active.task is task
+                    and active.silent_cancel)
 
     def mark_phase(self, key: str, phase: str) -> None:
         active = self._tasks.get(key)
@@ -384,22 +447,29 @@ class ConversationTaskRegistry:
             return None
         return active
 
-    def cancel(self, key: str) -> bool:
+    def cancel(self, key: str, *, silent: bool = False) -> bool:
         active = self.running(key)
         pending = self._replacements.pop(key, None)
         cancelled = False
         if active is not None:
+            active.silent_cancel = bool(silent)
             active.task.cancel()
             cancelled = True
         if pending is not None and not pending.waiter.done():
             pending.waiter.cancel()
             cancelled = True
+        self._operations.pop(key, None)
         return cancelled
 
     def finish(self, key: str, task: asyncio.Task[Any]) -> None:
         active = self._tasks.get(key)
         if active is not None and active.task is task:
             self._tasks.pop(key, None)
+            pending = self._replacements.get(key)
+            if pending is not None and pending.waiter.done():
+                self._replacements.pop(key, None)
+            if key not in self._replacements:
+                self._operations.pop(key, None)
 
     def cancel_all(self) -> int:
         count = 0
@@ -413,4 +483,5 @@ class ConversationTaskRegistry:
                 pending.waiter.cancel()
                 count += 1
         self._replacements.clear()
+        self._operations.clear()
         return count
