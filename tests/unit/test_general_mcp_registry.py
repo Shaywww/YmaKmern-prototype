@@ -41,8 +41,7 @@ def test_removed_school_capabilities_are_absent():
 
 
 def test_breaker_opens_and_reset_restores_closed_state(monkeypatch):
-    clock = iter((10.0, 10.0, 10.0, 10.0))
-    monkeypatch.setattr("dududa.mcp.registry.time.time", lambda: next(clock))
+    monkeypatch.setattr("dududa.mcp.registry.time.time", lambda: 10.0)
     local = ServerCircuitBreaker(threshold=2, reset_seconds=30)
     local.record_failure("weather")
     assert local.state("weather") == "closed"
