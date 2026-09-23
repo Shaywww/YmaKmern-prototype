@@ -79,7 +79,7 @@ class _FakePlugin:
         self.llm_reply = "测试回复 (・ω・)"
 
     async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
-                        run_id="", trace_id="", skip_render=False):
+                        run_id="", trace_id="", skip_render=False, **kwargs):
         return self.llm_reply
 
     def _read_memory(self, event, limit=8, budget=2500, include_episodic=False):
