@@ -656,7 +656,8 @@ class DududaCore:
 
     async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
                         run_id="", trace_id="", skip_render=False,
-                        structured_output=None, reasoning_effort=None):
+                        structured_output=None, reasoning_effort=None,
+                        role=None):
         system = _redact_text(system or "")
         user_msg = _redact_text(user_msg or "")
         if _contains_restricted(user_msg):
@@ -664,12 +665,13 @@ class DududaCore:
             return "这类敏感信息我不能处理哦，请不要发送密码、Token、Cookie 或登录凭证。"
         msgs = [{"role":"system","content":system},{"role":"user","content":user_msg}]
         primary_error = None
-        # Primary: 角色化 Model Router（文档 2.5.7：RESPONSE_COMPOSITION + 降级）
+        request_role = role or ModelRole.RESPONSE_COMPOSITION
+        # Primary: 角色化 Model Router（文档 2.5.7）
         if self._model_router is not None:
             try:
                 resp = await self._model_router.route_request(
                     ModelRequest(
-                        role=ModelRole.RESPONSE_COMPOSITION, messages=msgs,
+                        role=request_role, messages=msgs,
                         max_tokens=max_tokens, temperature=temperature,
                         structured_output=structured_output,
                         reasoning_effort=reasoning_effort,
@@ -679,11 +681,11 @@ class DududaCore:
                 reply = resp.text or ""
                 if resp.degraded:
                     logger.warning("Router degraded for %s via %s",
-                                   ModelRole.RESPONSE_COMPOSITION.value,
+                                   request_role.value,
                                    resp.model_id)
             except ModelError as e:
                 logger.warning("Router %s failed (%s); no external fallback configured",
-                               ModelRole.RESPONSE_COMPOSITION.value,
+                               request_role.value,
                                e.stable_code)
                 primary_error = e
                 reply = ""
@@ -696,7 +698,9 @@ class DududaCore:
             try:
                 reply = await self._llm_provider.complete(self._cfg["MODEL"], msgs,
                     ModelConfig(
-                        role=ModelRole.COMPOSER, model_id=self._cfg["MODEL"],
+                        role=(ModelRole.COMPOSER
+                              if request_role == ModelRole.RESPONSE_COMPOSITION
+                              else request_role),
                         max_tokens=max_tokens, temperature=temperature,
                         structured_output=structured_output,
                         reasoning_effort=reasoning_effort or "medium"))

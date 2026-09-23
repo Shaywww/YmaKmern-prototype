@@ -132,6 +132,22 @@ def test_identity_probe_has_bounded_humor_and_no_kaomoji():
     assert {item.policy.style.max_kaomoji for item in results} == {0}
 
 
+def test_social_self_questions_stay_in_casual_chat():
+    prompts = (
+        "你是不玩手游的类型吗？",
+        "你玩游戏会手疼吗？",
+        "你待机的时候会不会无聊啊？",
+        "你最怕被问什么？",
+    )
+    results = [_resolve(text) for text in prompts]
+    assert {item.style_signals.scene for item in results} == {
+        Scene.CASUAL_CHAT}
+    assert all(any(
+        evidence.rule_id == "scene.social_self_chat.v1"
+        for evidence in item.evidence
+    ) for item in results)
+
+
 def test_user_praise_enables_only_one_level_of_pride():
     result = _resolve("卧槽，你真会啊")
     assert result.style_signals.scene == Scene.PRIDE_ACKNOWLEDGED

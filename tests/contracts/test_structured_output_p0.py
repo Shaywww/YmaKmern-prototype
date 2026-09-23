@@ -566,22 +566,31 @@ class TestProdPerceiveWithModel:
     @pytest.mark.asyncio
     async def test_flag_on_parses_json(self, plugin, monkeypatch):
         plugin._perception_model_enabled = True
+        captured = {}
 
         async def fake_llm(system, user_msg, max_tokens=1024, temperature=0.5,
-                           run_id="", trace_id="", skip_render=False):
+                           run_id="", trace_id="", skip_render=False,
+                           **kwargs):
             import json as _json
+            captured.update(kwargs)
+            captured["max_tokens"] = max_tokens
             return _json.dumps(_VALID_PERCEPTION, ensure_ascii=False)
         monkeypatch.setattr(plugin, "_call_llm", fake_llm)
         sig = await plugin._perception_signal("帮我查课程")
         assert isinstance(sig, dict)
         assert sig["topics"] == ["course"]
+        assert captured["max_tokens"] == 768
+        assert captured["structured_output"] == {"type": "json_object"}
+        assert captured["reasoning_effort"] == "none"
+        assert captured["role"] == main.ModelRole.PERCEPTION
 
     @pytest.mark.asyncio
     async def test_flag_on_bad_json_none(self, plugin, monkeypatch):
         plugin._perception_model_enabled = True
 
         async def fake_llm(system, user_msg, max_tokens=1024, temperature=0.5,
-                           run_id="", trace_id="", skip_render=False):
+                           run_id="", trace_id="", skip_render=False,
+                           **kwargs):
             return "not json"
         monkeypatch.setattr(plugin, "_call_llm", fake_llm)
         assert await plugin._perception_signal("你好") is None

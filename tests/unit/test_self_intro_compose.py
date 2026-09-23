@@ -152,7 +152,7 @@ class TestComposeProdBehavior:
         ("Yma 这名字有什么含义？",
          "名字怎么来的还没有确定设定，叫我 Yma 就行。"),
         ("你大几了？",
-         "我是 AI，没有现实年龄和年级；QQ 资料年龄不代表我。"),
+         "没有现实年龄和年级；QQ 资料上的年龄只是账号信息。"),
     ))
     async def test_unset_identity_facts_are_not_invented(
             self, plugin, question, expected):

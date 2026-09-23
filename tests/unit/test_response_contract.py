@@ -87,6 +87,14 @@ def test_final_response_cannot_promise_background_work(text):
         "progress_placeholder", "future_task_promise"}
 
 
+def test_immediate_social_commitment_is_not_a_future_task_promise():
+    for text in (
+        "放心，你说怪话我当场拆台。",
+        "那我可得盯着你点了。",
+    ):
+        assert validate_response_contract(text).passed
+
+
 def test_unified_contract_enforces_semantic_numeric_grounding():
     facts = extract_atomic_facts({"temp_c": 24, "humidity": 60})
     good = validate_response_contract(

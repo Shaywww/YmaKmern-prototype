@@ -38,5 +38,5 @@ def identity_reply(text: str) -> str:
     if _NAME_ORIGIN_RE.search(value):
         return "名字怎么来的还没有确定设定，叫我 Yma 就行。"
     if _AGE_OR_GRADE_RE.search(value):
-        return "我是 AI，没有现实年龄和年级；QQ 资料年龄不代表我。"
+        return "没有现实年龄和年级；QQ 资料上的年龄只是账号信息。"
     return ""

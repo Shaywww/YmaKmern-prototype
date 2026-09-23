@@ -152,7 +152,7 @@ def test_banter_budget_is_a_soft_style_violation_and_prompt_is_low_effort():
     assert "修辞反问" in scene_prompt
 
 
-def test_persona_kernel_30_uses_concrete_conversation_actions():
+def test_persona_kernel_31_uses_concrete_conversation_actions():
     from dududa.core.response_policy import ResolvedResponsePolicy
     style = OutputStylePolicyResolver.resolve(
         _signals(scene=Scene.CASUAL_CHAT))
@@ -161,7 +161,7 @@ def test_persona_kernel_30_uses_concrete_conversation_actions():
         SafetyDecision(risk_level=RiskLevel.LOW))
     prompt = build_scene_policy(
         Scene.CASUAL_CHAT, ResolvedResponsePolicy(interaction, style))
-    assert PERSONA_KERNEL_VERSION.endswith("/3.0")
+    assert PERSONA_KERNEL_VERSION.endswith("/3.1")
     assert "提问、调侃、质疑、补充、附和、纠正" in prompt
     assert "选择一个最贴切的回应动作" in prompt
     assert "短句、省略句、半句和表达态度的反问都可以" in prompt
@@ -171,6 +171,7 @@ def test_persona_kernel_30_uses_concrete_conversation_actions():
     assert "默认的动作是表态，不是解决" in prompt
     assert "不用「不是A，是B」" in prompt
     assert "现实操作" in prompt
+    assert "不再机械重复" in prompt
     assert "请求主体" in build_scene_policy(
         Scene.PLAYFUL_BANTER,
         ResolvedResponsePolicy(interaction, OutputStylePolicyResolver.resolve(

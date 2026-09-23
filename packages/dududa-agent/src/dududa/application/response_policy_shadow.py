@@ -56,6 +56,16 @@ _IDENTITY_PROBE_RE = re.compile(
     r"你(?:多大|几岁|多少岁|大几|几年级|读大几)|"
     r"(?:YmaKmern|Yma|你的名字).{0,10}(?:含义|意思|来源|怎么来))",
     re.I)
+_SOCIAL_SELF_CHAT_RE = re.compile(
+    r"(?:你(?:是)?(?:不)?(?:平时)?(?:玩手游|玩游戏)(?:的类型)?|"
+    r"你(?:平时)?(?:都干嘛|在干嘛)|"
+    r"你(?:一般)?什么时候在线|"
+    r"你待机(?:的时候)?会不会无聊|"
+    r"你玩游戏会不会手疼|"
+    r"你会不会(?:累|困|饿|无聊)|"
+    r"你最怕被问什么|"
+    r"你(?:平时)?喜欢什么)"
+)
 _PRAISE_RE = re.compile(
     r"(?:你真(?:厉害|会|聪明)|有点东西|太强了|牛啊|卧槽.{0,6}(?:会|强)|"
     r"居然真让你说中了|这都能答)"
@@ -391,6 +401,8 @@ def _scene(state, text: str, origin: ResponseOrigin,
         )
     elif _SOCIAL_OPENING_RE.search(text):
         scene, rule = Scene.SOCIAL_OPENING, "scene.social_opening.v1"
+    elif _SOCIAL_SELF_CHAT_RE.search(text):
+        scene, rule = Scene.CASUAL_CHAT, "scene.social_self_chat.v1"
     elif _IDENTITY_PROBE_RE.search(text):
         scene, rule = Scene.IDENTITY_PROBE, "scene.identity_probe.v1"
     elif communicative_act in {
