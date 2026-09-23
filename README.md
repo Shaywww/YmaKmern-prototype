@@ -64,7 +64,7 @@
 - 可选接入 Jev 原生 Decisions REST，在普通群聊语义候选上并行评估 `reply / ignore / uncertain`、回复对象、交际动作和风险等级；第一阶段只写 Trace，不改变 DeepSeek 的判断、回复正文、主动发言冷却或每日额度。
 - Jev 请求只包含最多 7 条左右的短期群聊片段：QQ 号已替换为会话内临时代号，凭据再次经 Redactor 清洗，不发送群号、消息 ID、长期记忆、用户画像或工具正文。
 - 默认关闭。配置 `DUDUDA_JEV_SHADOW=1` 与服务端 `JEV_API_KEY` 后启用；可选 `JEV_BASE_URL`（默认 `https://www.jevai.org`）、`JEV_MODEL`（默认 `typesafe-ai/jev`）和 `JEV_TIMEOUT_SECONDS`（默认 3 秒）。密钥不得写入仓库、Trace 或 Prompt。
-- 调用在后台执行且不重试；超时、限流、鉴权失败或响应结构变化只记录 `jev_group_shadow.status`，不会阻塞或关闭现有 DeepSeek 路径。关闭时将 `DUDUDA_JEV_SHADOW=0`，一个决策周期内不再创建新请求。
+- 调用在后台执行且不重试；HTTP 429/529 会按 `Retry-After`（缺失时 60 秒）开启进程级短熔断，期间不再创建 Jev 请求。超时、限流、鉴权失败或响应结构变化只记录 `jev_group_shadow.status`，不会阻塞或关闭现有 DeepSeek 路径。关闭时将 `DUDUDA_JEV_SHADOW=0`，一个决策周期内不再创建新请求。
 
 
 ## 项目结构

@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -36,6 +37,21 @@ _ACTS = frozenset({
     "closing", "other",
 })
 _RISKS = frozenset({"low", "medium", "high"})
+_BACKOFF_LOCK = threading.Lock()
+_BACKOFF_UNTIL = 0.0
+
+
+def _backoff_active() -> bool:
+    with _BACKOFF_LOCK:
+        return time.monotonic() < _BACKOFF_UNTIL
+
+
+def _arm_backoff(value: Any = None) -> None:
+    """Pause new shadow calls after provider throttling; never retry in-place."""
+    global _BACKOFF_UNTIL
+    seconds = _bounded_float(value, 60.0, 15.0, 900.0)
+    with _BACKOFF_LOCK:
+        _BACKOFF_UNTIL = max(_BACKOFF_UNTIL, time.monotonic() + seconds)
 
 
 def _bounded_float(value: Any, default: float, lower: float,
@@ -171,6 +187,8 @@ class JevShadowClient:
     def from_env(cls):
         if os.environ.get("DUDUDA_JEV_SHADOW", "0") != "1":
             return None
+        if _backoff_active():
+            return None
         key = os.environ.get("JEV_API_KEY", "").strip()
         if not key:
             return None
@@ -206,8 +224,13 @@ class JevShadowClient:
                 )
             elapsed = int((time.monotonic() - started) * 1000)
             if response.status_code < 200 or response.status_code >= 300:
+                if response.status_code in (429, 529):
+                    _arm_backoff(response.headers.get("Retry-After"))
                 return JevShadowOutcome(
-                    status="http_error", elapsed_ms=elapsed,
+                    status=("rate_limited" if response.status_code == 429
+                            else ("overloaded" if response.status_code == 529
+                                  else "http_error")),
+                    elapsed_ms=elapsed,
                     http_status=response.status_code)
             try:
                 body = response.json()

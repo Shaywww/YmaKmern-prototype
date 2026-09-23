@@ -115,12 +115,37 @@ async def test_schedule_is_non_blocking_and_records_only_metadata(monkeypatch):
 
 
 def test_shadow_is_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(jev_shadow, "_BACKOFF_UNTIL", 0.0)
     monkeypatch.delenv("DUDUDA_JEV_SHADOW", raising=False)
     monkeypatch.setenv("JEV_API_KEY", "secret")
     assert jev_shadow.JevShadowClient.from_env() is None
 
     monkeypatch.setenv("DUDUDA_JEV_SHADOW", "1")
     monkeypatch.delenv("JEV_API_KEY", raising=False)
+    assert jev_shadow.JevShadowClient.from_env() is None
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_opens_backoff_without_retry(monkeypatch):
+    calls = []
+
+    def throttle(request: httpx.Request):
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": "120"})
+
+    monkeypatch.setattr(jev_shadow, "_BACKOFF_UNTIL", 0.0)
+    client = jev_shadow.JevShadowClient(
+        api_key="test-secret", transport=httpx.MockTransport(throttle))
+    outcome = await client.evaluate(
+        context="成员1：随便聊聊", source="small_chat")
+
+    assert outcome.status == "rate_limited"
+    assert outcome.http_status == 429
+    assert len(calls) == 1
+    assert jev_shadow._backoff_active() is True
+
+    monkeypatch.setenv("DUDUDA_JEV_SHADOW", "1")
+    monkeypatch.setenv("JEV_API_KEY", "test-secret")
     assert jev_shadow.JevShadowClient.from_env() is None
 
 
