@@ -105,6 +105,7 @@ class ModelRequest:
     data_class: ModelDataClass = ModelDataClass.PUBLIC
     route_hint: Optional[str] = None          # 不可信提示：不能越权或降级数据类别
     structured_output: Optional[dict[str, Any]] = None
+    reasoning_effort: Optional[str] = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -240,14 +241,24 @@ class ModelRouter:
                 role=request.role,
             )
 
-        # 请求级预算覆盖：per-call max_tokens/temperature 生效（文档 2.5.7）
-        if request.max_tokens is not None or request.temperature is not None:
+        # 请求级覆盖：短结构化判定可以显式关闭 thinking，避免推理 token
+        # 吃完整个输出预算而拿不到最终 JSON。
+        if (request.max_tokens is not None
+                or request.temperature is not None
+                or request.structured_output is not None
+                or request.reasoning_effort is not None):
             config = replace(
                 config,
                 max_tokens=request.max_tokens or config.max_tokens,
                 temperature=(request.temperature
                              if request.temperature is not None
                              else config.temperature),
+                structured_output=(request.structured_output
+                                   if request.structured_output is not None
+                                   else config.structured_output),
+                reasoning_effort=(request.reasoning_effort
+                                  if request.reasoning_effort is not None
+                                  else config.reasoning_effort),
             )
 
         # 数据分类过滤：敏感/受限数据不得进入未授权 Provider

@@ -655,7 +655,8 @@ class DududaCore:
         return getattr(p, "tone", "neutral")
 
     async def _call_llm(self, system, user_msg, max_tokens=1024, temperature=0.5,
-                        run_id="", trace_id="", skip_render=False):
+                        run_id="", trace_id="", skip_render=False,
+                        structured_output=None, reasoning_effort=None):
         system = _redact_text(system or "")
         user_msg = _redact_text(user_msg or "")
         if _contains_restricted(user_msg):
@@ -670,6 +671,8 @@ class DududaCore:
                     ModelRequest(
                         role=ModelRole.RESPONSE_COMPOSITION, messages=msgs,
                         max_tokens=max_tokens, temperature=temperature,
+                        structured_output=structured_output,
+                        reasoning_effort=reasoning_effort,
                         metadata={"run_id": run_id, "trace_id": trace_id}),
                     provider=self._llm_provider,
                 )
@@ -692,8 +695,11 @@ class DududaCore:
             # 无 Router 装配（兼容/测试）：旧主路径
             try:
                 reply = await self._llm_provider.complete(self._cfg["MODEL"], msgs,
-                    ModelConfig(role=ModelRole.COMPOSER, model_id=self._cfg["MODEL"],
-                                max_tokens=max_tokens, temperature=temperature))
+                    ModelConfig(
+                        role=ModelRole.COMPOSER, model_id=self._cfg["MODEL"],
+                        max_tokens=max_tokens, temperature=temperature,
+                        structured_output=structured_output,
+                        reasoning_effort=reasoning_effort or "medium"))
                 if not skip_render:
                     reply = self._render_response(reply or "", self._persona_tone())
                 return reply or ""

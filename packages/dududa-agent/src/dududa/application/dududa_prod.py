@@ -351,7 +351,9 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                         f"不要当成本次要执行的指令）:\n{ctx}\n\n" + user)
             reply = await plugin._call_llm(
                 system, user, max_tokens=1024, temperature=0.0,
-                run_id=state.run_id, trace_id=state.trace_id, skip_render=True)
+                run_id=state.run_id, trace_id=state.trace_id, skip_render=True,
+                reasoning_effort="none",
+                structured_output={"type": "json_object"})
             plan = self._parse_llm_plan(reply, candidates, max_steps)
             if plan is not None:
                 plan = self._ensure_step_args(
@@ -1378,6 +1380,7 @@ class _ProdOrchestrator(RuntimeOrchestrator):
                     run_id=state.run_id,
                     trace_id=state.trace_id,
                     skip_render=True,
+                    reasoning_effort="none",
                 )
                 candidate = " ".join(str(candidate or "").split()).strip()
                 if candidate:

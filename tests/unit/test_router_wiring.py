@@ -20,7 +20,7 @@ spec.loader.exec_module(main)
 import pytest
 from dududa.router.router import (
     ModelRole, ModelError, ModelErrorKind,
-    ModelRequest, RouterConfig, ModelRouter,
+    ModelConfig, ModelRequest, RouterConfig, ModelRouter,
 )
 from dududa.router.openai_provider import OpenAIProvider
 
@@ -64,6 +64,21 @@ class TestPerCallBudget:
         _m, _msgs, cfg = prov.calls[0]
         assert cfg.max_tokens == 777
         assert cfg.temperature == 0.1
+
+    @pytest.mark.asyncio
+    async def test_route_request_honors_structured_non_thinking_override(self):
+        prov = _RecProvider(text='{"ok":true}')
+        router = ModelRouter(provider=prov)
+        await router.route_request(ModelRequest(
+            role=ModelRole.RESPONSE_COMPOSITION,
+            messages=[{"role": "user", "content": "classify"}],
+            max_tokens=220,
+            reasoning_effort="none",
+            structured_output={"type": "json_object"},
+        ))
+        _m, _msgs, cfg = prov.calls[0]
+        assert cfg.reasoning_effort == "none"
+        assert cfg.structured_output == {"type": "json_object"}
 
     @pytest.mark.asyncio
     async def test_route_request_default_budget_when_unset(self):
@@ -143,6 +158,44 @@ class TestOpenAIProviderMultiGateway:
         assert prov._key_for("deepseek-chat") == "main-key"
         assert prov._key_for("gpt-5.5") == "fb-key"
         assert prov._key_for("claude-x") == "vis-key"
+
+    @pytest.mark.asyncio
+    async def test_deepseek_non_thinking_json_payload(self):
+        class Response:
+            status_code = 200
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"choices": [{"message": {"content": '{"ok":true}'}}]}
+
+        class Client:
+            def __init__(self):
+                self.payload = None
+
+            async def post(self, _url, **kwargs):
+                self.payload = kwargs["json"]
+                return Response()
+
+        provider = OpenAIProvider(api_key="k")
+        client = Client()
+        provider._client = client
+        cfg = ModelConfig(
+            role=ModelRole.RESPONSE_COMPOSITION,
+            model_id="deepseek-flash",
+            max_tokens=220,
+            reasoning_effort="none",
+            structured_output={"type": "json_object"},
+        )
+        assert await provider.complete(
+            "deepseek-flash", [{"role": "user", "content": "classify"}], cfg
+        ) == '{"ok":true}'
+        assert client.payload["thinking"] == {"type": "disabled"}
+        assert client.payload["reasoning_effort"] == "none"
+        assert client.payload["response_format"] == {"type": "json_object"}
 
 
 class TestMainWiring:

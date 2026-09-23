@@ -64,6 +64,18 @@ class OpenAIProvider(ModelProvider):
             "max_tokens": config.max_tokens,
             "temperature": config.temperature,
         }
+        # deepseek-flash defaults to thinking mode.  For compact classifiers
+        # and JSON-only calls that can spend the whole max_tokens budget in
+        # reasoning_content and return an empty content field.  The caller can
+        # request ``reasoning_effort=none`` to select the documented
+        # non-thinking mode; other OpenAI-compatible providers do not receive
+        # DeepSeek-specific fields.
+        if model_id.startswith("deepseek-"):
+            if config.reasoning_effort == "none":
+                payload["thinking"] = {"type": "disabled"}
+                payload["reasoning_effort"] = "none"
+            elif config.reasoning_effort:
+                payload["reasoning_effort"] = config.reasoning_effort
         if config.structured_output:
             payload["response_format"] = config.structured_output
         try:
