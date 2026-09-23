@@ -36,6 +36,7 @@ from dududa.application.dududa_utils import (
 from dududa.application.dududa_log import get_logger as _get_logger
 from dududa.application.user_experience import make_support_id
 from dududa.application.school_silence import school_silence_reason
+from dududa.application.jev_shadow import schedule_jev_group_shadow
 from dududa.core.memory import set_memory_access_mode, reset_memory_access_mode
 from dududa.core.quality_eval import strip_self_degrading_abuse
 from dududa.core.group_ambient import GroupAmbientTracker
@@ -2810,7 +2811,27 @@ async def _semantic_chat_reply(plugin, event, source: str,
                                      "invalid_confidence", scene=scene,
                                      should_reply=should_reply)
             return ""
-        if scene not in {"casual_meme", "casual_chat", "neutral_complaint"}:
+        allowed_scene = scene in {
+            "casual_meme", "casual_chat", "neutral_complaint",
+        }
+        if confidence < _small_chat_min_confidence():
+            primary_decision = "uncertain"
+        elif should_reply is True and allowed_scene:
+            primary_decision = "reply"
+        else:
+            primary_decision = "ignore"
+        schedule_jev_group_shadow(
+            plugin,
+            context=context,
+            source=source,
+            primary_decision=primary_decision,
+            primary_scene=scene,
+            primary_confidence=confidence,
+            run_id=run_id,
+            trace_id=trace_id,
+            recorder=trace_recorder,
+        )
+        if not allowed_scene:
             _record_semantic_silence("chat", run_id, trace_id, "scene_not_allowed",
                                      scene=scene, should_reply=should_reply,
                                      confidence=confidence)

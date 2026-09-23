@@ -59,6 +59,13 @@
 - 命令、进度、订阅与主对话都记录版本化策略、来源、策略指纹、风格上限和契约违规；Trace 不保存用户原话、回复正文、记忆或工具数据。
 - 当前默认为影子模式，不改写线上回复；可用 `DUDUDA_RESPONSE_POLICY_SHADOW=0` 关闭。人格 Kernel 只供用户可见的生成入口使用，视觉摘要、感知和工具规划等内部 JSON 任务仍保持无人格、强结构化。
 
+## Jev 群聊决策影子评估
+
+- 可选接入 Jev 原生 Decisions REST，在普通群聊语义候选上并行评估 `reply / ignore / uncertain`、回复对象、交际动作和风险等级；第一阶段只写 Trace，不改变 DeepSeek 的判断、回复正文、主动发言冷却或每日额度。
+- Jev 请求只包含最多 7 条左右的短期群聊片段：QQ 号已替换为会话内临时代号，凭据再次经 Redactor 清洗，不发送群号、消息 ID、长期记忆、用户画像或工具正文。
+- 默认关闭。配置 `DUDUDA_JEV_SHADOW=1` 与服务端 `JEV_API_KEY` 后启用；可选 `JEV_BASE_URL`（默认 `https://www.jevai.org`）、`JEV_MODEL`（默认 `typesafe-ai/jev`）和 `JEV_TIMEOUT_SECONDS`（默认 3 秒）。密钥不得写入仓库、Trace 或 Prompt。
+- 调用在后台执行且不重试；超时、限流、鉴权失败或响应结构变化只记录 `jev_group_shadow.status`，不会阻塞或关闭现有 DeepSeek 路径。关闭时将 `DUDUDA_JEV_SHADOW=0`，一个决策周期内不再创建新请求。
+
 
 ## 项目结构
 
